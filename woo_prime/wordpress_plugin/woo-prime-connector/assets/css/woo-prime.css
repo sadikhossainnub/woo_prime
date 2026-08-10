@@ -1,0 +1,16 @@
+/* Woo Prime Connector Styles */
+
+.woocommerce-info a.woo-prime-btn {
+	background-color: #2271b1 !important;
+	color: #ffffff !important;
+	padding: 5px 12px !important;
+	border-radius: 4px !important;
+	text-decoration: none !important;
+	font-weight: 600 !important;
+	margin-left: 10px !important;
+	display: inline-block;
+}
+
+.woocommerce-info a.woo-prime-btn:hover {
+	background-color: #135e96 !important;
+}

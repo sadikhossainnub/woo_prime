@@ -1,8 +1,11 @@
 # Copyright (c) 2026, prime tech bd and contributors
 # For license information, please see license.txt
 
+import os
+
 import frappe
 import requests
+from frappe import _
 from frappe.model.document import Document
 
 
@@ -43,6 +46,25 @@ class WooSettings(Document):
 				title="Connection Test",
 				indicator="red",
 			)
+
+
+@frappe.whitelist()
+def download_wordpress_plugin():
+	"""Download the Woo Prime Connector WordPress plugin zip file."""
+	plugin_path = frappe.get_app_path("woo_prime", "wordpress_plugin", "woo-prime-connector.zip")
+
+	if not os.path.exists(plugin_path):
+		plugin_path = frappe.get_app_path("woo_prime", "wordpress_plugin", "woo_prime_connector.zip")
+
+	if not os.path.exists(plugin_path):
+		frappe.throw(_("WordPress plugin package file not found."))
+
+	with open(plugin_path, "rb") as f:
+		file_content = f.read()
+
+	frappe.response["filename"] = "woo-prime-connector.zip"
+	frappe.response["filecontent"] = file_content
+	frappe.response["type"] = "download"
 
 
 def get_woo_api():
