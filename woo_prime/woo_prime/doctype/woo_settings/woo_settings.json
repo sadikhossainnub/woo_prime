@@ -1,0 +1,196 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-08-11 02:50:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "connection_section",
+  "enabled",
+  "woo_site_url",
+  "column_break_conn",
+  "consumer_key",
+  "consumer_secret",
+  "webhook_secret",
+  "test_connection_btn",
+  "defaults_section",
+  "default_company",
+  "default_warehouse",
+  "column_break_defaults",
+  "default_price_list",
+  "default_customer_group",
+  "default_territory",
+  "order_settings_section",
+  "tax_template",
+  "shipping_item",
+  "column_break_order",
+  "auto_create_customer",
+  "sync_features_section",
+  "enable_stock_sync",
+  "column_break_sync",
+  "enable_price_sync"
+ ],
+ "fields": [
+  {
+   "fieldname": "connection_section",
+   "fieldtype": "Section Break",
+   "label": "WooCommerce Connection"
+  },
+  {
+   "default": "0",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled"
+  },
+  {
+   "fieldname": "woo_site_url",
+   "fieldtype": "Data",
+   "label": "WooCommerce Site URL",
+   "reqd": 1,
+   "description": "e.g. https://shop.example.com (without trailing slash)"
+  },
+  {
+   "fieldname": "column_break_conn",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "consumer_key",
+   "fieldtype": "Data",
+   "label": "Consumer Key",
+   "reqd": 1
+  },
+  {
+   "fieldname": "consumer_secret",
+   "fieldtype": "Password",
+   "label": "Consumer Secret",
+   "reqd": 1
+  },
+  {
+   "fieldname": "webhook_secret",
+   "fieldtype": "Password",
+   "label": "Webhook Secret",
+   "description": "Used to verify incoming webhook signatures (HMAC-SHA256)"
+  },
+  {
+   "fieldname": "test_connection_btn",
+   "fieldtype": "Button",
+   "label": "Test Connection"
+  },
+  {
+   "fieldname": "defaults_section",
+   "fieldtype": "Section Break",
+   "label": "Default Values"
+  },
+  {
+   "fieldname": "default_company",
+   "fieldtype": "Link",
+   "label": "Default Company",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "default_warehouse",
+   "fieldtype": "Link",
+   "label": "Default Warehouse",
+   "options": "Warehouse",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_defaults",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "default_price_list",
+   "fieldtype": "Link",
+   "label": "Default Price List",
+   "options": "Price List",
+   "reqd": 1
+  },
+  {
+   "fieldname": "default_customer_group",
+   "fieldtype": "Link",
+   "label": "Default Customer Group",
+   "options": "Customer Group",
+   "reqd": 1
+  },
+  {
+   "fieldname": "default_territory",
+   "fieldtype": "Link",
+   "label": "Default Territory",
+   "options": "Territory",
+   "reqd": 1
+  },
+  {
+   "fieldname": "order_settings_section",
+   "fieldtype": "Section Break",
+   "label": "Order Settings"
+  },
+  {
+   "fieldname": "tax_template",
+   "fieldtype": "Link",
+   "label": "Default Tax Template",
+   "options": "Sales Taxes and Charges Template"
+  },
+  {
+   "fieldname": "shipping_item",
+   "fieldtype": "Link",
+   "label": "Shipping Charges Item",
+   "options": "Item",
+   "description": "ERPNext Item used to represent WooCommerce shipping charges"
+  },
+  {
+   "fieldname": "column_break_order",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "fieldname": "auto_create_customer",
+   "fieldtype": "Check",
+   "label": "Auto Create Customer"
+  },
+  {
+   "fieldname": "sync_features_section",
+   "fieldtype": "Section Break",
+   "label": "Sync Features"
+  },
+  {
+   "default": "0",
+   "fieldname": "enable_stock_sync",
+   "fieldtype": "Check",
+   "label": "Enable Stock Sync (ERPNext → WooCommerce)"
+  },
+  {
+   "fieldname": "column_break_sync",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "enable_price_sync",
+   "fieldtype": "Check",
+   "label": "Enable Price Sync (ERPNext → WooCommerce)"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-08-11 02:50:00.000000",
+ "modified_by": "Administrator",
+ "module": "Woo Prime",
+ "name": "Woo Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "track_changes": 1
+}

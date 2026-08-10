@@ -1,0 +1,179 @@
+{
+ "actions": [],
+ "autoname": "field:sku",
+ "allow_rename": 0,
+ "creation": "2026-08-11 02:50:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "item_details_section",
+  "sku",
+  "item_code",
+  "item_name",
+  "column_break_item",
+  "woo_product_id",
+  "published",
+  "woo_product_url",
+  "woo_section",
+  "woo_description",
+  "woo_category",
+  "sync_section",
+  "sync_price",
+  "sync_stock",
+  "column_break_sync",
+  "last_synced",
+  "sync_status"
+ ],
+ "fields": [
+  {
+   "fieldname": "item_details_section",
+   "fieldtype": "Section Break",
+   "label": "Item Details"
+  },
+  {
+   "fieldname": "sku",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "SKU",
+   "reqd": 1,
+   "unique": 1,
+   "no_copy": 1,
+   "set_only_once": 1
+  },
+  {
+   "fieldname": "item_code",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Item Code",
+   "options": "Item",
+   "reqd": 1
+  },
+  {
+   "fieldname": "item_name",
+   "fieldtype": "Data",
+   "label": "Item Name",
+   "read_only": 1,
+   "fetch_from": "item_code.item_name"
+  },
+  {
+   "fieldname": "column_break_item",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "woo_product_id",
+   "fieldtype": "Int",
+   "label": "WooCommerce Product ID",
+   "read_only": 1,
+   "in_list_view": 1,
+   "description": "Assigned after publishing to WooCommerce"
+  },
+  {
+   "default": "0",
+   "fieldname": "published",
+   "fieldtype": "Check",
+   "label": "Published to WooCommerce",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "woo_product_url",
+   "fieldtype": "Data",
+   "label": "WooCommerce Product URL",
+   "read_only": 1
+  },
+  {
+   "fieldname": "woo_section",
+   "fieldtype": "Section Break",
+   "label": "WooCommerce Product Details"
+  },
+  {
+   "fieldname": "woo_description",
+   "fieldtype": "Text Editor",
+   "label": "WooCommerce Description"
+  },
+  {
+   "fieldname": "woo_category",
+   "fieldtype": "Data",
+   "label": "WooCommerce Category"
+  },
+  {
+   "fieldname": "sync_section",
+   "fieldtype": "Section Break",
+   "label": "Sync Settings"
+  },
+  {
+   "default": "1",
+   "fieldname": "sync_price",
+   "fieldtype": "Check",
+   "label": "Sync Price"
+  },
+  {
+   "default": "1",
+   "fieldname": "sync_stock",
+   "fieldtype": "Check",
+   "label": "Sync Stock"
+  },
+  {
+   "fieldname": "column_break_sync",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "last_synced",
+   "fieldtype": "Datetime",
+   "label": "Last Synced",
+   "read_only": 1
+  },
+  {
+   "default": "Not Synced",
+   "fieldname": "sync_status",
+   "fieldtype": "Select",
+   "label": "Sync Status",
+   "options": "Not Synced\nSynced\nError",
+   "read_only": 1,
+   "in_list_view": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [
+  {
+   "link_doctype": "Woo Sync Log",
+   "link_fieldname": "reference_name"
+  }
+ ],
+ "modified": "2026-08-11 02:50:00.000000",
+ "modified_by": "Administrator",
+ "module": "Woo Prime",
+ "name": "Woo Item",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Stock Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "search_fields": "item_code,item_name,woo_product_id",
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "title_field": "item_name",
+ "track_changes": 1
+}

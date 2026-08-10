@@ -8,7 +8,7 @@ app_license = "mit"
 # Apps
 # ------------------
 
-# required_apps = []
+required_apps = ["erpnext"]
 
 # Each item in the list will be shown as an app in the apps page
 # add_to_apps_screen = [
@@ -86,7 +86,7 @@ app_license = "mit"
 # ------------
 
 # before_install = "woo_prime.install.before_install"
-# after_install = "woo_prime.install.after_install"
+after_install = "woo_prime.install.after_install"
 
 # Uninstallation
 # ------------
@@ -149,23 +149,15 @@ app_license = "mit"
 # Scheduled Tasks
 # ---------------
 
-# scheduler_events = {
-# 	"all": [
-# 		"woo_prime.tasks.all"
-# 	],
-# 	"daily": [
-# 		"woo_prime.tasks.daily"
-# 	],
-# 	"hourly": [
-# 		"woo_prime.tasks.hourly"
-# 	],
-# 	"weekly": [
-# 		"woo_prime.tasks.weekly"
-# 	],
-# 	"monthly": [
-# 		"woo_prime.tasks.monthly"
-# 	],
-# }
+scheduler_events = {
+	"hourly": [
+		"woo_prime.api.sync.sync_all_stock",
+	],
+	"daily": [
+		"woo_prime.api.sync.sync_all_prices",
+		"woo_prime.api.sync.reconcile_orders",
+	],
+}
 
 # Testing
 # -------
@@ -256,3 +248,29 @@ app_license = "mit"
 # List of apps whose translatable strings should be excluded from this app's translations.
 # ignore_translatable_strings_from = []
 
+# Fixtures
+# ----------
+# Fixtures are used to export custom fields, property setters, etc. from a site
+# and bundle them with the app
+
+fixtures = [
+	{
+		"dt": "Custom Field",
+		"filters": [
+			["name", "in", [
+				"Sales Order-woo_order_id",
+				"Sales Order-sales_type",
+				"Sales Order-woo_order_status",
+				"Sales Order-woo_site",
+			]]
+		]
+	},
+	{
+		"dt": "Property Setter",
+		"filters": [
+			["name", "in", [
+				"Sales Order-order_type-options",
+			]]
+		]
+	}
+]
