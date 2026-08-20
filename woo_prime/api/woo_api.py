@@ -166,6 +166,88 @@ class WooAPI:
 				f"WooCommerce API Error ({response.status_code}): {response.text[:500]}"
 			)
 
+	def upload_media(self, file_path, filename=None):
+		"""Directly upload an image file binary to WordPress Media REST API (/wp-json/wp/v2/media).
+
+		Args:
+			file_path: Local file path or Frappe file URL string (e.g. /files/image.jpg)
+			filename: Optional filename override
+
+		Returns:
+			dict: Uploaded WordPress media object containing 'id' and 'source_url'
+		"""
+		import os
+		import mimetypes
+
+		if not file_path or file_path.startswith("http://") or file_path.startswith("https://"):
+			return None
+
+		clean_url = file_path.lstrip("/")
+		if clean_url.startswith("files/"):
+			abs_path = frappe.get_site_path("public", clean_url)
+		elif clean_url.startswith("private/files/"):
+			abs_path = frappe.get_site_path(clean_url)
+		else:
+			abs_path = frappe.get_site_path("public", "files", clean_url)
+
+		if not os.path.exists(abs_path):
+			return None
+
+		if not filename:
+			filename = os.path.basename(abs_path)
+
+		mime_type, _ = mimetypes.guess_type(abs_path)
+		if not mime_type:
+			mime_type = "image/jpeg"
+
+		headers = {
+			"Content-Type": mime_type,
+			"Content-Disposition": f'attachment; filename="{filename}"',
+		}
+
+		try:
+			with open(abs_path, "rb") as f:
+				file_data = f.read()
+
+			url = f"{self.site_url}/wp-json/wp/v2/media"
+			req_params = {}
+			auth = self.auth
+
+			if self.use_query_auth:
+				req_params["consumer_key"] = self.consumer_key
+				req_params["consumer_secret"] = self.consumer_secret
+				auth = None
+
+			response = requests.post(
+				url=url,
+				auth=auth,
+				headers=headers,
+				data=file_data,
+				params=req_params if req_params else None,
+				timeout=self.timeout,
+			)
+
+			if response.status_code in (200, 201):
+				return response.json()
+
+			elif response.status_code == 404:
+				fallback_params = dict(req_params)
+				fallback_params["rest_route"] = "/wp/v2/media"
+				fallback_resp = requests.post(
+					url=self.site_url,
+					auth=auth,
+					headers=headers,
+					data=file_data,
+					params=fallback_params,
+					timeout=self.timeout,
+				)
+				if fallback_resp.status_code in (200, 201):
+					return fallback_resp.json()
+		except Exception:
+			pass
+
+		return None
+
 	def get_product(self, product_id):
 		"""Get a product from WooCommerce."""
 		response = self.get(f"products/{product_id}")

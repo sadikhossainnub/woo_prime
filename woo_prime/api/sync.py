@@ -556,7 +556,7 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings):
 		"sku": woo_item.sku,
 		"regular_price": str(flt(price)),
 		"description": woo_item.woo_description or item.description or "",
-		"short_description": item.description or "",
+		"short_description": getattr(woo_item, "woo_short_description", None) or item.description or "",
 		"manage_stock": True,
 		"stock_quantity": int(stock_qty),
 		"status": "publish",
@@ -570,7 +570,7 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings):
 	if simple_attrs:
 		product_data["attributes"] = simple_attrs
 
-	images = _get_item_images(item, woo_item)
+	images = _get_item_images(item, woo_item, api)
 	if images:
 		product_data["images"] = images
 
@@ -612,7 +612,7 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 		"type": "variable",
 		"sku": woo_item.sku,
 		"description": woo_item.woo_description or item.description or "",
-		"short_description": item.description or "",
+		"short_description": getattr(woo_item, "woo_short_description", None) or item.description or "",
 		"status": "publish",
 		"attributes": woo_attributes,
 	}
@@ -621,7 +621,7 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 	if category_ids:
 		product_data["categories"] = category_ids
 
-	images = _get_item_images(item, woo_item)
+	images = _get_item_images(item, woo_item, api)
 	if images:
 		product_data["images"] = images
 
@@ -695,7 +695,7 @@ def _publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings
 		"description": child_woo_item.woo_description or v_item.description or "",
 	}
 
-	images = _get_item_images(v_item, child_woo_item)
+	images = _get_item_images(v_item, child_woo_item, api)
 	if images:
 		var_data["image"] = images[0]
 
@@ -712,19 +712,52 @@ def _publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings
 	return res
 
 
-def _get_item_images(item, woo_item=None):
-	"""Get all image URLs for an Item (primary image + attached files for Product Gallery)."""
+def _get_item_images(item, woo_item=None, api=None):
+	"""Get image payload for WooCommerce (attempts direct media upload to WordPress API first)."""
 	images = []
-	seen_urls = set()
+	seen_paths = set()
 
-	# 1. Primary image from Item or Woo Item
-	primary_image = item.image or getattr(woo_item, "image", None)
-	if primary_image:
-		url = primary_image if (primary_image.startswith("http://") or primary_image.startswith("https://")) else frappe.utils.get_url(primary_image)
-		images.append({"src": url})
-		seen_urls.add(primary_image)
+	def process_image(path, caption=None):
+		if not path or path in seen_paths:
+			return
+		seen_paths.add(path)
 
-	# 2. Additional attached images (Gallery) from File doctype
+		# 1. Direct binary upload to WordPress Media REST API (/wp-json/wp/v2/media)
+		if api and not (path.startswith("http://") or path.startswith("https://")):
+			try:
+				uploaded = api.upload_media(path)
+				if uploaded and uploaded.get("id"):
+					img_dict = {"id": uploaded.get("id")}
+					if caption:
+						img_dict["alt"] = caption
+					images.append(img_dict)
+					return
+			except Exception:
+				pass
+
+		# 2. Fallback to image URL if direct upload fails or for external URLs
+		if path.startswith("http://") or path.startswith("https://"):
+			url = path
+		else:
+			url = frappe.utils.get_url(path)
+
+		img_dict = {"src": url}
+		if caption:
+			img_dict["alt"] = caption
+		images.append(img_dict)
+
+	# 1. Primary image (Woo Item image takes priority if manually uploaded, fallback to Item.image)
+	primary_image = getattr(woo_item, "image", None) or item.image
+	process_image(primary_image)
+
+	# 2. Child Table images from Woo Item `images` table
+	if woo_item and hasattr(woo_item, "images") and woo_item.images:
+		for row in woo_item.images:
+			img_path = getattr(row, "image", None)
+			caption = getattr(row, "caption", None)
+			process_image(img_path, caption)
+
+	# 3. Additional attached images (Gallery) from File doctype
 	attached_files = frappe.get_all(
 		"File",
 		filters={
@@ -737,13 +770,11 @@ def _get_item_images(item, woo_item=None):
 
 	for f in attached_files:
 		file_url = f.get("file_url")
-		if not file_url or file_url in seen_urls:
+		if not file_url:
 			continue
 		ext = file_url.lower().rsplit(".", 1)[-1] if "." in file_url else ""
 		if ext in ("jpg", "jpeg", "png", "gif", "webp", "svg"):
-			url = file_url if (file_url.startswith("http://") or file_url.startswith("https://")) else frappe.utils.get_url(file_url)
-			images.append({"src": url})
-			seen_urls.add(file_url)
+			process_image(file_url)
 
 	return images
 

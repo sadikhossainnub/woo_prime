@@ -16,6 +16,8 @@
   "published",
   "woo_product_url",
   "woo_section",
+  "images",
+  "woo_short_description",
   "woo_description",
   "woo_category",
   "categories",
@@ -60,10 +62,10 @@
   {
    "fieldname": "image",
    "fieldtype": "Attach Image",
-   "label": "Image",
-   "read_only": 1,
+   "label": "Main Image",
    "fetch_from": "item_code.image",
-   "in_list_view": 1
+   "in_list_view": 1,
+   "description": "Auto-fetched from Item. You can also upload a main image manually."
   },
   {
    "fieldname": "column_break_item",
@@ -97,9 +99,23 @@
    "label": "WooCommerce Product Details"
   },
   {
+   "fieldname": "images",
+   "fieldtype": "Table",
+   "label": "Product Gallery Images (Multi-Image)",
+   "options": "Woo Item Image",
+   "description": "Upload multiple images for WooCommerce Product Gallery"
+  },
+  {
+   "fieldname": "woo_short_description",
+   "fieldtype": "Text Editor",
+   "label": "WooCommerce Short Description",
+   "description": "Appears next to the product price on WooCommerce product page"
+  },
+  {
    "fieldname": "woo_description",
    "fieldtype": "Text Editor",
-   "label": "WooCommerce Description"
+   "label": "WooCommerce Full Description",
+   "description": "Appears under the Description tab on WooCommerce product page"
   },
   {
    "fieldname": "woo_category",
