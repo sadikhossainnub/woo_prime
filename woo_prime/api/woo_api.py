@@ -15,24 +15,81 @@ class WooAPI:
 	API_VERSION = "wc/v3"
 
 	def __init__(self, url, consumer_key, consumer_secret):
-		self.base_url = f"{url.rstrip('/')}/wp-json/{self.API_VERSION}"
+		site_url = url.rstrip("/")
+		if site_url.endswith("/index.php"):
+			site_url = site_url[:-10].rstrip("/")
+		self.site_url = site_url
+		self.consumer_key = consumer_key
+		self.consumer_secret = consumer_secret
+		self.base_url = f"{self.site_url}/wp-json/{self.API_VERSION}"
 		self.auth = HTTPBasicAuth(consumer_key, consumer_secret)
 		self.timeout = 30
+		self.use_rest_route = False
+		self.use_query_auth = False
 
 	def _request(self, method, endpoint, data=None, params=None):
 		"""Make an authenticated request to WooCommerce API."""
-		url = f"{self.base_url}/{endpoint}"
 		headers = {"Content-Type": "application/json"}
 
-		response = requests.request(
-			method=method,
-			url=url,
-			auth=self.auth,
-			headers=headers,
-			json=data,
-			params=params,
-			timeout=self.timeout,
-		)
+		def make_call(use_rest, use_query):
+			req_params = dict(params) if params else {}
+			if use_query:
+				req_params["consumer_key"] = self.consumer_key
+				req_params["consumer_secret"] = self.consumer_secret
+				auth = None
+			else:
+				auth = self.auth
+
+			if use_rest:
+				url = self.site_url
+				req_params["rest_route"] = f"/{self.API_VERSION}/{endpoint}"
+			else:
+				url = f"{self.base_url}/{endpoint}"
+
+			return requests.request(
+				method=method,
+				url=url,
+				auth=auth,
+				headers=headers,
+				json=data,
+				params=req_params,
+				timeout=self.timeout,
+			)
+
+		# Initial request
+		response = make_call(self.use_rest_route, self.use_query_auth)
+
+		# Fallback 1: If HTTP Basic Auth fails with 401/403 (e.g. Apache strips Authorization header), try Query Param Auth
+		if response.status_code in (401, 403) and not self.use_query_auth:
+			try:
+				fallback_response = make_call(self.use_rest_route, True)
+				if fallback_response.status_code not in (401, 403):
+					self.use_query_auth = True
+					return fallback_response
+				elif fallback_response.status_code == 404 and not self.use_rest_route:
+					fallback_response2 = make_call(True, True)
+					if fallback_response2.status_code not in (401, 403, 404):
+						self.use_query_auth = True
+						self.use_rest_route = True
+						return fallback_response2
+			except Exception:
+				pass
+
+		# Fallback 2: If direct wp-json endpoint returned 404, try rest_route fallback
+		if response.status_code == 404 and not self.use_rest_route:
+			try:
+				fallback_response = make_call(True, self.use_query_auth)
+				if fallback_response.status_code in (401, 403) and not self.use_query_auth:
+					fallback_response2 = make_call(True, True)
+					if fallback_response2.status_code not in (401, 403, 404):
+						self.use_query_auth = True
+						self.use_rest_route = True
+						return fallback_response2
+				elif fallback_response.status_code != 404:
+					self.use_rest_route = True
+					return fallback_response
+			except Exception:
+				pass
 
 		return response
 
@@ -82,6 +139,26 @@ class WooAPI:
 			dict: WooCommerce product response
 		"""
 		response = self.put(f"products/{product_id}", data=product_data)
+		if response.status_code == 200:
+			return response.json()
+		else:
+			frappe.throw(
+				f"WooCommerce API Error ({response.status_code}): {response.text[:500]}"
+			)
+
+	def create_product_variation(self, parent_id, variation_data):
+		"""Create a product variation on WooCommerce."""
+		response = self.post(f"products/{parent_id}/variations", data=variation_data)
+		if response.status_code in (200, 201):
+			return response.json()
+		else:
+			frappe.throw(
+				f"WooCommerce API Error ({response.status_code}): {response.text[:500]}"
+			)
+
+	def update_product_variation(self, parent_id, variation_id, variation_data):
+		"""Update a product variation on WooCommerce."""
+		response = self.put(f"products/{parent_id}/variations/{variation_id}", data=variation_data)
 		if response.status_code == 200:
 			return response.json()
 		else:

@@ -11,8 +11,11 @@
   "column_break_conn",
   "consumer_key",
   "consumer_secret",
-  "webhook_secret",
   "test_connection_btn",
+  "webhook_section",
+  "webhook_secret",
+  "column_break_webhook",
+  "webhook_delivery_url",
   "wp_plugin_section",
   "plugin_info_html",
   "download_plugin_btn",
@@ -69,15 +72,31 @@
    "reqd": 1
   },
   {
+   "fieldname": "test_connection_btn",
+   "fieldtype": "Button",
+   "label": "Test Connection"
+  },
+  {
+   "fieldname": "webhook_section",
+   "fieldtype": "Section Break",
+   "label": "Webhook Settings"
+  },
+  {
    "fieldname": "webhook_secret",
    "fieldtype": "Password",
    "label": "Webhook Secret",
    "description": "Used to verify incoming webhook signatures (HMAC-SHA256)"
   },
   {
-   "fieldname": "test_connection_btn",
-   "fieldtype": "Button",
-   "label": "Test Connection"
+   "fieldname": "column_break_webhook",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "webhook_delivery_url",
+   "fieldtype": "Data",
+   "label": "Webhook Delivery URL",
+   "read_only": 1,
+   "description": "Copy and paste this URL into WooCommerce (Settings → Advanced → Webhooks)"
   },
   {
    "fieldname": "wp_plugin_section",

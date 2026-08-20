@@ -10,6 +10,7 @@
   "sku",
   "item_code",
   "item_name",
+  "image",
   "column_break_item",
   "woo_product_id",
   "published",
@@ -17,6 +18,7 @@
   "woo_section",
   "woo_description",
   "woo_category",
+  "categories",
   "sync_section",
   "sync_price",
   "sync_stock",
@@ -56,6 +58,14 @@
    "fetch_from": "item_code.item_name"
   },
   {
+   "fieldname": "image",
+   "fieldtype": "Attach Image",
+   "label": "Image",
+   "read_only": 1,
+   "fetch_from": "item_code.image",
+   "in_list_view": 1
+  },
+  {
    "fieldname": "column_break_item",
    "fieldtype": "Column Break"
   },
@@ -93,8 +103,16 @@
   },
   {
    "fieldname": "woo_category",
-   "fieldtype": "Data",
-   "label": "WooCommerce Category"
+   "fieldtype": "Link",
+   "label": "Primary WooCommerce Category",
+   "options": "Woo Category"
+  },
+  {
+   "fieldname": "categories",
+   "fieldtype": "Table MultiSelect",
+   "label": "WooCommerce Categories (Multi-select)",
+   "options": "Woo Item Category",
+   "description": "Select multiple categories for this product in WooCommerce"
   },
   {
    "fieldname": "sync_section",

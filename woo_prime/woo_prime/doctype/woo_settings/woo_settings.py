@@ -10,10 +10,14 @@ from frappe.model.document import Document
 
 
 class WooSettings(Document):
+	def onload(self):
+		self.webhook_delivery_url = frappe.utils.get_url("/api/method/woo_prime.api.webhook.handle_order")
+
 	def validate(self):
 		if self.woo_site_url:
-			# Remove trailing slash
-			self.woo_site_url = self.woo_site_url.rstrip("/")
+			self.woo_site_url = self.woo_site_url.strip().rstrip("/")
+			if self.woo_site_url.endswith("/index.php"):
+				self.woo_site_url = self.woo_site_url[:-10].rstrip("/")
 
 	@frappe.whitelist()
 	def test_connection(self):
@@ -34,9 +38,27 @@ class WooSettings(Document):
 					indicator="green",
 				)
 			else:
+				msg = f"❌ Connection Failed!<br>Status Code: {response.status_code}<br>"
+				if response.status_code == 404:
+					msg += (
+						"<br><b>Troubleshooting 404 Not Found:</b><br>"
+						"1. <b>WordPress Permalinks:</b> Go to WP Admin → Settings → Permalinks and change structure from <i>'Plain'</i> to <i>'Post name'</i>.<br>"
+						"2. <b>WooCommerce Plugin:</b> Verify WooCommerce is installed and active.<br>"
+						"3. <b>Site URL:</b> Ensure <i>Woo Site URL</i> (e.g. <code>http://demo.ptb18.xyz</code>) is entered correctly.<br>"
+						"4. <b>Apache Config:</b> Ensure <code>mod_rewrite</code> is enabled and <code>AllowOverride All</code> is set in Apache.<br><br>"
+					)
+				elif response.status_code in (401, 403):
+					msg += (
+						"<br><b>Troubleshooting Auth Error (401 / 403):</b><br>"
+						"1. <b>REST API Key Permissions:</b> Go to WP Admin → WooCommerce → Settings → Advanced → REST API. Edit your API Key and ensure permissions are set to <b>Read/Write</b>.<br>"
+						"2. <b>User Account Permissions:</b> Ensure the WordPress user associated with the REST API Key has <b>Administrator</b> or <b>Shop Manager</b> role.<br>"
+						"3. <b>Check Credentials:</b> Verify there are no trailing/leading spaces in Consumer Key or Consumer Secret.<br>"
+						"4. <b>Apache Authorization Header:</b> If your web server strips HTTP Authorization headers, add the following to your WordPress <code>.htaccess</code> file:<br>"
+						"<code>SetEnvIf Authorization \"(.*)\" HTTP_AUTHORIZATION=$1</code> or <code>CGIPassAuth On</code><br><br>"
+					)
+				msg += f"Response: {response.text[:500]}"
 				frappe.msgprint(
-					f"❌ Connection Failed!<br>Status Code: {response.status_code}<br>"
-					f"Response: {response.text[:500]}",
+					msg,
 					title="Connection Test",
 					indicator="red",
 				)

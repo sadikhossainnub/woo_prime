@@ -3,6 +3,12 @@
 
 frappe.ui.form.on("Woo Settings", {
 	refresh(frm) {
+		// Populate Webhook Delivery URL
+		const webhook_url = frappe.urllib.get_base_url() + "/api/method/woo_prime.api.webhook.handle_order";
+		if (frm.doc.webhook_delivery_url !== webhook_url) {
+			frm.set_value("webhook_delivery_url", webhook_url);
+		}
+
 		// Test Connection button styling
 		if (frm.fields_dict.test_connection_btn) {
 			frm.fields_dict.test_connection_btn.$input.addClass("btn-primary");
@@ -13,15 +19,25 @@ frappe.ui.form.on("Woo Settings", {
 			frm.fields_dict.download_plugin_btn.$input.addClass("btn-success");
 		}
 
-		// Add custom button in header
+		// Add custom button to copy Webhook Delivery URL
+		frm.add_custom_button(
+			__("Copy Webhook URL"),
+			function () {
+				const url = frappe.urllib.get_base_url() + "/api/method/woo_prime.api.webhook.handle_order";
+				navigator.clipboard.writeText(url).then(() => {
+					frappe.show_alert({ message: __("Webhook Delivery URL copied to clipboard!"), indicator: "green" });
+				});
+			}
+		);
+
+		// Add custom button for plugin download
 		frm.add_custom_button(
 			__("Download WordPress Plugin"),
 			function () {
 				window.open(
 					"/api/method/woo_prime.woo_prime.doctype.woo_settings.woo_settings.download_wordpress_plugin"
 				);
-			},
-			__("WordPress Plugin")
+			}
 		);
 	},
 

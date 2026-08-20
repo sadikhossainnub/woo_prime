@@ -524,7 +524,7 @@ def _log_error(woo_order_id, order_data, error_message):
 
 
 def publish_item_to_woo(woo_item):
-	"""Publish an ERPNext item to WooCommerce.
+	"""Publish an ERPNext item (Simple, Template, or Variant) to WooCommerce.
 
 	Args:
 		woo_item: Woo Item document
@@ -536,17 +536,21 @@ def publish_item_to_woo(woo_item):
 
 	api = get_woo_api()
 	settings = frappe.get_single("Woo Settings")
-
-	# Get ERPNext item details
 	item = frappe.get_doc("Item", woo_item.item_code)
 
-	# Get price from price list
-	price = _get_item_price(woo_item.item_code, settings.default_price_list)
+	if item.variant_of:
+		return _publish_variant_item_to_woo(woo_item, item, api, settings)
+	elif item.has_variants:
+		return _publish_template_item_to_woo(woo_item, item, api, settings)
+	else:
+		return _publish_simple_item_to_woo(woo_item, item, api, settings)
 
-	# Get stock qty
+
+def _publish_simple_item_to_woo(woo_item, item, api, settings):
+	"""Publish a simple item to WooCommerce."""
+	price = _get_item_price(woo_item.item_code, settings.default_price_list)
 	stock_qty = _get_stock_qty(woo_item.item_code, settings.default_warehouse)
 
-	# Build product data
 	product_data = {
 		"name": item.item_name,
 		"sku": woo_item.sku,
@@ -558,22 +562,273 @@ def publish_item_to_woo(woo_item):
 		"status": "publish",
 	}
 
-	# Add category if specified
-	if woo_item.woo_category:
-		# Try to find WooCommerce category by name
-		categories_response = api.get("products/categories", params={"search": woo_item.woo_category})
-		if categories_response.status_code == 200:
-			categories = categories_response.json()
-			if categories:
-				product_data["categories"] = [{"id": categories[0]["id"]}]
+	category_ids = _get_woo_category_ids(woo_item, api)
+	if category_ids:
+		product_data["categories"] = category_ids
 
-	# Create or update
+	simple_attrs = _get_simple_item_attributes(item)
+	if simple_attrs:
+		product_data["attributes"] = simple_attrs
+
+	images = _get_item_images(item, woo_item)
+	if images:
+		product_data["images"] = images
+
 	if woo_item.woo_product_id:
 		result = api.update_product(woo_item.woo_product_id, product_data)
 	else:
 		result = api.create_product(product_data)
 
 	return result
+
+
+def _publish_template_item_to_woo(woo_item, item, api, settings):
+	"""Publish an ERPNext Template Item and all its variants as a WooCommerce Variable Product."""
+	variant_item_names = frappe.get_all(
+		"Item",
+		filters={"variant_of": item.name, "disabled": 0},
+		pluck="name"
+	)
+
+	attributes_dict = {}
+	for v_name in variant_item_names:
+		v_item = frappe.get_doc("Item", v_name)
+		for attr in v_item.attributes:
+			if attr.attribute not in attributes_dict:
+				attributes_dict[attr.attribute] = set()
+			attributes_dict[attr.attribute].add(attr.attribute_value)
+
+	woo_attributes = []
+	for attr_name, options in attributes_dict.items():
+		woo_attributes.append({
+			"name": attr_name,
+			"visible": True,
+			"variation": True,
+			"options": sorted(list(options))
+		})
+
+	product_data = {
+		"name": item.item_name,
+		"type": "variable",
+		"sku": woo_item.sku,
+		"description": woo_item.woo_description or item.description or "",
+		"short_description": item.description or "",
+		"status": "publish",
+		"attributes": woo_attributes,
+	}
+
+	category_ids = _get_woo_category_ids(woo_item, api)
+	if category_ids:
+		product_data["categories"] = category_ids
+
+	images = _get_item_images(item, woo_item)
+	if images:
+		product_data["images"] = images
+
+	if woo_item.woo_product_id:
+		result = api.update_product(woo_item.woo_product_id, product_data)
+	else:
+		result = api.create_product(product_data)
+
+	parent_woo_id = result.get("id")
+
+	for v_name in variant_item_names:
+		v_item = frappe.get_doc("Item", v_name)
+
+		child_woo_item_name = frappe.db.get_value("Woo Item", {"item_code": v_name})
+		if child_woo_item_name:
+			child_woo_item = frappe.get_doc("Woo Item", child_woo_item_name)
+		else:
+			child_woo_item = frappe.new_doc("Woo Item")
+			child_woo_item.item_code = v_name
+			child_woo_item.sku = v_item.item_code
+			child_woo_item.insert(ignore_permissions=True)
+
+		_publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings)
+
+	return result
+
+
+def _publish_variant_item_to_woo(woo_item, item, api, settings):
+	"""Publish a child Variant item directly by ensuring its parent template is published first."""
+	parent_item_name = item.variant_of
+	parent_item = frappe.get_doc("Item", parent_item_name)
+
+	parent_woo_item_name = frappe.db.get_value("Woo Item", {"item_code": parent_item_name})
+	if parent_woo_item_name:
+		parent_woo_item = frappe.get_doc("Woo Item", parent_woo_item_name)
+	else:
+		parent_woo_item = frappe.new_doc("Woo Item")
+		parent_woo_item.item_code = parent_item_name
+		parent_woo_item.sku = parent_item.item_code
+		parent_woo_item.insert(ignore_permissions=True)
+
+	if not parent_woo_item.woo_product_id:
+		parent_res = _publish_template_item_to_woo(parent_woo_item, parent_item, api, settings)
+		parent_woo_item.woo_product_id = parent_res.get("id")
+		parent_woo_item.published = 1
+		parent_woo_item.sync_status = "Synced"
+		parent_woo_item.last_synced = now_datetime()
+		parent_woo_item.save(ignore_permissions=True)
+
+	return _publish_variation_data(parent_woo_item.woo_product_id, woo_item, item, api, settings)
+
+
+def _publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings):
+	"""Publish a single variation to WooCommerce under parent variable product."""
+	price = _get_item_price(v_item.name, settings.default_price_list)
+	stock_qty = _get_stock_qty(v_item.name, settings.default_warehouse)
+
+	var_attributes = []
+	for attr in v_item.attributes:
+		var_attributes.append({
+			"name": attr.attribute,
+			"option": attr.attribute_value
+		})
+
+	var_data = {
+		"sku": child_woo_item.sku or v_item.item_code,
+		"regular_price": str(flt(price)),
+		"manage_stock": True,
+		"stock_quantity": int(stock_qty),
+		"attributes": var_attributes,
+		"description": child_woo_item.woo_description or v_item.description or "",
+	}
+
+	images = _get_item_images(v_item, child_woo_item)
+	if images:
+		var_data["image"] = images[0]
+
+	if child_woo_item.woo_product_id:
+		res = api.update_product_variation(parent_woo_id, child_woo_item.woo_product_id, var_data)
+	else:
+		res = api.create_product_variation(parent_woo_id, var_data)
+
+	child_woo_item.woo_product_id = res.get("id")
+	child_woo_item.published = 1
+	child_woo_item.sync_status = "Synced"
+	child_woo_item.last_synced = now_datetime()
+	child_woo_item.save(ignore_permissions=True)
+	return res
+
+
+def _get_item_images(item, woo_item=None):
+	"""Get all image URLs for an Item (primary image + attached files for Product Gallery)."""
+	images = []
+	seen_urls = set()
+
+	# 1. Primary image from Item or Woo Item
+	primary_image = item.image or getattr(woo_item, "image", None)
+	if primary_image:
+		url = primary_image if (primary_image.startswith("http://") or primary_image.startswith("https://")) else frappe.utils.get_url(primary_image)
+		images.append({"src": url})
+		seen_urls.add(primary_image)
+
+	# 2. Additional attached images (Gallery) from File doctype
+	attached_files = frappe.get_all(
+		"File",
+		filters={
+			"attached_to_doctype": "Item",
+			"attached_to_name": item.name,
+		},
+		fields=["file_url"],
+		order_by="creation asc"
+	)
+
+	for f in attached_files:
+		file_url = f.get("file_url")
+		if not file_url or file_url in seen_urls:
+			continue
+		ext = file_url.lower().rsplit(".", 1)[-1] if "." in file_url else ""
+		if ext in ("jpg", "jpeg", "png", "gif", "webp", "svg"):
+			url = file_url if (file_url.startswith("http://") or file_url.startswith("https://")) else frappe.utils.get_url(file_url)
+			images.append({"src": url})
+			seen_urls.add(file_url)
+
+	return images
+
+
+def _get_woo_category_ids(woo_item, api):
+	"""Extract and sync WooCommerce category IDs for a Woo Item (supports multi-selection)."""
+	category_ids = []
+	seen_ids = set()
+
+	def add_category_by_name(cat_name):
+		if not cat_name:
+			return
+		woo_cat_id = frappe.db.get_value("Woo Category", cat_name, "woo_category_id")
+		if not woo_cat_id:
+			woo_cat_id = _get_or_create_woo_category_id(cat_name, api)
+
+		if woo_cat_id and int(woo_cat_id) not in seen_ids:
+			category_ids.append({"id": int(woo_cat_id)})
+			seen_ids.add(int(woo_cat_id))
+
+	# 1. Check Table MultiSelect `categories`
+	if hasattr(woo_item, "categories") and woo_item.categories:
+		for row in woo_item.categories:
+			cat_name = getattr(row, "category", None)
+			add_category_by_name(cat_name)
+
+	# 2. Check primary `woo_category` field
+	if getattr(woo_item, "woo_category", None):
+		add_category_by_name(woo_item.woo_category)
+
+	return category_ids
+
+
+def _get_or_create_woo_category_id(cat_name, api):
+	"""Search or create WooCommerce category by name and return its WooCommerce ID."""
+	try:
+		response = api.get("products/categories", params={"search": cat_name})
+		if response.status_code == 200:
+			categories = response.json()
+			for cat in categories:
+				if cat.get("name", "").strip().lower() == cat_name.strip().lower():
+					_save_woo_category_loc(cat_name, cat.get("id"), cat.get("slug"))
+					return cat.get("id")
+
+		create_resp = api.post("products/categories", data={"name": cat_name})
+		if create_resp.status_code in (200, 201):
+			new_cat = create_resp.json()
+			cat_id = new_cat.get("id")
+			_save_woo_category_loc(cat_name, cat_id, new_cat.get("slug"))
+			return cat_id
+	except Exception:
+		pass
+	return None
+
+
+def _get_simple_item_attributes(item):
+	"""Extract Item Attributes from ERPNext Item child table for simple products."""
+	if not hasattr(item, "attributes") or not item.attributes:
+		return []
+
+	woo_attrs = []
+	for attr in item.attributes:
+		if attr.attribute and attr.attribute_value:
+			woo_attrs.append({
+				"name": attr.attribute,
+				"visible": True,
+				"variation": False,
+				"options": [attr.attribute_value]
+			})
+	return woo_attrs
+
+
+def _save_woo_category_loc(cat_name, woo_cat_id, slug=None):
+	"""Helper to save/update Woo Category record in ERPNext."""
+	try:
+		if not frappe.db.exists("Woo Category", cat_name):
+			doc = frappe.new_doc("Woo Category")
+			doc.category_name = cat_name
+			doc.woo_category_id = woo_cat_id
+			doc.slug = slug
+			doc.insert(ignore_permissions=True)
+		else:
+			frappe.db.set_value("Woo Category", cat_name, "woo_category_id", woo_cat_id)
+	except Exception:
+		pass
 
 
 def sync_stock_to_woo(woo_item):
