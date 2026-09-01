@@ -48,17 +48,30 @@ class Woo_Prime_Connector_Main {
 		add_action( 'plugins_loaded', array( $this, 'init_plugin' ) );
 		add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_frontend_assets' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_assets' ) );
+		add_filter( 'plugin_action_links_' . plugin_basename( __FILE__ ), array( $this, 'add_plugin_action_links' ) );
+	}
+
+	/**
+	 * Add Settings action link on WP Plugins page
+	 */
+	public function add_plugin_action_links( $links ) {
+		$settings_url  = admin_url( 'admin.php?page=woo-prime-settings' );
+		$settings_link = '<a href="' . esc_url( $settings_url ) . '">' . esc_html__( 'Settings', 'woo-prime-connector' ) . '</a>';
+		array_unshift( $links, $settings_link );
+		return $links;
 	}
 
 	public function init_plugin() {
+		// Always initialize Settings Module so settings page is accessible
+		Woo_Prime_Settings::init();
+
 		// Check if WooCommerce is active
 		if ( ! class_exists( 'WooCommerce' ) ) {
 			add_action( 'admin_notices', array( $this, 'woocommerce_missing_notice' ) );
 			return;
 		}
 
-		// Initialize Settings, Pricing Rules, Loyalty & Dashboard Modules
-		Woo_Prime_Settings::init();
+		// Initialize Pricing Rules, Loyalty & Dashboard Modules
 		Woo_Prime_Pricing::init();
 		Woo_Prime_Loyalty::init();
 		Woo_Prime_Dashboard::init();
@@ -89,7 +102,7 @@ class Woo_Prime_Connector_Main {
 	}
 
 	public function enqueue_admin_assets( $hook ) {
-		if ( 'woocommerce_page_woo-prime-settings' === $hook ) {
+		if ( false !== strpos( $hook, 'woo-prime-settings' ) ) {
 			wp_enqueue_script(
 				'woo-prime-admin',
 				WOO_PRIME_PLUGIN_URL . 'assets/js/woo-prime-admin.js',

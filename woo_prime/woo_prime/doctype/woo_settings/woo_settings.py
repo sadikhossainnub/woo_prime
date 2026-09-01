@@ -80,9 +80,6 @@ def download_wordpress_plugin():
 	plugin_path = frappe.get_app_path("woo_prime", "wordpress_plugin", "woo-prime-connector.zip")
 
 	if not os.path.exists(plugin_path):
-		plugin_path = frappe.get_app_path("woo_prime", "wordpress_plugin", "woo_prime_connector.zip")
-
-	if not os.path.exists(plugin_path):
 		frappe.throw(_("WordPress plugin package file not found."))
 
 	with open(plugin_path, "rb") as f:
