@@ -116,11 +116,35 @@ def sync_order(order_data):
 		if customer_note:
 			so.add_comment("Comment", text=f"Customer Note (WooCommerce): {customer_note}")
 
-		# Save and submit
+		# Save and submit (respect auto_submit_order setting)
 		so.flags.ignore_permissions = True
 		so.flags.ignore_mandatory = True
 		so.save()
-		so.submit()
+		if getattr(settings, "auto_submit_order", 1):
+			so.submit()
+
+		# Send email notification if enabled
+		if getattr(settings, "order_email_notification", 0) and getattr(settings, "notification_email", None):
+			try:
+				subject = f"🛒 New WooCommerce Order: WC-{woo_order_id} ({so.name})"
+				message = f"""
+				<h3>New Order Received from WooCommerce</h3>
+				<p><b>Order ID:</b> WC-{woo_order_id}</p>
+				<p><b>Sales Order:</b> {so.name}</p>
+				<p><b>Customer:</b> {customer_name}</p>
+				<p><b>Total Amount:</b> {so.currency} {so.grand_total}</p>
+				<p><b>Status:</b> {so.woo_order_status}</p>
+				<hr>
+				<p><a href="{frappe.utils.get_url_to_form('Sales Order', so.name)}">View Sales Order in ERPNext</a></p>
+				"""
+				frappe.sendmail(
+					recipients=[settings.notification_email],
+					subject=subject,
+					message=message,
+					now=True,
+				)
+			except Exception:
+				frappe.log_error(title=f"Order Email Notification Failed - {so.name}", message=frappe.get_traceback())
 
 		# Update sync log
 		from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
@@ -1025,10 +1049,11 @@ def reconcile_orders():
 
 		api = get_woo_api()
 
-		# Fetch orders from last 2 days
+		# Fetch orders from last configured reconcile_days (default 2)
 		import datetime
 
-		after_date = (datetime.datetime.now() - datetime.timedelta(days=2)).strftime("%Y-%m-%dT00:00:00")
+		lookback_days = getattr(settings, "reconcile_days", 2) or 2
+		after_date = (datetime.datetime.now() - datetime.timedelta(days=lookback_days)).strftime("%Y-%m-%dT00:00:00")
 
 		orders = api.get_orders(params={
 			"after": after_date,

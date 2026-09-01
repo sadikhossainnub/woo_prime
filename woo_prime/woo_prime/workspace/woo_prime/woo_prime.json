@@ -1,20 +1,123 @@
 {
  "app": "Woo Prime",
  "charts": [],
- "content": "[]",
+ "content": "[{\"type\":\"header\",\"data\":{\"text\":\"Woo Prime Integration\",\"level\":4}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Woo Settings\"}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Woo Item\"}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Woo Sync Log\"}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Woo Category\"}},{\"type\":\"spacer\",\"data\":{\"col\":12}},{\"type\":\"card\",\"data\":{\"card_name\":\"Setup\"}},{\"type\":\"card\",\"data\":{\"card_name\":\"Masters\"}},{\"type\":\"card\",\"data\":{\"card_name\":\"Reports\"}},{\"type\":\"card\",\"data\":{\"card_name\":\"Logs\"}}]",
  "creation": "2026-08-21 03:48:03.457815",
  "custom_blocks": [],
  "docstatus": 0,
  "doctype": "Workspace",
  "hide_custom": 0,
- "icon": "banknote-arrow-down",
+ "icon": "shopping-cart",
  "idx": 0,
  "indicator_color": "green",
  "is_hidden": 0,
- "label": "Woo_Prime",
+ "label": "Woo Prime",
  "link_type": "DocType",
- "links": [],
- "modified": "2026-08-21 03:49:32.023628",
+ "links": [
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Setup",
+   "link_count": 0,
+   "link_type": "DocType",
+   "type": "Card Break"
+  },
+  {
+   "dependencies": "",
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Woo Settings",
+   "link_count": 0,
+   "link_to": "Woo Settings",
+   "link_type": "DocType",
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Masters",
+   "link_count": 0,
+   "link_type": "DocType",
+   "type": "Card Break"
+  },
+  {
+   "dependencies": "",
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Woo Item",
+   "link_count": 0,
+   "link_to": "Woo Item",
+   "link_type": "DocType",
+   "type": "Link"
+  },
+  {
+   "dependencies": "",
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Woo Category",
+   "link_count": 0,
+   "link_to": "Woo Category",
+   "link_type": "DocType",
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Reports",
+   "link_count": 0,
+   "link_type": "Report",
+   "type": "Card Break"
+  },
+  {
+   "dependencies": "",
+   "hidden": 0,
+   "is_query_report": 1,
+   "label": "WooCommerce Sales Summary",
+   "link_count": 0,
+   "link_to": "WooCommerce Sales Summary",
+   "link_type": "Report",
+   "type": "Link"
+  },
+  {
+   "dependencies": "",
+   "hidden": 0,
+   "is_query_report": 1,
+   "label": "WooCommerce Order Status Summary",
+   "link_count": 0,
+   "link_to": "WooCommerce Order Status Summary",
+   "link_type": "Report",
+   "type": "Link"
+  },
+  {
+   "dependencies": "",
+   "hidden": 0,
+   "is_query_report": 1,
+   "label": "WooCommerce vs ERPNext Stock Comparison",
+   "link_count": 0,
+   "link_to": "WooCommerce vs ERPNext Stock Comparison",
+   "link_type": "Report",
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Logs",
+   "link_count": 0,
+   "link_type": "DocType",
+   "type": "Card Break"
+  },
+  {
+   "dependencies": "",
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Woo Sync Log",
+   "link_count": 0,
+   "link_to": "Woo Sync Log",
+   "link_type": "DocType",
+   "type": "Link"
+  }
+ ],
+ "modified": "2026-09-01 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Woo Prime",
  "name": "Woo_Prime",
@@ -24,7 +127,40 @@
  "quick_lists": [],
  "roles": [],
  "sequence_id": 0.0,
- "shortcuts": [],
- "title": "Woo_Prime",
+ "shortcuts": [
+  {
+   "color": "Grey",
+   "doc_view": "",
+   "format": "",
+   "label": "Woo Settings",
+   "link_to": "Woo Settings",
+   "type": "DocType"
+  },
+  {
+   "color": "Blue",
+   "doc_view": "",
+   "format": "",
+   "label": "Woo Item",
+   "link_to": "Woo Item",
+   "type": "DocType"
+  },
+  {
+   "color": "Orange",
+   "doc_view": "",
+   "format": "",
+   "label": "Woo Sync Log",
+   "link_to": "Woo Sync Log",
+   "type": "DocType"
+  },
+  {
+   "color": "Green",
+   "doc_view": "",
+   "format": "",
+   "label": "Woo Category",
+   "link_to": "Woo Category",
+   "type": "DocType"
+  }
+ ],
+ "title": "Woo Prime",
  "type": "Workspace"
 }

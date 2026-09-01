@@ -1,6 +1,6 @@
 <?php
 /**
- * Loyalty Points Handler
+ * Loyalty Points Handler (v2.0 with AJAX support)
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -13,20 +13,23 @@ class Woo_Prime_Loyalty {
 		if ( get_option( 'woo_prime_enable_loyalty', 1 ) ) {
 			add_action( 'woocommerce_before_checkout_form', array( __CLASS__, 'display_loyalty_notice' ) );
 			add_action( 'woocommerce_cart_calculate_fees', array( __CLASS__, 'apply_loyalty_discount' ) );
-			add_action( 'wp_loaded', array( __CLASS__, 'handle_redemption_toggle' ) );
+			add_action( 'wp_ajax_woo_prime_toggle_loyalty', array( __CLASS__, 'ajax_toggle_loyalty' ) );
+			add_action( 'wp_ajax_nopriv_woo_prime_toggle_loyalty', array( __CLASS__, 'ajax_toggle_loyalty' ) );
 		}
 	}
 
-	public static function handle_redemption_toggle() {
-		if ( isset( $_GET['woo_prime_redeem'] ) ) {
-			if ( '1' === $_GET['woo_prime_redeem'] ) {
-				WC()->session->set( 'woo_prime_redeem_loyalty', true );
-			} else {
-				WC()->session->set( 'woo_prime_redeem_loyalty', false );
-			}
-			wp_safe_redirect( wc_get_checkout_url() );
-			exit;
+	public static function ajax_toggle_loyalty() {
+		check_ajax_referer( 'woo_prime_checkout_nonce', 'security' );
+
+		$redeem = isset( $_POST['redeem'] ) && '1' === $_POST['redeem'];
+		if ( WC()->session ) {
+			WC()->session->set( 'woo_prime_redeem_loyalty', $redeem );
 		}
+
+		wp_send_json_success( array(
+			'redeemed' => $redeem,
+			'message'  => $redeem ? __( 'Loyalty points discount applied!', 'woo-prime-connector' ) : __( 'Loyalty points removed.', 'woo-prime-connector' ),
+		) );
 	}
 
 	public static function display_loyalty_notice() {
@@ -40,43 +43,63 @@ class Woo_Prime_Loyalty {
 		}
 
 		$current_user = wp_get_current_user();
-		$response     = wp_remote_get(
-			add_query_arg(
-				array( 'customer_email' => $current_user->user_email ),
-				$erpnext_url . '/api/method/woo_prime.api.loyalty.get_customer_loyalty_points'
-			),
-			array( 'timeout' => 10 )
-		);
+		$cache_key    = 'loyalty_' . md5( $current_user->user_email );
+		$data         = Woo_Prime_Cache::get( $cache_key );
 
-		if ( is_wp_error( $response ) ) {
-			return;
-		}
+		if ( false === $data ) {
+			$api_key    = get_option( 'woo_prime_api_key' );
+			$api_secret = get_option( 'woo_prime_api_secret' );
+			$headers    = array( 'Content-Type' => 'application/json' );
 
-		$body = wp_remote_retrieve_body( $response );
-		$data = json_decode( $body, true );
-
-		if ( isset( $data['message']['loyalty_points'] ) && $data['message']['loyalty_points'] > 0 ) {
-			$points     = $data['message']['loyalty_points'];
-			$value      = $data['message']['redeemable_amount'];
-			$is_redeemed = WC()->session ? WC()->session->get( 'woo_prime_redeem_loyalty' ) : false;
-
-			if ( ! $is_redeemed ) {
-				$notice = sprintf(
-					__( '🎁 You have <strong>%1$d Loyalty Points</strong> (Worth ৳%2$.2f). <a href="%3$s" class="button woo-prime-btn">Redeem Points Now</a>', 'woo-prime-connector' ),
-					$points,
-					$value,
-					esc_url( add_query_arg( 'woo_prime_redeem', '1' ) )
-				);
-			} else {
-				$notice = sprintf(
-					__( '✅ Applied <strong>%1$d Loyalty Points</strong> (৳%2$.2f Discount Applied). <a href="%3$s">Remove Points</a>', 'woo-prime-connector' ),
-					$points,
-					$value,
-					esc_url( add_query_arg( 'woo_prime_redeem', '0' ) )
-				);
+			if ( ! empty( $api_key ) && ! empty( $api_secret ) ) {
+				$headers['Authorization'] = 'token ' . $api_key . ':' . $api_secret;
 			}
 
-			wc_print_notice( $notice, 'notice' );
+			$response = wp_remote_get(
+				add_query_arg(
+					array( 'customer_email' => $current_user->user_email ),
+					$erpnext_url . '/api/method/woo_prime.api.loyalty.get_customer_loyalty_points'
+				),
+				array( 'headers' => $headers, 'timeout' => 8 )
+			);
+
+			if ( is_wp_error( $response ) ) {
+				Woo_Prime_Logger::log( 'error', 'Loyalty points API failed', array( 'error' => $response->get_error_message() ) );
+				return;
+			}
+
+			$body = wp_remote_retrieve_body( $response );
+			$res  = json_decode( $body, true );
+			$data = isset( $res['message'] ) ? $res['message'] : null;
+
+			if ( $data ) {
+				Woo_Prime_Cache::set( $cache_key, $data, 120 ); // Cache 2 mins
+			}
+		}
+
+		if ( isset( $data['loyalty_points'] ) && $data['loyalty_points'] > 0 ) {
+			$points      = $data['loyalty_points'];
+			$value       = $data['redeemable_amount'];
+			$is_redeemed = WC()->session ? WC()->session->get( 'woo_prime_redeem_loyalty' ) : false;
+
+			?>
+			<div class="woocommerce-info woo-prime-loyalty-box" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap;">
+				<div>
+					<?php if ( ! $is_redeemed ) : ?>
+						🎁 <?php printf( __( 'You have <strong>%1$d Loyalty Points</strong> (Worth ৳%2$.2f in ERPNext).', 'woo-prime-connector' ), $points, $value ); ?>
+					<?php else : ?>
+						✅ <?php printf( __( 'Applied <strong>%1$d Loyalty Points</strong> (৳%2$.2f Discount Applied).', 'woo-prime-connector' ), $points, $value ); ?>
+					<?php endif; ?>
+				</div>
+				<div>
+					<?php if ( ! $is_redeemed ) : ?>
+						<button type="button" class="button woo-prime-btn woo-prime-loyalty-toggle" data-redeem="1"><?php esc_html_e( 'Redeem Points Now', 'woo-prime-connector' ); ?></button>
+					<?php else : ?>
+						<button type="button" class="button button-secondary woo-prime-loyalty-toggle" data-redeem="0"><?php esc_html_e( 'Remove Points', 'woo-prime-connector' ); ?></button>
+					<?php endif; ?>
+				</div>
+			</div>
+			<?php
 		}
 	}
 
@@ -95,22 +118,36 @@ class Woo_Prime_Loyalty {
 		}
 
 		$current_user = wp_get_current_user();
-		$response     = wp_remote_get(
-			add_query_arg(
-				array( 'customer_email' => $current_user->user_email ),
-				$erpnext_url . '/api/method/woo_prime.api.loyalty.get_customer_loyalty_points'
-			),
-			array( 'timeout' => 10 )
-		);
+		$cache_key    = 'loyalty_' . md5( $current_user->user_email );
+		$data         = Woo_Prime_Cache::get( $cache_key );
 
-		if ( is_wp_error( $response ) ) {
-			return;
+		if ( false === $data ) {
+			$api_key    = get_option( 'woo_prime_api_key' );
+			$api_secret = get_option( 'woo_prime_api_secret' );
+			$headers    = array( 'Content-Type' => 'application/json' );
+
+			if ( ! empty( $api_key ) && ! empty( $api_secret ) ) {
+				$headers['Authorization'] = 'token ' . $api_key . ':' . $api_secret;
+			}
+
+			$response = wp_remote_get(
+				add_query_arg(
+					array( 'customer_email' => $current_user->user_email ),
+					$erpnext_url . '/api/method/woo_prime.api.loyalty.get_customer_loyalty_points'
+				),
+				array( 'headers' => $headers, 'timeout' => 8 )
+			);
+
+			if ( is_wp_error( $response ) ) {
+				return;
+			}
+
+			$body = wp_remote_retrieve_body( $response );
+			$res  = json_decode( $body, true );
+			$data = isset( $res['message'] ) ? $res['message'] : null;
 		}
 
-		$body = wp_remote_retrieve_body( $response );
-		$data = json_decode( $body, true );
-
-		$amount = isset( $data['message']['redeemable_amount'] ) ? $data['message']['redeemable_amount'] : 0;
+		$amount = isset( $data['redeemable_amount'] ) ? floatval( $data['redeemable_amount'] ) : 0;
 		if ( $amount > 0 ) {
 			$cart->add_fee( __( 'ERPNext Loyalty Points Redemption', 'woo-prime-connector' ), -$amount );
 		}

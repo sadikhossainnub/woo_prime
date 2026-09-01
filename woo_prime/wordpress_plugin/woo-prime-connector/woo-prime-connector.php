@@ -2,8 +2,8 @@
 /**
  * Plugin Name:       Woo Prime Connector
  * Plugin URI:        https://primetechbd.com
- * Description:       Integrates WooCommerce with ERPNext for real-time Pricing Rules calculation and Loyalty Points redemption.
- * Version:           1.0.0
+ * Description:       Integrates WooCommerce with ERPNext for real-time Pricing Rules evaluation, Loyalty Points redemption, and sync dashboard.
+ * Version:           2.0.0
  * Author:            Prime Tech BD
  * Author URI:        https://primetechbd.com
  * Text Domain:       woo-prime-connector
@@ -18,14 +18,17 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit; // Exit if accessed directly.
 }
 
-define( 'WOO_PRIME_VERSION', '1.0.0' );
+define( 'WOO_PRIME_VERSION', '2.0.0' );
 define( 'WOO_PRIME_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'WOO_PRIME_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 
 // Include Core Classes
+require_once WOO_PRIME_PLUGIN_DIR . 'includes/class-woo-prime-logger.php';
+require_once WOO_PRIME_PLUGIN_DIR . 'includes/class-woo-prime-cache.php';
 require_once WOO_PRIME_PLUGIN_DIR . 'includes/class-woo-prime-settings.php';
 require_once WOO_PRIME_PLUGIN_DIR . 'includes/class-woo-prime-pricing.php';
 require_once WOO_PRIME_PLUGIN_DIR . 'includes/class-woo-prime-loyalty.php';
+require_once WOO_PRIME_PLUGIN_DIR . 'includes/class-woo-prime-dashboard.php';
 
 /**
  * Initialize Main Plugin Class
@@ -43,7 +46,8 @@ class Woo_Prime_Connector_Main {
 
 	private function __construct() {
 		add_action( 'plugins_loaded', array( $this, 'init_plugin' ) );
-		add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_assets' ) );
+		add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_frontend_assets' ) );
+		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_assets' ) );
 	}
 
 	public function init_plugin() {
@@ -53,13 +57,14 @@ class Woo_Prime_Connector_Main {
 			return;
 		}
 
-		// Initialize Settings, Pricing Rules & Loyalty Modules
+		// Initialize Settings, Pricing Rules, Loyalty & Dashboard Modules
 		Woo_Prime_Settings::init();
 		Woo_Prime_Pricing::init();
 		Woo_Prime_Loyalty::init();
+		Woo_Prime_Dashboard::init();
 	}
 
-	public function enqueue_assets() {
+	public function enqueue_frontend_assets() {
 		if ( is_cart() || is_checkout() ) {
 			wp_enqueue_style(
 				'woo-prime-style',
@@ -67,6 +72,36 @@ class Woo_Prime_Connector_Main {
 				array(),
 				WOO_PRIME_VERSION
 			);
+
+			wp_enqueue_script(
+				'woo-prime-checkout',
+				WOO_PRIME_PLUGIN_URL . 'assets/js/woo-prime-checkout.js',
+				array( 'jquery' ),
+				WOO_PRIME_VERSION,
+				true
+			);
+
+			wp_localize_script( 'woo-prime-checkout', 'woo_prime_checkout_params', array(
+				'ajax_url' => admin_url( 'admin-ajax.php' ),
+				'nonce'    => wp_create_nonce( 'woo_prime_checkout_nonce' ),
+			) );
+		}
+	}
+
+	public function enqueue_admin_assets( $hook ) {
+		if ( 'woocommerce_page_woo-prime-settings' === $hook ) {
+			wp_enqueue_script(
+				'woo-prime-admin',
+				WOO_PRIME_PLUGIN_URL . 'assets/js/woo-prime-admin.js',
+				array( 'jquery' ),
+				WOO_PRIME_VERSION,
+				true
+			);
+
+			wp_localize_script( 'woo-prime-admin', 'woo_prime_admin_params', array(
+				'ajax_url' => admin_url( 'admin-ajax.php' ),
+				'nonce'    => wp_create_nonce( 'woo_prime_admin_nonce' ),
+			) );
 		}
 	}
 

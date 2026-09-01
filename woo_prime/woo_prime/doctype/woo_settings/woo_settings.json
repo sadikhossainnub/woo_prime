@@ -31,10 +31,16 @@
   "shipping_item",
   "column_break_order",
   "auto_create_customer",
+  "auto_submit_order",
+  "order_email_notification",
+  "notification_email",
   "sync_features_section",
   "enable_stock_sync",
+  "stock_sync_interval",
   "column_break_sync",
-  "enable_price_sync"
+  "enable_price_sync",
+  "price_sync_interval",
+  "reconcile_days"
  ],
  "fields": [
   {
@@ -186,15 +192,42 @@
    "label": "Auto Create Customer"
   },
   {
+   "default": "1",
+   "fieldname": "auto_submit_order",
+   "fieldtype": "Check",
+   "label": "Auto Submit Sales Order"
+  },
+  {
+   "default": "0",
+   "fieldname": "order_email_notification",
+   "fieldtype": "Check",
+   "label": "Send Email Notification on New Order"
+  },
+  {
+   "fieldname": "notification_email",
+   "fieldtype": "Data",
+   "label": "Notification Email Address",
+   "depends_on": "eval:doc.order_email_notification==1",
+   "description": "Email address where order notifications will be sent"
+  },
+  {
    "fieldname": "sync_features_section",
    "fieldtype": "Section Break",
-   "label": "Sync Features"
+   "label": "Sync Features & Schedules"
   },
   {
    "default": "0",
    "fieldname": "enable_stock_sync",
    "fieldtype": "Check",
    "label": "Enable Stock Sync (ERPNext → WooCommerce)"
+  },
+  {
+   "default": "Hourly",
+   "fieldname": "stock_sync_interval",
+   "fieldtype": "Select",
+   "label": "Stock Sync Schedule",
+   "options": "Hourly\nEvery 30 Minutes\nEvery 15 Minutes\nEvery 6 Hours\nDaily",
+   "depends_on": "eval:doc.enable_stock_sync==1"
   },
   {
    "fieldname": "column_break_sync",
@@ -205,12 +238,27 @@
    "fieldname": "enable_price_sync",
    "fieldtype": "Check",
    "label": "Enable Price Sync (ERPNext → WooCommerce)"
+  },
+  {
+   "default": "Daily",
+   "fieldname": "price_sync_interval",
+   "fieldtype": "Select",
+   "label": "Price Sync Schedule",
+   "options": "Daily\nHourly\nEvery 6 Hours",
+   "depends_on": "eval:doc.enable_price_sync==1"
+  },
+  {
+   "default": "2",
+   "fieldname": "reconcile_days",
+   "fieldtype": "Int",
+   "label": "Order Reconciliation Lookback (Days)",
+   "description": "Number of past days to check for missing orders during daily reconciliation"
   }
  ],
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-08-11 03:53:00.000000",
+ "modified": "2026-09-01 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Woo Prime",
  "name": "Woo Settings",
