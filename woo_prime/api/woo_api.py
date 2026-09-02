@@ -29,7 +29,11 @@ class WooAPI:
 
 	def _request(self, method, endpoint, data=None, params=None):
 		"""Make an authenticated request to WooCommerce API."""
-		headers = {"Content-Type": "application/json"}
+		headers = {
+			"Content-Type": "application/json",
+			"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 WooPrime/1.0",
+			"Accept": "application/json, text/plain, */*",
+		}
 
 		def make_call(use_rest, use_query):
 			req_params = dict(params) if params else {}
@@ -203,6 +207,8 @@ class WooAPI:
 		headers = {
 			"Content-Type": mime_type,
 			"Content-Disposition": f'attachment; filename="{filename}"',
+			"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 WooPrime/1.0",
+			"Accept": "application/json, text/plain, */*",
 		}
 
 		try:
