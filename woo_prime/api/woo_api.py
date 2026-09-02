@@ -19,6 +19,8 @@ class WooAPI:
 		if site_url.endswith("/index.php"):
 			site_url = site_url[:-10].rstrip("/")
 		self.site_url = site_url
+		consumer_key = consumer_key.strip() if consumer_key else ""
+		consumer_secret = consumer_secret.strip() if consumer_secret else ""
 		self.consumer_key = consumer_key
 		self.consumer_secret = consumer_secret
 		self.base_url = f"{self.site_url}/wp-json/{self.API_VERSION}"

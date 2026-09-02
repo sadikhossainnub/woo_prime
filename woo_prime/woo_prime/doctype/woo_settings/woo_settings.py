@@ -19,6 +19,9 @@ class WooSettings(Document):
 			if self.woo_site_url.endswith("/index.php"):
 				self.woo_site_url = self.woo_site_url[:-10].rstrip("/")
 
+		if self.consumer_key:
+			self.consumer_key = self.consumer_key.strip()
+
 		if self.order_email_notification and not self.notification_email:
 			frappe.throw(_("Notification Email Address is required when Email Notification is enabled."))
 
