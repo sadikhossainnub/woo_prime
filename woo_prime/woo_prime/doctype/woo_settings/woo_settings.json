@@ -27,9 +27,14 @@
   "default_price_list",
   "default_customer_group",
   "default_territory",
+  "default_item_group",
   "order_settings_section",
   "tax_template",
+  "shipping_sync_type",
   "shipping_item",
+  "shipping_charge_account",
+  "default_shipping_rule",
+  "shipping_rule_mappings",
   "column_break_order",
   "auto_create_customer",
   "auto_submit_order",
@@ -170,6 +175,13 @@
    "reqd": 1
   },
   {
+   "fieldname": "default_item_group",
+   "fieldtype": "Link",
+   "label": "Default Item Group",
+   "options": "Item Group",
+   "description": "Used when auto-creating ERPNext items from WooCommerce products"
+  },
+  {
    "fieldname": "order_settings_section",
    "fieldtype": "Section Break",
    "label": "Order Settings"
@@ -181,11 +193,41 @@
    "options": "Sales Taxes and Charges Template"
   },
   {
+   "default": "Line Item",
+   "fieldname": "shipping_sync_type",
+   "fieldtype": "Select",
+   "label": "Shipping Charges Sync Mode",
+   "options": "Line Item\nTaxes and Charges Table"
+  },
+  {
    "fieldname": "shipping_item",
    "fieldtype": "Link",
    "label": "Shipping Charges Item",
    "options": "Item",
-   "description": "ERPNext Item used to represent WooCommerce shipping charges"
+   "depends_on": "eval:doc.shipping_sync_type=='Line Item'",
+   "description": "ERPNext Item used to represent WooCommerce shipping charges in Items table"
+  },
+  {
+   "fieldname": "shipping_charge_account",
+   "fieldtype": "Link",
+   "label": "Shipping Charge Account",
+   "options": "Account",
+   "depends_on": "eval:doc.shipping_sync_type=='Taxes and Charges Table'",
+   "description": "Income/Expense Account for Shipping Charges in Taxes & Charges table"
+  },
+  {
+   "fieldname": "default_shipping_rule",
+   "fieldtype": "Link",
+   "label": "Default Shipping Rule",
+   "options": "Shipping Rule",
+   "description": "Default ERPNext Shipping Rule to apply on incoming WooCommerce orders if no specific mapping matches"
+  },
+  {
+   "fieldname": "shipping_rule_mappings",
+   "fieldtype": "Table",
+   "label": "Shipping Zone / Method Mappings",
+   "options": "Woo Shipping Rule Mapping",
+   "description": "Map WooCommerce Shipping Zone / Method names (e.g. Inside Dhaka, Outside Dhaka) to ERPNext Shipping Rules"
   },
   {
    "fieldname": "column_break_order",

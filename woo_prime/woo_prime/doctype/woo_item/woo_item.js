@@ -93,6 +93,31 @@ frappe.listview_settings["Woo Item"] = {
 		return [__("Not Synced"), "grey", "sync_status,=,Not Synced"];
 	},
 	onload: function (listview) {
+		// 1. Fetch Products from WooCommerce
+		listview.page.add_inner_button(__("Fetch from WooCommerce"), function () {
+			frappe.call({
+				method: "woo_prime.woo_prime.doctype.woo_item.woo_item.fetch_items_from_woocommerce",
+				freeze: true,
+				freeze_message: __("Fetching products from WooCommerce & auto-linking by SKU..."),
+				callback: function (r) {
+					listview.refresh();
+				},
+			});
+		});
+
+		// 2. Auto Link Unlinked Items by SKU
+		listview.page.add_inner_button(__("Auto Link by SKU"), function () {
+			frappe.call({
+				method: "woo_prime.woo_prime.doctype.woo_item.woo_item.auto_link_unlinked_items",
+				freeze: true,
+				freeze_message: __("Auto-linking Woo Items to ERPNext Items by SKU..."),
+				callback: function (r) {
+					listview.refresh();
+				},
+			});
+		});
+
+		// 3. Action Item: Bulk Publish
 		listview.page.add_action_item(__("Bulk Publish to WooCommerce"), function () {
 			const selected = listview.get_checked_items();
 			if (!selected.length) {
@@ -120,6 +145,76 @@ frappe.listview_settings["Woo Item"] = {
 								);
 								listview.refresh();
 							}
+						},
+					});
+				}
+			);
+		});
+
+		// 4. Action Item: Bulk Link to ERPNext Item
+		listview.page.add_action_item(__("Bulk Link to ERPNext Item"), function () {
+			const selected = listview.get_checked_items();
+			if (!selected.length) {
+				frappe.msgprint(__("Please select Woo Items to link."));
+				return;
+			}
+
+			const item_names = selected.map((d) => d.name);
+
+			frappe.prompt(
+				[
+					{
+						fieldtype: "Link",
+						fieldname: "target_item_code",
+						label: __("ERPNext Item Code (Leave empty to Auto-Match by SKU)"),
+						options: "Item",
+					},
+				],
+				function (values) {
+					frappe.call({
+						method: "woo_prime.woo_prime.doctype.woo_item.woo_item.bulk_link_to_erpnext_item",
+						args: {
+							items: item_names,
+							target_item_code: values.target_item_code || null,
+						},
+						freeze: true,
+						freeze_message: __("Linking Woo Items to ERPNext..."),
+						callback: function (r) {
+							if (r && r.message !== undefined) {
+								frappe.show_alert({
+									message: __("Successfully linked {0} item(s)!", [r.message]),
+									indicator: "green",
+								});
+								listview.refresh();
+							}
+						},
+					});
+				},
+				__("Link Woo Items to ERPNext Item"),
+				__("Link Items")
+			);
+		});
+
+		// 5. Action Item: Create ERPNext Items for Selected Woo Items
+		listview.page.add_action_item(__("Create ERPNext Items for Selected"), function () {
+			const selected = listview.get_checked_items();
+			if (!selected.length) {
+				frappe.msgprint(__("Please select Woo Items to create ERPNext items for."));
+				return;
+			}
+
+			const item_names = selected.map((d) => d.name);
+
+			frappe.confirm(
+				__("Auto-create ERPNext Item records for {0} selected item(s)?", [item_names.length]),
+				function () {
+					frappe.call({
+						method: "woo_prime.woo_prime.doctype.woo_item.woo_item.create_erpnext_items_from_woo",
+						args: { items: item_names },
+						freeze: true,
+						freeze_message: __("Creating ERPNext Items..."),
+						callback: function (r) {
+							listview.refresh();
 						},
 					});
 				}

@@ -65,6 +65,62 @@ frappe.ui.form.on("Woo Settings", {
 			},
 			__("Sync")
 		);
+
+		// Add Run Full Sync button
+		frm.add_custom_button(
+			__("Run Full Sync"),
+			function () {
+				frappe.confirm(
+					__("Run Full End-to-End Sync? This will sync Categories, Products, SKU Links, Stock, and Prices."),
+					function () {
+						frappe.call({
+							method: "run_full_sync",
+							doc: frm.doc,
+							freeze: true,
+							freeze_message: __("Running Full WooCommerce Sync... Please wait..."),
+							callback: function (r) {
+								frm.reload_doc();
+							},
+						});
+					}
+				);
+			},
+			__("Sync")
+		);
+
+		// Add Fetch Missing Order button
+		frm.add_custom_button(
+			__("Fetch WooCommerce Order by ID"),
+			function () {
+				frappe.prompt(
+					[
+						{
+							fieldtype: "Data",
+							fieldname: "woo_order_id",
+							label: __("WooCommerce Order ID (e.g. 2045)"),
+							reqd: 1,
+						},
+					],
+					function (values) {
+						frappe.call({
+							method: "fetch_missing_order",
+							doc: frm.doc,
+							args: { woo_order_id: values.woo_order_id },
+							freeze: true,
+							freeze_message: __("Fetching order from WooCommerce..."),
+							callback: function (r) {
+								if (r.message) {
+									frappe.set_route("Form", "Sales Order", r.message);
+								}
+							},
+						});
+					},
+					__("Fetch Order manually"),
+					__("Fetch & Sync Order")
+				);
+			},
+			__("Sync")
+		);
 	},
 
 	test_connection_btn(frm) {

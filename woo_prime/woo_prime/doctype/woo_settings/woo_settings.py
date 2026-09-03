@@ -128,3 +128,68 @@ def get_woo_api():
 		consumer_key=settings.consumer_key,
 		consumer_secret=settings.get_password("consumer_secret"),
 	)
+
+
+@frappe.whitelist()
+def run_full_sync():
+	"""Run full end-to-end sync: Sync Categories -> Fetch Products & Auto Link -> Sync Stock & Price."""
+	from woo_prime.woo_prime.doctype.woo_category.woo_category import sync_categories_from_woo
+	from woo_prime.woo_prime.doctype.woo_item.woo_item import fetch_items_from_woocommerce
+	from woo_prime.api.sync import sync_all_stock, sync_all_prices
+
+	cat_count = sync_categories_from_woo()
+	item_res = fetch_items_from_woocommerce()
+	sync_all_stock()
+	sync_all_prices()
+
+	summary = _(
+		"✅ <b>Full Sync Completed Successfully!</b><br>"
+		"📂 Categories Synced: <b>{0}</b><br>"
+		"📦 Products Fetched: <b>{1}</b><br>"
+		"🔗 SKU Auto-linked: <b>{2}</b><br>"
+		"📊 Stock & Prices Pushed to WooCommerce."
+	).format(
+		cat_count,
+		item_res.get("fetched", 0) if isinstance(item_res, dict) else 0,
+		item_res.get("linked", 0) if isinstance(item_res, dict) else 0,
+	)
+
+	frappe.msgprint(summary, title=_("Full Sync Complete"), indicator="green")
+	return summary
+
+
+@frappe.whitelist()
+def fetch_missing_order(woo_order_id):
+	"""Fetch a specific order from WooCommerce by ID and sync it as a Sales Order in ERPNext."""
+	if not woo_order_id:
+		frappe.throw(_("Please provide a WooCommerce Order ID."))
+
+	woo_order_id = str(woo_order_id).strip()
+	api = get_woo_api()
+
+	response = api.get(f"orders/{woo_order_id}")
+	if response.status_code != 200:
+		frappe.throw(_("Failed to fetch order #{0} from WooCommerce: {1}").format(woo_order_id, response.text[:200]))
+
+	order_data = response.json()
+	from woo_prime.api.sync import sync_order
+
+	sync_order(order_data)
+
+	so_name = frappe.db.get_value("Sales Order", {"woo_order_id": woo_order_id})
+	if so_name:
+		frappe.msgprint(
+			_("✅ WooCommerce Order #{0} successfully synced to Sales Order <b>{1}</b>!").format(
+				woo_order_id, so_name
+			),
+			title=_("Order Synced"),
+			indicator="green",
+		)
+		return so_name
+	else:
+		frappe.msgprint(
+			_("⚠️ Processed order payload, but Sales Order was not created (check Woo Sync Log for details)."),
+			indicator="orange",
+		)
+		return None
+

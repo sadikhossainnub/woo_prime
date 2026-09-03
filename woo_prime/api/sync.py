@@ -94,22 +94,76 @@ def sync_order(order_data):
 		for item in items:
 			so.append("items", item)
 
-		# Add shipping as a line item (if applicable)
+		# Shipping details from WooCommerce payload
 		shipping_total = flt(order_data.get("shipping_total", 0))
-		if shipping_total > 0 and settings.shipping_item:
-			so.append("items", {
-				"item_code": settings.shipping_item,
-				"qty": 1,
-				"rate": shipping_total,
-				"delivery_date": so.delivery_date,
-				"warehouse": settings.default_warehouse,
-			})
+		shipping_lines = order_data.get("shipping_lines", [])
+		shipping_title = shipping_lines[0].get("method_title", "Shipping") if shipping_lines else "Shipping Charges"
 
-		# Add taxes if configured
+		# Resolve ERPNext Shipping Rule from WooCommerce Zone/Method Title or Mappings
+		matched_rule = None
+		if shipping_lines and hasattr(settings, "shipping_rule_mappings") and settings.shipping_rule_mappings:
+			s_line = shipping_lines[0]
+			method_title = (s_line.get("method_title") or "").strip().lower()
+			method_id = (s_line.get("method_id") or "").strip().lower()
+
+			for mapping in settings.shipping_rule_mappings:
+				target_method = (mapping.woo_shipping_method or "").strip().lower()
+				if target_method and (target_method == method_title or target_method == method_id or target_method in method_title):
+					matched_rule = mapping.shipping_rule
+					break
+
+		if not matched_rule and shipping_title and frappe.db.exists("Shipping Rule", shipping_title):
+			matched_rule = shipping_title
+
+		if not matched_rule and getattr(settings, "default_shipping_rule", None):
+			matched_rule = settings.default_shipping_rule
+
+		if matched_rule:
+			so.shipping_rule = matched_rule
+
+		# Add taxes from template if configured
 		if settings.tax_template:
 			so.taxes_and_charges = settings.tax_template
-			# Let ERPNext calculate taxes from template
 			so.set_taxes()
+
+		# Add shipping charges
+		shipping_sync_mode = getattr(settings, "shipping_sync_type", "Line Item")
+
+		if shipping_total > 0:
+			if shipping_sync_mode == "Taxes and Charges Table" or getattr(settings, "shipping_charge_account", None):
+				account_head = getattr(settings, "shipping_charge_account", None)
+				if not account_head and settings.default_company:
+					account_head = frappe.db.get_value(
+						"Account",
+						{"company": settings.default_company, "account_name": ["like", "%Shipping%"], "is_group": 0},
+						"name"
+					)
+
+				if account_head:
+					so.append("taxes", {
+						"charge_type": "Actual",
+						"account_head": account_head,
+						"description": f"Shipping Charges ({shipping_title})",
+						"tax_amount": shipping_total,
+					})
+				elif settings.shipping_item:
+					so.append("items", {
+						"item_code": settings.shipping_item,
+						"item_name": f"Shipping - {shipping_title}",
+						"qty": 1,
+						"rate": shipping_total,
+						"delivery_date": so.delivery_date,
+						"warehouse": settings.default_warehouse,
+					})
+			elif settings.shipping_item:
+				so.append("items", {
+					"item_code": settings.shipping_item,
+					"item_name": f"Shipping - {shipping_title}",
+					"qty": 1,
+					"rate": shipping_total,
+					"delivery_date": so.delivery_date,
+					"warehouse": settings.default_warehouse,
+				})
 
 		# Customer notes
 		customer_note = order_data.get("customer_note", "")
@@ -825,13 +879,19 @@ def _get_item_images(item, woo_item=None, api=None):
 
 
 def _get_woo_category_ids(woo_item, api):
-	"""Extract and sync WooCommerce category IDs for a Woo Item (supports multi-selection)."""
+	"""Extract and sync WooCommerce category IDs for a Woo Item (supports multi-selection and parent-child hierarchy)."""
 	category_ids = []
 	seen_ids = set()
 
 	def add_category_by_name(cat_name):
 		if not cat_name:
 			return
+
+		# Recursively add parent category first to preserve hierarchy
+		parent_cat = frappe.db.get_value("Woo Category", cat_name, "parent_woo_category")
+		if parent_cat:
+			add_category_by_name(parent_cat)
+
 		woo_cat_id = frappe.db.get_value("Woo Category", cat_name, "woo_category_id")
 		if not woo_cat_id:
 			woo_cat_id = _get_or_create_woo_category_id(cat_name, api)
@@ -854,8 +914,14 @@ def _get_woo_category_ids(woo_item, api):
 
 
 def _get_or_create_woo_category_id(cat_name, api):
-	"""Search or create WooCommerce category by name and return its WooCommerce ID."""
+	"""Search or create WooCommerce category by name and return its WooCommerce ID (preserving parent-child link)."""
 	try:
+		if frappe.db.exists("Woo Category", cat_name):
+			from woo_prime.woo_prime.doctype.woo_category.woo_category import push_category_to_woo
+			res = push_category_to_woo(cat_name)
+			if res and isinstance(res, dict) and res.get("id"):
+				return res.get("id")
+
 		response = api.get("products/categories", params={"search": cat_name})
 		if response.status_code == 200:
 			categories = response.json()
