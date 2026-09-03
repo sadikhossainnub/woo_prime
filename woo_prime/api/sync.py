@@ -746,6 +746,8 @@ def _get_item_images(item, woo_item=None, api=None):
 			return
 		seen_paths.add(path)
 
+		is_private = path.startswith("/private/files/") or path.startswith("private/files/")
+
 		# 1. Direct binary upload to WordPress Media REST API (/wp-json/wp/v2/media)
 		if api and not (path.startswith("http://") or path.startswith("https://")):
 			try:
@@ -756,8 +758,22 @@ def _get_item_images(item, woo_item=None, api=None):
 						img_dict["alt"] = caption
 					images.append(img_dict)
 					return
-			except Exception:
-				pass
+			except Exception as e:
+				frappe.log_error(
+					title="WooCommerce Image Upload Failed",
+					message=f"Direct upload failed for {path}: {e}"
+				)
+
+			# If direct upload failed for a private file, do NOT fall back to URL —
+			# WooCommerce cannot access /private/files/ (requires Frappe auth, returns 403).
+			if is_private:
+				frappe.msgprint(
+					f"Could not upload private image <b>{path}</b> to WooCommerce. "
+					"Please move the file to public or re-attach it.",
+					indicator="orange",
+					alert=True,
+				)
+				return
 
 		# 2. Fallback to image URL if direct upload fails or for external URLs
 		if path.startswith("http://") or path.startswith("https://"):

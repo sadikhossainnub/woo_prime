@@ -12,6 +12,7 @@
   "consumer_key",
   "consumer_secret",
   "test_connection_btn",
+  "fetch_categories_btn",
   "webhook_section",
   "webhook_secret",
   "column_break_webhook",
@@ -81,6 +82,11 @@
    "fieldname": "test_connection_btn",
    "fieldtype": "Button",
    "label": "Test Connection"
+  },
+  {
+   "fieldname": "fetch_categories_btn",
+   "fieldtype": "Button",
+   "label": "Fetch Categories from WooCommerce"
   },
   {
    "fieldname": "webhook_section",

@@ -251,8 +251,21 @@ class WooAPI:
 				)
 				if fallback_resp.status_code in (200, 201):
 					return fallback_resp.json()
-		except Exception:
-			pass
+				else:
+					frappe.log_error(
+						title="WordPress Media Upload Failed (rest_route fallback)",
+						message=f"Status {fallback_resp.status_code}: {fallback_resp.text[:500]}"
+					)
+			else:
+				frappe.log_error(
+					title="WordPress Media Upload Failed",
+					message=f"Status {response.status_code} for {filename}: {response.text[:500]}"
+				)
+		except Exception as e:
+			frappe.log_error(
+				title="WordPress Media Upload Exception",
+				message=f"Exception uploading {file_path}: {e}"
+			)
 
 		return None
 

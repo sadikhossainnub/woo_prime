@@ -14,6 +14,11 @@ frappe.ui.form.on("Woo Settings", {
 			frm.fields_dict.test_connection_btn.$input.addClass("btn-primary");
 		}
 
+		// Fetch Categories button styling
+		if (frm.fields_dict.fetch_categories_btn) {
+			frm.fields_dict.fetch_categories_btn.$input.addClass("btn-info");
+		}
+
 		// Download Plugin button styling
 		if (frm.fields_dict.download_plugin_btn) {
 			frm.fields_dict.download_plugin_btn.$input.addClass("btn-success");
@@ -39,6 +44,27 @@ frappe.ui.form.on("Woo Settings", {
 				);
 			}
 		);
+
+		// Add custom button for category fetch
+		frm.add_custom_button(
+			__("Fetch WooCommerce Categories"),
+			function () {
+				frappe.call({
+					method: "woo_prime.woo_prime.doctype.woo_category.woo_category.sync_categories_from_woo",
+					freeze: true,
+					freeze_message: __("Fetching product categories from WooCommerce..."),
+					callback: function (r) {
+						if (r && r.message) {
+							frappe.show_alert({
+								message: __("Synced {0} categories!", [r.message]),
+								indicator: "green",
+							});
+						}
+					},
+				});
+			},
+			__("Sync")
+		);
 	},
 
 	test_connection_btn(frm) {
@@ -55,9 +81,31 @@ frappe.ui.form.on("Woo Settings", {
 		});
 	},
 
+	fetch_categories_btn(frm) {
+		if (!frm.doc.woo_site_url || !frm.doc.consumer_key) {
+			frappe.msgprint(__("Please set up WooCommerce connection first."));
+			return;
+		}
+
+		frappe.call({
+			method: "woo_prime.woo_prime.doctype.woo_category.woo_category.sync_categories_from_woo",
+			freeze: true,
+			freeze_message: __("Fetching product categories from WooCommerce..."),
+			callback: function (r) {
+				if (r && r.message) {
+					frappe.show_alert({
+						message: __("Synced {0} categories!", [r.message]),
+						indicator: "green",
+					});
+				}
+			},
+		});
+	},
+
 	download_plugin_btn(frm) {
 		window.open(
 			"/api/method/woo_prime.woo_prime.doctype.woo_settings.woo_settings.download_wordpress_plugin"
 		);
 	},
 });
+
