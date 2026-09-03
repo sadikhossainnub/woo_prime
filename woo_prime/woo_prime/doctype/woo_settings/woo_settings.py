@@ -98,6 +98,17 @@ class WooSettings(Document):
 				indicator="red",
 			)
 
+	@frappe.whitelist()
+	def run_full_sync(self):
+		"""Run full end-to-end sync."""
+		return run_full_sync()
+
+	@frappe.whitelist()
+	def fetch_missing_order(self, woo_order_id=None):
+		"""Fetch a specific order from WooCommerce by ID."""
+		return fetch_missing_order(woo_order_id)
+
+
 
 @frappe.whitelist()
 def download_wordpress_plugin():
