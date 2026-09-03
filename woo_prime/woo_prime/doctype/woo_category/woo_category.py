@@ -3,7 +3,7 @@
 
 import frappe
 from frappe import _
-from frappe.utils.nestedset import NestedSet
+from frappe.utils.nestedset import NestedSet, rebuild_tree
 
 
 class WooCategory(NestedSet):
@@ -172,7 +172,7 @@ def sync_categories_from_woo():
 		frappe.db.commit()
 
 		# Rebuild the tree to fix lft/rgt values
-		frappe.rebuild_tree("Woo Category", "parent_woo_category")
+		rebuild_tree("Woo Category", "parent_woo_category")
 		frappe.db.commit()
 
 		frappe.msgprint(

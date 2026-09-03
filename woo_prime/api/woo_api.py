@@ -129,10 +129,23 @@ class WooAPI:
 		response = self.post("products", data=product_data)
 		if response.status_code in (200, 201):
 			return response.json()
-		else:
-			frappe.throw(
-				f"WooCommerce API Error ({response.status_code}): {response.text[:500]}"
-			)
+		elif response.status_code == 400:
+			try:
+				err_json = response.json()
+				if err_json.get("code") == "product_invalid_sku":
+					resource_id = err_json.get("data", {}).get("resource_id")
+					if not resource_id and product_data.get("sku"):
+						search_resp = self.get("products", params={"sku": product_data.get("sku")})
+						if search_resp.status_code == 200 and search_resp.json():
+							resource_id = search_resp.json()[0].get("id")
+					if resource_id:
+						return self.update_product(resource_id, product_data)
+			except Exception:
+				pass
+
+		frappe.throw(
+			f"WooCommerce API Error ({response.status_code}): {response.text[:500]}"
+		)
 
 	def update_product(self, product_id, product_data):
 		"""Update an existing product on WooCommerce.
@@ -157,10 +170,19 @@ class WooAPI:
 		response = self.post(f"products/{parent_id}/variations", data=variation_data)
 		if response.status_code in (200, 201):
 			return response.json()
-		else:
-			frappe.throw(
-				f"WooCommerce API Error ({response.status_code}): {response.text[:500]}"
-			)
+		elif response.status_code == 400:
+			try:
+				err_json = response.json()
+				if err_json.get("code") == "product_invalid_sku":
+					resource_id = err_json.get("data", {}).get("resource_id")
+					if resource_id:
+						return self.update_product_variation(parent_id, resource_id, variation_data)
+			except Exception:
+				pass
+
+		frappe.throw(
+			f"WooCommerce API Error ({response.status_code}): {response.text[:500]}"
+		)
 
 	def update_product_variation(self, parent_id, variation_id, variation_data):
 		"""Update a product variation on WooCommerce."""

@@ -655,6 +655,11 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 		result = api.create_product(product_data)
 
 	parent_woo_id = result.get("id")
+	woo_item.woo_product_id = parent_woo_id
+	woo_item.published = 1
+	woo_item.sync_status = "Synced"
+	woo_item.last_synced = now_datetime()
+	woo_item.save(ignore_permissions=True)
 
 	for v_name in variant_item_names:
 		v_item = frappe.get_doc("Item", v_name)

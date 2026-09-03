@@ -21,12 +21,13 @@ class WooItem(Document):
 
 		try:
 			result = publish_item_to_woo(self)
+			self.reload()
 			self.woo_product_id = result.get("id")
 			self.published = 1
 			self.woo_product_url = result.get("permalink", "")
 			self.sync_status = "Synced"
 			self.last_synced = now_datetime()
-			self.save()
+			self.save(ignore_permissions=True)
 
 			# Log success
 			create_sync_log(
@@ -46,9 +47,13 @@ class WooItem(Document):
 				indicator="green",
 			)
 		except Exception as e:
+			try:
+				self.reload()
+			except Exception:
+				pass
 			self.sync_status = "Error"
 			self.last_synced = now_datetime()
-			self.save()
+			self.save(ignore_permissions=True)
 
 			create_sync_log(
 				sync_type="Item",
