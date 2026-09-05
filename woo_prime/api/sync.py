@@ -511,7 +511,10 @@ def _map_order_items(order_data, settings, delivery_date=None):
 
 		# First, try to find in Woo Item by SKU
 		if sku:
-			woo_item = frappe.db.get_value("Woo Item", sku, "item_code")
+			woo_item = (
+				frappe.db.get_value("Woo Item", {"sku": sku}, "item_code")
+				or frappe.db.get_value("Woo Item", sku, "item_code")
+			)
 			if woo_item:
 				item_code = woo_item
 
@@ -717,19 +720,61 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 
 	for v_name in variant_item_names:
 		v_item = frappe.get_doc("Item", v_name)
-
-		child_woo_item_name = frappe.db.get_value("Woo Item", {"item_code": v_name})
-		if child_woo_item_name:
-			child_woo_item = frappe.get_doc("Woo Item", child_woo_item_name)
-		else:
-			child_woo_item = frappe.new_doc("Woo Item")
-			child_woo_item.item_code = v_name
-			child_woo_item.sku = v_item.item_code
-			child_woo_item.insert(ignore_permissions=True)
-
+		child_woo_item = get_or_create_woo_item(v_name, v_item.item_code)
 		_publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings)
 
 	return result
+
+
+def get_or_create_woo_item(item_code, sku=None):
+	"""Get existing Woo Item by item_code, sku, or primary key name, or create a new one safely.
+
+	Prevents IntegrityError (Duplicate entry for PRIMARY key).
+	"""
+	if not sku:
+		sku = frappe.db.get_value("Item", item_code, "item_code") or item_code
+
+	# 1. Lookup by item_code
+	woo_item_name = frappe.db.get_value("Woo Item", {"item_code": item_code}, "name")
+
+	# 2. Lookup by sku field
+	if not woo_item_name and sku:
+		woo_item_name = frappe.db.get_value("Woo Item", {"sku": sku}, "name")
+
+	# 3. Lookup by primary key name (since Woo Item autoname is field:sku)
+	if not woo_item_name and sku and frappe.db.exists("Woo Item", sku):
+		woo_item_name = sku
+
+	if woo_item_name:
+		woo_item = frappe.get_doc("Woo Item", woo_item_name)
+		changed = False
+		if not woo_item.item_code and item_code:
+			woo_item.item_code = item_code
+			changed = True
+		if not woo_item.sku and sku:
+			woo_item.sku = sku
+			changed = True
+		if changed:
+			woo_item.save(ignore_permissions=True)
+		return woo_item
+
+	# Create new Woo Item doc safely
+	woo_item = frappe.new_doc("Woo Item")
+	woo_item.item_code = item_code
+	woo_item.sku = sku or item_code
+	try:
+		woo_item.insert(ignore_permissions=True)
+	except Exception as e:
+		target_name = sku or item_code
+		if frappe.db.exists("Woo Item", target_name):
+			woo_item = frappe.get_doc("Woo Item", target_name)
+			if not woo_item.item_code and item_code:
+				woo_item.item_code = item_code
+				woo_item.save(ignore_permissions=True)
+		else:
+			raise e
+
+	return woo_item
 
 
 def _publish_variant_item_to_woo(woo_item, item, api, settings):
@@ -737,14 +782,7 @@ def _publish_variant_item_to_woo(woo_item, item, api, settings):
 	parent_item_name = item.variant_of
 	parent_item = frappe.get_doc("Item", parent_item_name)
 
-	parent_woo_item_name = frappe.db.get_value("Woo Item", {"item_code": parent_item_name})
-	if parent_woo_item_name:
-		parent_woo_item = frappe.get_doc("Woo Item", parent_woo_item_name)
-	else:
-		parent_woo_item = frappe.new_doc("Woo Item")
-		parent_woo_item.item_code = parent_item_name
-		parent_woo_item.sku = parent_item.item_code
-		parent_woo_item.insert(ignore_permissions=True)
+	parent_woo_item = get_or_create_woo_item(parent_item_name, parent_item.item_code)
 
 	if not parent_woo_item.woo_product_id:
 		parent_res = _publish_template_item_to_woo(parent_woo_item, parent_item, api, settings)

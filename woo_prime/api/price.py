@@ -51,7 +51,10 @@ def calculate_cart_price(cart_data=None, customer_email=None, price_list=None):
 
 			# Map SKU to item_code if item_code is not passed directly
 			if not item_code and sku:
-				woo_item = frappe.db.get_value("Woo Item", sku, "item_code")
+				woo_item = (
+					frappe.db.get_value("Woo Item", {"sku": sku}, "item_code")
+					or frappe.db.get_value("Woo Item", sku, "item_code")
+				)
 				item_code = woo_item or sku
 
 			if not item_code or not frappe.db.exists("Item", item_code):

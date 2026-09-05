@@ -193,10 +193,11 @@ def fetch_items_from_woocommerce():
 			if not sku:
 				sku = f"WC-{woo_id}"
 
-			# Find existing Woo Item by woo_product_id or sku
+			# Find existing Woo Item by woo_product_id, sku field, or primary key name
 			existing_name = (
 				frappe.db.get_value("Woo Item", {"woo_product_id": woo_id})
 				or frappe.db.get_value("Woo Item", {"sku": sku})
+				or (frappe.db.exists("Woo Item", sku) and sku)
 			)
 
 			if existing_name:

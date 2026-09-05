@@ -160,6 +160,9 @@ class WooAPI:
 		response = self.put(f"products/{product_id}", data=product_data)
 		if response.status_code == 200:
 			return response.json()
+		elif response.status_code == 404:
+			# Product ID is no longer valid on WooCommerce, fallback to create
+			return self.create_product(product_data)
 		else:
 			frappe.throw(
 				f"WooCommerce API Error ({response.status_code}): {response.text[:500]}"
@@ -175,6 +178,10 @@ class WooAPI:
 				err_json = response.json()
 				if err_json.get("code") == "product_invalid_sku":
 					resource_id = err_json.get("data", {}).get("resource_id")
+					if not resource_id and variation_data.get("sku"):
+						search_resp = self.get(f"products/{parent_id}/variations", params={"sku": variation_data.get("sku")})
+						if search_resp.status_code == 200 and search_resp.json():
+							resource_id = search_resp.json()[0].get("id")
 					if resource_id:
 						return self.update_product_variation(parent_id, resource_id, variation_data)
 			except Exception:
@@ -189,6 +196,9 @@ class WooAPI:
 		response = self.put(f"products/{parent_id}/variations/{variation_id}", data=variation_data)
 		if response.status_code == 200:
 			return response.json()
+		elif response.status_code == 404:
+			# Variation ID is no longer valid on WooCommerce under parent_id, fallback to create
+			return self.create_product_variation(parent_id, variation_data)
 		else:
 			frappe.throw(
 				f"WooCommerce API Error ({response.status_code}): {response.text[:500]}"
