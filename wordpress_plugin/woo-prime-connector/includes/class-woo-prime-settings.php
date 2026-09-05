@@ -262,10 +262,10 @@ class Woo_Prime_Settings {
 
 		foreach ( $items as $item ) {
 			$sku   = isset( $item['sku'] ) ? trim( $item['sku'] ) : '';
-			$name  = isset( $item['item_name'] ) ? $item['item_name'] : $sku;
+			$name  = isset( $item['item_name'] ) ? html_entity_decode( $item['item_name'], ENT_QUOTES | ENT_HTML5, 'UTF-8' ) : $sku;
 			$price = isset( $item['price'] ) ? floatval( $item['price'] ) : 0;
 			$stock = isset( $item['stock_quantity'] ) ? intval( $item['stock_quantity'] ) : 0;
-			$desc  = isset( $item['description'] ) ? $item['description'] : '';
+			$desc  = isset( $item['description'] ) ? html_entity_decode( $item['description'], ENT_QUOTES | ENT_HTML5, 'UTF-8' ) : '';
 
 			if ( empty( $sku ) ) {
 				continue;

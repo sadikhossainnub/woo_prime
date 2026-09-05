@@ -138,13 +138,14 @@ after_install = "woo_prime.install.after_install"
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
+doc_events = {
+	"Bin": {
+		"on_update": "woo_prime.api.sync.on_bin_update"
+	},
+	"Item Price": {
+		"on_update": "woo_prime.api.sync.on_item_price_update"
+	}
+}
 
 # Scheduled Tasks
 # ---------------

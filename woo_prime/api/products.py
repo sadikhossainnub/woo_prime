@@ -1,6 +1,7 @@
 # Copyright (c) 2026, prime tech bd and contributors
 # For license information, please see license.txt
 
+import html
 import json
 import frappe
 from frappe import _
@@ -78,8 +79,8 @@ def get_items_for_sync(start=0, limit=100, item_group=None, search=None, item_co
 			result.append({
 				"item_code": item.item_code,
 				"sku": item.item_code,
-				"item_name": item.item_name,
-				"description": item.description or "",
+				"item_name": html.unescape(item.item_name or ""),
+				"description": html.unescape(item.description or ""),
 				"item_group": item.item_group,
 				"price": flt(price),
 				"stock_quantity": flt(stock_qty),

@@ -1,6 +1,7 @@
 # Copyright (c) 2026, prime tech bd and contributors
 # For license information, please see license.txt
 
+import html
 import json
 
 import frappe
@@ -502,15 +503,22 @@ def _map_order_items(order_data, settings, delivery_date=None):
 	item_delivery_date = delivery_date or _parse_date(order_data.get("date_created", today()))
 
 	for line in line_items:
-		sku = line.get("sku", "")
+		sku = (line.get("sku") or "").strip()
 		qty = flt(line.get("quantity", 1))
 		rate = flt(line.get("price", 0))
 		item_name_wc = line.get("name", "")
+		prod_id_wc = line.get("variation_id") or line.get("product_id")
 
 		item_code = None
 
-		# First, try to find in Woo Item by SKU
-		if sku:
+		# 1. Try to find in Woo Item by WooCommerce Product ID / Variation ID
+		if prod_id_wc:
+			woo_item = frappe.db.get_value("Woo Item", {"woo_product_id": prod_id_wc}, "item_code")
+			if woo_item:
+				item_code = woo_item
+
+		# 2. Try to find in Woo Item by SKU
+		if not item_code and sku:
 			woo_item = (
 				frappe.db.get_value("Woo Item", {"sku": sku}, "item_code")
 				or frappe.db.get_value("Woo Item", sku, "item_code")
@@ -518,20 +526,24 @@ def _map_order_items(order_data, settings, delivery_date=None):
 			if woo_item:
 				item_code = woo_item
 
-		# Fallback: try to find ERPNext Item directly by SKU as item_code
+		# 3. Fallback: try to find ERPNext Item directly by SKU as item_code
 		if not item_code and sku:
 			if frappe.db.exists("Item", sku):
 				item_code = sku
 
-		# Fallback: try to find by item_name
+		# 4. Fallback: try to find by item_name (both exact and html.unescaped)
 		if not item_code and item_name_wc:
-			item_code = frappe.db.get_value("Item", {"item_name": item_name_wc}, "name")
+			clean_name = html.unescape(item_name_wc)
+			item_code = (
+				frappe.db.get_value("Item", {"item_name": clean_name}, "name")
+				or frappe.db.get_value("Item", {"item_name": item_name_wc}, "name")
+			)
 
 		if not item_code:
 			frappe.log_error(
 				title=f"WooCommerce Item Not Found - SKU: {sku}",
 				message=f"Could not find ERPNext item for WooCommerce line item.\n"
-				f"SKU: {sku}\nName: {item_name_wc}\nOrder ID: {order_data.get('id')}",
+				f"SKU: {sku}\nName: {item_name_wc}\nProduct ID: {prod_id_wc}\nOrder ID: {order_data.get('id')}",
 			)
 			continue
 
@@ -629,19 +641,24 @@ def publish_item_to_woo(woo_item):
 
 def _publish_simple_item_to_woo(woo_item, item, api, settings):
 	"""Publish a simple item to WooCommerce."""
+	import html
 	price = _get_item_price(woo_item.item_code, settings.default_price_list)
+	regular_price = flt(woo_item.regular_price) if getattr(woo_item, "regular_price", None) else flt(price)
+	sale_price = flt(woo_item.sale_price) if getattr(woo_item, "sale_price", None) and flt(woo_item.sale_price) > 0 else None
 	stock_qty = _get_stock_qty(woo_item.item_code, settings.default_warehouse)
 
 	product_data = {
-		"name": item.item_name,
+		"name": html.unescape(item.item_name or ""),
 		"sku": woo_item.sku,
-		"regular_price": str(flt(price)),
-		"description": woo_item.woo_description or item.description or "",
-		"short_description": getattr(woo_item, "woo_short_description", None) or item.description or "",
+		"regular_price": str(flt(regular_price)),
+		"description": html.unescape(woo_item.woo_description or item.description or ""),
+		"short_description": html.unescape(getattr(woo_item, "woo_short_description", None) or item.description or ""),
 		"manage_stock": True,
 		"stock_quantity": int(stock_qty),
 		"status": "publish",
 	}
+	if sale_price is not None:
+		product_data["sale_price"] = str(flt(sale_price))
 
 	category_ids = _get_woo_category_ids(woo_item, api)
 	if category_ids:
@@ -665,6 +682,7 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings):
 
 def _publish_template_item_to_woo(woo_item, item, api, settings):
 	"""Publish an ERPNext Template Item and all its variants as a WooCommerce Variable Product."""
+	import html
 	variant_item_names = frappe.get_all(
 		"Item",
 		filters={"variant_of": item.name, "disabled": 0},
@@ -689,11 +707,11 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 		})
 
 	product_data = {
-		"name": item.item_name,
+		"name": html.unescape(item.item_name or ""),
 		"type": "variable",
 		"sku": woo_item.sku,
-		"description": woo_item.woo_description or item.description or "",
-		"short_description": getattr(woo_item, "woo_short_description", None) or item.description or "",
+		"description": html.unescape(woo_item.woo_description or item.description or ""),
+		"short_description": html.unescape(getattr(woo_item, "woo_short_description", None) or item.description or ""),
 		"status": "publish",
 		"attributes": woo_attributes,
 	}
@@ -797,7 +815,10 @@ def _publish_variant_item_to_woo(woo_item, item, api, settings):
 
 def _publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings):
 	"""Publish a single variation to WooCommerce under parent variable product."""
+	import html
 	price = _get_item_price(v_item.name, settings.default_price_list)
+	regular_price = flt(child_woo_item.regular_price) if getattr(child_woo_item, "regular_price", None) else flt(price)
+	sale_price = flt(child_woo_item.sale_price) if getattr(child_woo_item, "sale_price", None) and flt(child_woo_item.sale_price) > 0 else None
 	stock_qty = _get_stock_qty(v_item.name, settings.default_warehouse)
 
 	var_attributes = []
@@ -809,12 +830,14 @@ def _publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings
 
 	var_data = {
 		"sku": child_woo_item.sku or v_item.item_code,
-		"regular_price": str(flt(price)),
+		"regular_price": str(flt(regular_price)),
 		"manage_stock": True,
 		"stock_quantity": int(stock_qty),
 		"attributes": var_attributes,
-		"description": child_woo_item.woo_description or v_item.description or "",
+		"description": html.unescape(child_woo_item.woo_description or v_item.description or ""),
 	}
+	if sale_price is not None:
+		var_data["sale_price"] = str(flt(sale_price))
 
 	images = _get_item_images(v_item, child_woo_item, api)
 	if images:
@@ -1050,7 +1073,10 @@ def sync_price_to_woo(woo_item):
 	settings = frappe.get_single("Woo Settings")
 
 	price = _get_item_price(woo_item.item_code, settings.default_price_list)
-	api.update_price(woo_item.woo_product_id, price)
+	regular_price = flt(woo_item.regular_price) if getattr(woo_item, "regular_price", None) else flt(price)
+	sale_price = flt(woo_item.sale_price) if getattr(woo_item, "sale_price", None) and flt(woo_item.sale_price) > 0 else None
+
+	api.update_price(woo_item.woo_product_id, regular_price, sale_price=sale_price)
 
 	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
 
@@ -1061,7 +1087,7 @@ def sync_price_to_woo(woo_item):
 		reference_doctype="Woo Item",
 		reference_name=woo_item.name,
 		woo_reference_id=str(woo_item.woo_product_id),
-		response_data=json.dumps({"price": price}),
+		response_data=json.dumps({"regular_price": regular_price, "sale_price": sale_price}),
 	)
 
 
@@ -1210,3 +1236,113 @@ def reconcile_orders():
 			title="WooCommerce Reconciliation Failed",
 			message=frappe.get_traceback(),
 		)
+
+
+# ═══════════════════════════════════════════════════
+# Real-Time Event Hooks (Bin & Item Price)
+# ═══════════════════════════════════════════════════
+
+
+def on_bin_update(doc, method):
+	"""Real-time event hook: Triggered whenever stock level (Bin) changes in ERPNext."""
+	if not doc.item_code:
+		return
+
+	try:
+		settings = frappe.get_single("Woo Settings")
+		if not settings.enabled or not settings.enable_stock_sync:
+			return
+
+		# Check warehouse match if default warehouse configured
+		if settings.default_warehouse and doc.warehouse != settings.default_warehouse:
+			return
+
+		frappe.enqueue(
+			"woo_prime.api.sync.sync_stock_for_item_code",
+			item_code=doc.item_code,
+			enqueue_after_commit=True,
+			at_front=True,
+		)
+	except Exception as e:
+		frappe.log_error(title="Real-Time Bin Hook Exception", message=str(e))
+
+
+def sync_stock_for_item_code(item_code):
+	"""Background worker: Push live updated stock qty for a specific item to WooCommerce."""
+	try:
+		settings = frappe.get_single("Woo Settings")
+		if not settings.enabled or not settings.enable_stock_sync:
+			return
+
+		woo_items = frappe.get_all(
+			"Woo Item",
+			filters={"published": 1, "sync_stock": 1, "woo_product_id": [">", 0]},
+			or_filters=[{"item_code": item_code}, {"sku": item_code}],
+			fields=["name"],
+		)
+
+		for item in woo_items:
+			try:
+				woo_item = frappe.get_doc("Woo Item", item.name)
+				sync_stock_to_woo(woo_item)
+				woo_item.db_set("last_synced", now_datetime())
+				woo_item.db_set("sync_status", "Synced")
+			except Exception:
+				frappe.log_error(f"Real-time stock sync failed for Woo Item: {item.name}")
+				frappe.get_doc("Woo Item", item.name).db_set("sync_status", "Error")
+
+		frappe.db.commit()
+	except Exception as e:
+		frappe.log_error(title=f"Real-Time Stock Sync Failed - {item_code}", message=str(e))
+
+
+def on_item_price_update(doc, method):
+	"""Real-time event hook: Triggered whenever Item Price changes in ERPNext."""
+	if not doc.item_code:
+		return
+
+	try:
+		settings = frappe.get_single("Woo Settings")
+		if not settings.enabled or not settings.enable_price_sync:
+			return
+
+		if settings.default_price_list and doc.price_list != settings.default_price_list:
+			return
+
+		frappe.enqueue(
+			"woo_prime.api.sync.sync_price_for_item_code",
+			item_code=doc.item_code,
+			enqueue_after_commit=True,
+			at_front=True,
+		)
+	except Exception as e:
+		frappe.log_error(title="Real-Time Price Hook Exception", message=str(e))
+
+
+def sync_price_for_item_code(item_code):
+	"""Background worker: Push live updated price for a specific item to WooCommerce."""
+	try:
+		settings = frappe.get_single("Woo Settings")
+		if not settings.enabled or not settings.enable_price_sync:
+			return
+
+		woo_items = frappe.get_all(
+			"Woo Item",
+			filters={"published": 1, "sync_price": 1, "woo_product_id": [">", 0]},
+			or_filters=[{"item_code": item_code}, {"sku": item_code}],
+			fields=["name"],
+		)
+
+		for item in woo_items:
+			try:
+				woo_item = frappe.get_doc("Woo Item", item.name)
+				sync_price_to_woo(woo_item)
+				woo_item.db_set("last_synced", now_datetime())
+				woo_item.db_set("sync_status", "Synced")
+			except Exception:
+				frappe.log_error(f"Real-time price sync failed for Woo Item: {item.name}")
+				frappe.get_doc("Woo Item", item.name).db_set("sync_status", "Error")
+
+		frappe.db.commit()
+	except Exception as e:
+		frappe.log_error(title=f"Real-Time Price Sync Failed - {item_code}", message=str(e))

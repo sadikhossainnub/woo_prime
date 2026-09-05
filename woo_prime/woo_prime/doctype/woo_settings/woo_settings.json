@@ -264,7 +264,7 @@
    "label": "Sync Features & Schedules"
   },
   {
-   "default": "0",
+   "default": "1",
    "fieldname": "enable_stock_sync",
    "fieldtype": "Check",
    "label": "Enable Stock Sync (ERPNext → WooCommerce)"
@@ -282,7 +282,7 @@
    "fieldtype": "Column Break"
   },
   {
-   "default": "0",
+   "default": "1",
    "fieldname": "enable_price_sync",
    "fieldtype": "Check",
    "label": "Enable Price Sync (ERPNext → WooCommerce)"

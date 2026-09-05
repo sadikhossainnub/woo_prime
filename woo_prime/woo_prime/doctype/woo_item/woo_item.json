@@ -10,6 +10,8 @@
   "sku",
   "item_code",
   "item_name",
+  "regular_price",
+  "sale_price",
   "image",
   "column_break_item",
   "woo_product_id",
@@ -58,6 +60,20 @@
    "label": "Item Name",
    "read_only": 1,
    "fetch_from": "item_code.item_name"
+  },
+  {
+   "fieldname": "regular_price",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Regular Price",
+   "description": "Regular selling price on WooCommerce. If empty, auto-fetched from ERPNext Item Price."
+  },
+  {
+   "fieldname": "sale_price",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Sale Price",
+   "description": "Discounted sale price on WooCommerce (optional)."
   },
   {
    "fieldname": "image",

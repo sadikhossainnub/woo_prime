@@ -1,6 +1,7 @@
 # Copyright (c) 2026, prime tech bd and contributors
 # For license information, please see license.txt
 
+import html
 import frappe
 from frappe import _
 from frappe.model.document import Document
@@ -9,10 +10,23 @@ from frappe.utils import now_datetime
 
 class WooItem(Document):
 	def validate(self):
+		from frappe.utils import flt
 		if self.item_code:
 			# Fetch item_name if not set
 			if not self.item_name:
-				self.item_name = frappe.db.get_value("Item", self.item_code, "item_name")
+				raw_name = frappe.db.get_value("Item", self.item_code, "item_name")
+				self.item_name = html.unescape(raw_name) if raw_name else ""
+			elif self.item_name:
+				self.item_name = html.unescape(self.item_name)
+
+			# Auto-fetch regular_price if empty
+			if not self.regular_price:
+				settings = frappe.get_single("Woo Settings")
+				price_list = getattr(settings, "default_price_list", None) or "Standard Selling"
+				from woo_prime.api.sync import _get_item_price
+				price = _get_item_price(self.item_code, price_list)
+				if price:
+					self.regular_price = flt(price)
 
 	@frappe.whitelist()
 	def publish_to_woocommerce(self):
@@ -185,10 +199,10 @@ def fetch_items_from_woocommerce():
 		for prod in products:
 			woo_id = prod.get("id")
 			sku = (prod.get("sku") or "").strip()
-			name = prod.get("name")
+			name = html.unescape(prod.get("name") or "")
 			permalink = prod.get("permalink", "")
-			description = prod.get("description", "")
-			short_description = prod.get("short_description", "")
+			description = html.unescape(prod.get("description", "") or "")
+			short_description = html.unescape(prod.get("short_description", "") or "")
 
 			if not sku:
 				sku = f"WC-{woo_id}"
@@ -211,6 +225,14 @@ def fetch_items_from_woocommerce():
 			woo_item.woo_description = description
 			woo_item.woo_short_description = short_description
 			woo_item.published = 1
+
+			from frappe.utils import flt
+			reg_p = flt(prod.get("regular_price") or 0)
+			sale_p = flt(prod.get("sale_price") or 0)
+			if reg_p > 0:
+				woo_item.regular_price = reg_p
+			if sale_p > 0:
+				woo_item.sale_price = sale_p
 
 			# Auto-link to ERPNext Item by matching SKU / item_code
 			matched_item = (
