@@ -29,6 +29,7 @@ require_once WOO_PRIME_PLUGIN_DIR . 'includes/class-woo-prime-settings.php';
 require_once WOO_PRIME_PLUGIN_DIR . 'includes/class-woo-prime-pricing.php';
 require_once WOO_PRIME_PLUGIN_DIR . 'includes/class-woo-prime-loyalty.php';
 require_once WOO_PRIME_PLUGIN_DIR . 'includes/class-woo-prime-dashboard.php';
+require_once WOO_PRIME_PLUGIN_DIR . 'includes/class-woo-prime-order-sync.php';
 
 /**
  * Initialize Main Plugin Class
@@ -75,6 +76,7 @@ class Woo_Prime_Connector_Main {
 		Woo_Prime_Pricing::init();
 		Woo_Prime_Loyalty::init();
 		Woo_Prime_Dashboard::init();
+		Woo_Prime_Order_Sync::init();
 	}
 
 	public function enqueue_frontend_assets() {

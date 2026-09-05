@@ -262,62 +262,97 @@ def _get_or_create_customer(order_data, settings):
 
 	Matching priority:
 	1. Match by email
-	2. Match by phone
-	3. Create new customer
+	2. Match by phone / mobile
+	3. Match by linked Contact
+	4. Match by Customer Name
+	5. Auto-create new Customer if not found
 
 	Args:
 		order_data: dict — WooCommerce order payload
 		settings: Woo Settings document
 
 	Returns:
-		str: Customer name
+		tuple: (customer_name, billing_address_name, shipping_address_name)
 	"""
 	billing = order_data.get("billing", {})
-	email = billing.get("email", "")
-	phone = billing.get("phone", "")
-	first_name = billing.get("first_name", "")
-	last_name = billing.get("last_name", "")
-	company_name = billing.get("company", "")
+	email = (billing.get("email") or "").strip()
+	phone = (billing.get("phone") or "").strip()
+	first_name = (billing.get("first_name") or "").strip()
+	last_name = (billing.get("last_name") or "").strip()
+	company_name = (billing.get("company") or "").strip()
 
 	full_name = f"{first_name} {last_name}".strip()
 	if not full_name:
-		full_name = email or f"WooCommerce Customer {order_data.get('id', '')}"
+		full_name = email or f"WooCommerce Customer #{order_data.get('id', '')}"
 
 	customer_name = None
 
-	# Try to find existing customer by email
+	# 1. Try to find existing customer by email
 	if email:
-		existing = frappe.db.get_value(
-			"Customer",
-			{"email_id": email},
-			"name"
-		)
+		existing = frappe.db.get_value("Customer", {"email_id": email}, "name")
 		if existing:
 			customer_name = existing
 
-	# Try to find by phone / mobile
+	# 2. Try to find by phone / mobile
 	if not customer_name and phone:
-		existing = frappe.db.get_value(
-			"Customer",
-			{"mobile_no": phone},
-			"name"
+		existing = (
+			frappe.db.get_value("Customer", {"mobile_no": phone}, "name")
+			or frappe.db.get_value("Customer", {"primary_address": ["like", f"%{phone}%"]}, "name")
 		)
 		if existing:
 			customer_name = existing
 
-	if not customer_name:
-		# Auto-create customer if enabled
-		if not settings.auto_create_customer:
-			frappe.throw(
-				_("Customer not found for email: {0}. Auto-create is disabled.").format(email)
+	# 3. Try to find by Contact record
+	if not customer_name and (email or phone):
+		# Find Contact by email or phone, then get linked Customer
+		contact_name = None
+
+		if email:
+			# Check Contact Email child table
+			contact_name = frappe.db.get_value(
+				"Contact Email",
+				{"email_id": email, "parenttype": "Contact"},
+				"parent",
 			)
 
-		# Create new customer
+		if not contact_name and phone:
+			# Check Contact Phone child table
+			contact_name = frappe.db.get_value(
+				"Contact Phone",
+				{"phone": phone, "parenttype": "Contact"},
+				"parent",
+			)
+
+		if contact_name:
+			linked_customer = frappe.db.get_value(
+				"Dynamic Link",
+				{"link_doctype": "Customer", "parenttype": "Contact", "parent": contact_name},
+				"link_name",
+			)
+			if linked_customer:
+				customer_name = linked_customer
+
+	# 4. Try to find by customer_name directly
+	target_title = company_name or full_name
+	if not customer_name and target_title:
+		if frappe.db.exists("Customer", target_title):
+			customer_name = target_title
+
+	# 5. Auto-create new customer if not found
+	if not customer_name:
+		customer_group = getattr(settings, "default_customer_group", None)
+		if not customer_group:
+			customer_group = frappe.db.get_value("Customer Group", {"is_group": 0}, "name") or "All Customer Groups"
+
+		territory = getattr(settings, "default_territory", None)
+		if not territory:
+			territory = frappe.db.get_value("Territory", {"is_group": 0}, "name") or "All Territories"
+
 		customer = frappe.new_doc("Customer")
-		customer.customer_name = company_name or full_name
+		customer.customer_name = target_title
 		customer.customer_type = "Company" if company_name else "Individual"
-		customer.customer_group = settings.default_customer_group
-		customer.territory = settings.default_territory
+		customer.customer_group = customer_group
+		customer.territory = territory
 
 		if email:
 			customer.email_id = email
@@ -326,8 +361,19 @@ def _get_or_create_customer(order_data, settings):
 
 		customer.flags.ignore_permissions = True
 		customer.flags.ignore_mandatory = True
-		customer.insert()
-		customer_name = customer.name
+
+		try:
+			customer.insert()
+			customer_name = customer.name
+		except Exception:
+			# If naming collision occurred, try adding phone/email to distinguish name
+			if frappe.db.exists("Customer", target_title):
+				customer_name = target_title
+			else:
+				distinguisher = phone or email or order_data.get("id", "")
+				customer.customer_name = f"{target_title} ({distinguisher})"
+				customer.insert()
+				customer_name = customer.name
 
 	# Ensure address and contact exist
 	billing_addr, shipping_addr = _get_or_create_address(
@@ -340,7 +386,7 @@ def _get_or_create_customer(order_data, settings):
 	if email or phone:
 		_create_contact(customer_name, first_name, last_name, email, phone)
 
-	# Log customer creation
+	# Log customer creation / sync
 	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
 
 	create_log(
@@ -446,7 +492,7 @@ def _get_or_create_address(customer_name, billing, shipping):
 
 
 def _create_contact(customer_name, first_name, last_name, email, phone):
-	"""Create a contact linked to the customer.
+	"""Create a contact linked to the customer (if one doesn't already exist).
 
 	Args:
 		customer_name: str — ERPNext customer name
@@ -456,6 +502,50 @@ def _create_contact(customer_name, first_name, last_name, email, phone):
 		phone: str
 	"""
 	try:
+		# Check if a contact with this email or phone already exists for this customer
+		existing_contact = None
+
+		if email:
+			contact_email_parent = frappe.db.get_value(
+				"Contact Email",
+				{"email_id": email, "parenttype": "Contact"},
+				"parent",
+			)
+			if contact_email_parent:
+				# Verify this contact is linked to this customer
+				link_exists = frappe.db.exists(
+					"Dynamic Link",
+					{"parent": contact_email_parent, "link_doctype": "Customer", "link_name": customer_name},
+				)
+				if link_exists:
+					existing_contact = contact_email_parent
+
+		if not existing_contact and phone:
+			contact_phone_parent = frappe.db.get_value(
+				"Contact Phone",
+				{"phone": phone, "parenttype": "Contact"},
+				"parent",
+			)
+			if contact_phone_parent:
+				link_exists = frappe.db.exists(
+					"Dynamic Link",
+					{"parent": contact_phone_parent, "link_doctype": "Customer", "link_name": customer_name},
+				)
+				if link_exists:
+					existing_contact = contact_phone_parent
+
+		if existing_contact:
+			return  # Contact already exists for this customer
+
+		# Also check Dynamic Link directly — if any contact is linked to this customer
+		existing_link = frappe.db.get_value(
+			"Dynamic Link",
+			{"link_doctype": "Customer", "link_name": customer_name, "parenttype": "Contact"},
+			"parent",
+		)
+		if existing_link:
+			return  # Customer already has a contact
+
 		contact = frappe.new_doc("Contact")
 		contact.first_name = first_name or customer_name
 		contact.last_name = last_name or ""
