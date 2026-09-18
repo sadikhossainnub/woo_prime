@@ -9,6 +9,17 @@ from requests.auth import HTTPBasicAuth
 import frappe
 
 
+def is_valid_json(response):
+	"""Check if requests.Response contains valid JSON content."""
+	if not response or not response.text or not response.text.strip():
+		return False
+	try:
+		response.json()
+		return True
+	except Exception:
+		return False
+
+
 class WooAPI:
 	"""WooCommerce REST API v3 wrapper."""
 
@@ -81,17 +92,20 @@ class WooAPI:
 			except Exception:
 				pass
 
-		# Fallback 2: If direct wp-json endpoint returned 404, try rest_route fallback
-		if response.status_code == 404 and not self.use_rest_route:
+		# Fallback 2: If direct wp-json endpoint returned 404 or HTTP 200 with non-JSON HTML (e.g. Plain Permalinks), try rest_route fallback
+		if not self.use_rest_route and (response.status_code == 404 or (response.status_code == 200 and not is_valid_json(response))):
 			try:
 				fallback_response = make_call(True, self.use_query_auth)
 				if fallback_response.status_code in (401, 403) and not self.use_query_auth:
 					fallback_response2 = make_call(True, True)
-					if fallback_response2.status_code not in (401, 403, 404):
+					if fallback_response2.status_code not in (401, 403, 404) and is_valid_json(fallback_response2):
 						self.use_query_auth = True
 						self.use_rest_route = True
 						return fallback_response2
-				elif fallback_response.status_code != 404:
+				elif fallback_response.status_code == 200 and is_valid_json(fallback_response):
+					self.use_rest_route = True
+					return fallback_response
+				elif fallback_response.status_code != 404 and is_valid_json(fallback_response):
 					self.use_rest_route = True
 					return fallback_response
 			except Exception:

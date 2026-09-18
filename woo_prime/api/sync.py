@@ -46,7 +46,8 @@ def sync_order(order_data):
 		so = frappe.new_doc("Sales Order")
 		so.customer = customer_name
 		so.order_type = "Shopping Cart"
-		so.sales_type = "Woo-commerce"
+		if settings.sales_type:
+			so.sales_type = settings.sales_type
 		so.company = settings.default_company
 		so.transaction_date = transaction_date
 		so.delivery_date = delivery_date

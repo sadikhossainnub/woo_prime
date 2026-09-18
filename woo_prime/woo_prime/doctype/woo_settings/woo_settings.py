@@ -29,36 +29,65 @@ class WooSettings(Document):
 	@frappe.whitelist()
 	def test_connection(self):
 		"""Test WooCommerce API connection."""
+		import json
 		try:
 			api = get_woo_api()
+
+			# Attempt 1: system_status endpoint
 			response = api.get("system_status")
 			if response.status_code == 200:
-				data = response.json()
-				environment = data.get("environment", {})
-				wc_version = environment.get("version", "Unknown")
-				wp_version = environment.get("wp_version", "Unknown")
-				frappe.msgprint(
-					f"✅ Connection Successful!<br>"
-					f"WooCommerce Version: <b>{wc_version}</b><br>"
-					f"WordPress Version: <b>{wp_version}</b>",
-					title="Connection Test",
-					indicator="green",
-				)
-				return
+				try:
+					data = response.json()
+					if isinstance(data, dict):
+						environment = data.get("environment", {})
+						wc_version = environment.get("version", "Unknown")
+						wp_version = environment.get("wp_version", "Unknown")
+						frappe.msgprint(
+							f"✅ Connection Successful!<br>"
+							f"WooCommerce Version: <b>{wc_version}</b><br>"
+							f"WordPress Version: <b>{wp_version}</b>",
+							title="Connection Test",
+							indicator="green",
+						)
+						return
+				except (ValueError, json.JSONDecodeError):
+					pass
 
-			# Fallback test with products endpoint
+			# Attempt 2: Fallback test with products endpoint
 			prod_response = api.get("products", params={"per_page": 1})
 			if prod_response.status_code == 200:
-				frappe.msgprint(
-					"✅ Connection Successful!<br>"
-					"Successfully connected to WooCommerce REST API (Products endpoint).",
-					title="Connection Test",
-					indicator="green",
+				try:
+					prod_data = prod_response.json()
+					if isinstance(prod_data, list):
+						frappe.msgprint(
+							"✅ Connection Successful!<br>"
+							"Successfully connected to WooCommerce REST API (Products endpoint).",
+							title="Connection Test",
+							indicator="green",
+						)
+						return
+				except (ValueError, json.JSONDecodeError):
+					pass
+
+			resp_text = (response.text or (prod_response.text if 'prod_response' in locals() else "") or "").strip()
+
+			# If HTTP 200 returned HTML or non-JSON body
+			if response.status_code == 200 or ('prod_response' in locals() and prod_response.status_code == 200):
+				escaped_preview = frappe.utils.escape_html(resp_text[:300]) if resp_text else "Empty response body"
+				msg = (
+					"❌ Connection Failed!<br>"
+					"The WooCommerce site returned <b>HTTP 200 OK</b>, but the response was not valid JSON.<br><br>"
+					"<b>Troubleshooting Non-JSON / HTML Response:</b><br>"
+					"1. <b>WordPress Permalinks:</b> Go to WP Admin → Settings → Permalinks and change structure from <i>'Plain'</i> to <i>'Post name'</i>.<br>"
+					"2. <b>WooCommerce Plugin:</b> Verify WooCommerce plugin is installed and activated.<br>"
+					"3. <b>Site URL:</b> Ensure <i>Woo Site URL</i> (e.g. <code>http://demo.ptb18.xyz</code>) is correct and does not redirect to a login page.<br>"
+					"4. <b>Security/Cache Plugins:</b> Disable security, caching plugins, or Cloudflare rules returning HTML pages instead of REST API JSON.<br><br>"
+					f"<b>Response Preview:</b> <code>{escaped_preview}</code>"
 				)
+				frappe.msgprint(msg, title="Connection Test", indicator="red")
 				return
 
 			msg = f"❌ Connection Failed!<br>Status Code: {response.status_code}<br>"
-			resp_text = response.text or ""
 			if "cloudflare" in resp_text.lower() or "attention required" in resp_text.lower():
 				msg += (
 					"<br><b>Troubleshooting Cloudflare Block (403 Forbidden):</b><br>"
@@ -85,7 +114,7 @@ class WooSettings(Document):
 					"4. <b>Apache Authorization Header:</b> If your web server strips HTTP Authorization headers, add the following to your WordPress <code>.htaccess</code> file:<br>"
 					"<code>SetEnvIf Authorization \"(.*)\" HTTP_AUTHORIZATION=$1</code> or <code>CGIPassAuth On</code><br><br>"
 				)
-			msg += f"Response: {resp_text[:500]}"
+			msg += f"Response: {frappe.utils.escape_html(resp_text[:500])}"
 			frappe.msgprint(
 				msg,
 				title="Connection Test",

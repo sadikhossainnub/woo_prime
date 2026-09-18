@@ -36,6 +36,7 @@
   "default_shipping_rule",
   "shipping_rule_mappings",
   "column_break_order",
+  "sales_type",
   "auto_create_customer",
   "auto_submit_order",
   "order_email_notification",
@@ -234,6 +235,13 @@
    "fieldtype": "Column Break"
   },
   {
+   "fieldname": "sales_type",
+   "fieldtype": "Select",
+   "label": "Sales Type",
+   "options": "\nInbound\nOutbound\nWebsite\nAds",
+   "description": "Sales Type to set on Sales Orders created from WooCommerce orders"
+  },
+  {
    "default": "1",
    "fieldname": "auto_create_customer",
    "fieldtype": "Check",
@@ -306,7 +314,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-09-01 12:00:00.000000",
+ "modified": "2026-09-18 22:58:00.000000",
  "modified_by": "Administrator",
  "module": "Woo Prime",
  "name": "Woo Settings",
