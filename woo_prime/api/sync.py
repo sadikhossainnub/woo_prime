@@ -766,7 +766,20 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings):
 	if woo_item.woo_product_id:
 		result = api.update_product(woo_item.woo_product_id, product_data)
 	else:
-		result = api.create_product(product_data)
+		existing_id = None
+		if product_data.get("sku"):
+			try:
+				search_resp = api.get("products", params={"sku": product_data.get("sku")})
+				if search_resp.status_code == 200 and search_resp.json():
+					existing_id = search_resp.json()[0].get("id")
+			except Exception:
+				pass
+
+		if existing_id:
+			woo_item.woo_product_id = existing_id
+			result = api.update_product(existing_id, product_data)
+		else:
+			result = api.create_product(product_data)
 
 	return result
 
@@ -818,7 +831,21 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 	if woo_item.woo_product_id:
 		result = api.update_product(woo_item.woo_product_id, product_data)
 	else:
-		result = api.create_product(product_data)
+		# Check WooCommerce by SKU first to prevent creating duplicate products
+		existing_id = None
+		if product_data.get("sku"):
+			try:
+				search_resp = api.get("products", params={"sku": product_data.get("sku")})
+				if search_resp.status_code == 200 and search_resp.json():
+					existing_id = search_resp.json()[0].get("id")
+			except Exception:
+				pass
+
+		if existing_id:
+			woo_item.woo_product_id = existing_id
+			result = api.update_product(existing_id, product_data)
+		else:
+			result = api.create_product(product_data)
 
 	parent_woo_id = result.get("id")
 	woo_item.woo_product_id = parent_woo_id
