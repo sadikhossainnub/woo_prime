@@ -260,17 +260,8 @@ fixtures = [
 		"filters": [
 			["name", "in", [
 				"Sales Order-woo_order_id",
-				"Sales Order-sales_type",
 				"Sales Order-woo_order_status",
 				"Sales Order-woo_site",
-			]]
-		]
-	},
-	{
-		"dt": "Property Setter",
-		"filters": [
-			["name", "in", [
-				"Sales Order-order_type-options",
 			]]
 		]
 	}
