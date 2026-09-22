@@ -13,6 +13,7 @@ frappe.ui.form.on("Woo Item", {
 						doc: frm.doc,
 						freeze: true,
 						freeze_message: __("Publishing to WooCommerce..."),
+						timeout: 300,
 						callback: function (r) {
 							frm.reload_doc();
 						},
@@ -31,6 +32,7 @@ frappe.ui.form.on("Woo Item", {
 							doc: frm.doc,
 							freeze: true,
 							freeze_message: __("Syncing Stock..."),
+							timeout: 300,
 							callback: function (r) {
 								frm.reload_doc();
 							},
@@ -47,6 +49,7 @@ frappe.ui.form.on("Woo Item", {
 							doc: frm.doc,
 							freeze: true,
 							freeze_message: __("Syncing Price..."),
+							timeout: 300,
 							callback: function (r) {
 								frm.reload_doc();
 							},

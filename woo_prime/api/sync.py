@@ -1076,16 +1076,17 @@ def _get_item_images(item, woo_item=None, api=None):
 
 		is_private = path.startswith("/private/files/") or path.startswith("private/files/")
 
-		# 1. Direct binary upload to WordPress Media REST API (/wp-json/wp/v2/media)
-		if api and not (path.startswith("http://") or path.startswith("https://")):
-			cached_id = _get_cached_wp_media_id(path)
-			if cached_id:
-				img_dict = {"id": int(cached_id)}
-				if caption:
-					img_dict["alt"] = caption
-				images.append(img_dict)
-				return
+		# 1. Check if WordPress Media ID is cached
+		cached_id = _get_cached_wp_media_id(path)
+		if cached_id:
+			img_dict = {"id": int(cached_id)}
+			if caption:
+				img_dict["alt"] = caption
+			images.append(img_dict)
+			return
 
+		# 2. For private files, direct binary upload to WordPress Media REST API is required
+		if is_private and api:
 			try:
 				uploaded = api.upload_media(path)
 				if uploaded and uploaded.get("id"):
@@ -1099,21 +1100,18 @@ def _get_item_images(item, woo_item=None, api=None):
 			except Exception as e:
 				frappe.log_error(
 					title="WooCommerce Image Upload Failed",
-					message=f"Direct upload failed for {path}: {e}"
+					message=f"Direct upload failed for private file {path}: {e}"
 				)
 
-			# If direct upload failed for a private file, do NOT fall back to URL —
-			# WooCommerce cannot access /private/files/ (requires Frappe auth, returns 403).
-			if is_private:
-				frappe.msgprint(
-					f"Could not upload private image <b>{path}</b> to WooCommerce. "
-					"Please move the file to public or re-attach it.",
-					indicator="orange",
-					alert=True,
-				)
-				return
+			frappe.msgprint(
+				f"Could not upload private image <b>{path}</b> to WooCommerce. "
+				"Please move the file to public files or re-attach it.",
+				indicator="orange",
+				alert=True,
+			)
+			return
 
-		# 2. Fallback to image URL if direct upload fails or for external URLs
+		# 3. For public files (or as fallback), send public URL payload to WooCommerce (WooCommerce fetches image natively)
 		if path.startswith("http://") or path.startswith("https://"):
 			url = path
 		else:
