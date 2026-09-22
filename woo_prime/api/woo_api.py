@@ -39,6 +39,7 @@ class WooAPI:
 		self.timeout = 30
 		self.use_rest_route = False
 		self.use_query_auth = False
+		self.session = requests.Session()
 
 	def _request(self, method, endpoint, data=None, params=None):
 		"""Make an authenticated request to WooCommerce API."""
@@ -63,7 +64,7 @@ class WooAPI:
 			else:
 				url = f"{self.base_url}/{endpoint}"
 
-			return requests.request(
+			return self.session.request(
 				method=method,
 				url=url,
 				auth=auth,
@@ -218,6 +219,24 @@ class WooAPI:
 				f"WooCommerce API Error ({response.status_code}): {response.text[:500]}"
 			)
 
+	def batch_product_variations(self, parent_id, batch_data):
+		"""Batch create/update product variations on WooCommerce.
+
+		Args:
+			parent_id: Parent WooCommerce product ID
+			batch_data: dict with "create" list and/or "update" list of variation dicts
+
+		Returns:
+			dict: WooCommerce batch response containing "create" and "update" lists of results
+		"""
+		response = self.post(f"products/{parent_id}/variations/batch", data=batch_data)
+		if response.status_code in (200, 201):
+			return response.json()
+		else:
+			frappe.throw(
+				f"WooCommerce API Batch Variations Error ({response.status_code}): {response.text[:500]}"
+			)
+
 	def upload_media(self, file_path, filename=None):
 		"""Directly upload an image file binary to WordPress Media REST API (/wp-json/wp/v2/media).
 
@@ -272,7 +291,7 @@ class WooAPI:
 				req_params["consumer_secret"] = self.consumer_secret
 				auth = None
 
-			response = requests.post(
+			response = self.session.post(
 				url=url,
 				auth=auth,
 				headers=headers,
@@ -287,7 +306,7 @@ class WooAPI:
 			elif response.status_code == 404:
 				fallback_params = dict(req_params)
 				fallback_params["rest_route"] = "/wp/v2/media"
-				fallback_resp = requests.post(
+				fallback_resp = self.session.post(
 					url=self.site_url,
 					auth=auth,
 					headers=headers,

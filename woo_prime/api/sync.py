@@ -785,7 +785,7 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings):
 
 
 def _publish_template_item_to_woo(woo_item, item, api, settings):
-	"""Publish an ERPNext Template Item and all its variants as a WooCommerce Variable Product."""
+	"""Publish an ERPNext Template Item and all its variants as a WooCommerce Variable Product using batch API."""
 	import html
 	variant_item_names = frappe.get_all(
 		"Item",
@@ -794,8 +794,10 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 	)
 
 	attributes_dict = {}
+	variant_docs = {}
 	for v_name in variant_item_names:
 		v_item = frappe.get_doc("Item", v_name)
+		variant_docs[v_name] = v_item
 		for attr in v_item.attributes:
 			if attr.attribute not in attributes_dict:
 				attributes_dict[attr.attribute] = set()
@@ -854,10 +856,72 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 	woo_item.last_synced = now_datetime()
 	woo_item.save(ignore_permissions=True)
 
-	for v_name in variant_item_names:
-		v_item = frappe.get_doc("Item", v_name)
-		child_woo_item = get_or_create_woo_item(v_name, v_item.item_code)
-		_publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings)
+	# --- BATCH VARIATIONS PUBLISH ---
+	if variant_item_names:
+		create_list = []
+		update_list = []
+		meta_list = []
+
+		for v_name in variant_item_names:
+			v_item = variant_docs[v_name]
+			child_woo_item = get_or_create_woo_item(v_name, v_item.item_code)
+			var_payload = _prepare_variation_payload(child_woo_item, v_item, api, settings)
+
+			if child_woo_item.woo_product_id:
+				var_payload["id"] = int(child_woo_item.woo_product_id)
+				update_list.append(var_payload)
+			else:
+				create_list.append(var_payload)
+
+			meta_list.append({
+				"child_woo_item": child_woo_item,
+				"sku": var_payload.get("sku"),
+				"v_name": v_name
+			})
+
+		batch_payload = {}
+		if create_list:
+			batch_payload["create"] = create_list
+		if update_list:
+			batch_payload["update"] = update_list
+
+		if batch_payload:
+			try:
+				batch_res = api.batch_product_variations(parent_woo_id, batch_payload)
+
+				# Map results back to child_woo_item documents
+				res_by_id = {}
+				res_by_sku = {}
+
+				for r in batch_res.get("create", []) + batch_res.get("update", []):
+					if isinstance(r, dict):
+						if r.get("id"):
+							res_by_id[r.get("id")] = r
+						if r.get("sku"):
+							res_by_sku[r.get("sku")] = r
+
+				for meta in meta_list:
+					child_woo_item = meta["child_woo_item"]
+					sku = meta["sku"]
+
+					r_data = None
+					if child_woo_item.woo_product_id and int(child_woo_item.woo_product_id) in res_by_id:
+						r_data = res_by_id[int(child_woo_item.woo_product_id)]
+					elif sku and sku in res_by_sku:
+						r_data = res_by_sku[sku]
+
+					if r_data:
+						child_woo_item.woo_product_id = r_data.get("id")
+						child_woo_item.published = 1
+						child_woo_item.sync_status = "Synced"
+						child_woo_item.last_synced = now_datetime()
+						child_woo_item.save(ignore_permissions=True)
+			except Exception as e:
+				frappe.log_error(f"Batch variations sync failed for template {item.name}: {e}")
+				# Fallback to individual sync if batch fails
+				for meta in meta_list:
+					v_item = variant_docs[meta["v_name"]]
+					_publish_variation_data(parent_woo_id, meta["child_woo_item"], v_item, api, settings)
 
 	return result
 
@@ -931,8 +995,8 @@ def _publish_variant_item_to_woo(woo_item, item, api, settings):
 	return _publish_variation_data(parent_woo_item.woo_product_id, woo_item, item, api, settings)
 
 
-def _publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings):
-	"""Publish a single variation to WooCommerce under parent variable product."""
+def _prepare_variation_payload(child_woo_item, v_item, api, settings):
+	"""Prepare variation payload dictionary for WooCommerce."""
 	import html
 	price = _get_item_price(v_item.name, settings.default_price_list)
 	regular_price = flt(child_woo_item.regular_price) if getattr(child_woo_item, "regular_price", None) else flt(price)
@@ -961,6 +1025,13 @@ def _publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings
 	if images:
 		var_data["image"] = images[0]
 
+	return var_data
+
+
+def _publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings):
+	"""Publish a single variation to WooCommerce under parent variable product."""
+	var_data = _prepare_variation_payload(child_woo_item, v_item, api, settings)
+
 	if child_woo_item.woo_product_id:
 		res = api.update_product_variation(parent_woo_id, child_woo_item.woo_product_id, var_data)
 	else:
@@ -974,8 +1045,27 @@ def _publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings
 	return res
 
 
+def _get_cached_wp_media_id(path):
+	"""Check if an image file has already been uploaded to WordPress Media library."""
+	if not path:
+		return None
+	cache_key = f"woo_wp_media_id:{path}"
+	cached_id = frappe.cache().get_value(cache_key)
+	if cached_id:
+		return cached_id
+	return None
+
+
+def _cache_wp_media_id(path, media_id):
+	"""Cache uploaded WordPress media ID for a file path."""
+	if not path or not media_id:
+		return
+	cache_key = f"woo_wp_media_id:{path}"
+	frappe.cache().set_value(cache_key, media_id)
+
+
 def _get_item_images(item, woo_item=None, api=None):
-	"""Get image payload for WooCommerce (attempts direct media upload to WordPress API first)."""
+	"""Get image payload for WooCommerce (attempts direct media upload to WordPress API first, with caching)."""
 	images = []
 	seen_paths = set()
 
@@ -988,10 +1078,20 @@ def _get_item_images(item, woo_item=None, api=None):
 
 		# 1. Direct binary upload to WordPress Media REST API (/wp-json/wp/v2/media)
 		if api and not (path.startswith("http://") or path.startswith("https://")):
+			cached_id = _get_cached_wp_media_id(path)
+			if cached_id:
+				img_dict = {"id": int(cached_id)}
+				if caption:
+					img_dict["alt"] = caption
+				images.append(img_dict)
+				return
+
 			try:
 				uploaded = api.upload_media(path)
 				if uploaded and uploaded.get("id"):
-					img_dict = {"id": uploaded.get("id")}
+					media_id = uploaded.get("id")
+					_cache_wp_media_id(path, media_id)
+					img_dict = {"id": media_id}
 					if caption:
 						img_dict["alt"] = caption
 					images.append(img_dict)
@@ -1057,6 +1157,9 @@ def _get_item_images(item, woo_item=None, api=None):
 	return images
 
 
+_CAT_CACHE = {}
+
+
 def _get_woo_category_ids(woo_item, api):
 	"""Extract and sync WooCommerce category IDs for a Woo Item (supports multi-selection and parent-child hierarchy)."""
 	category_ids = []
@@ -1094,26 +1197,43 @@ def _get_woo_category_ids(woo_item, api):
 
 def _get_or_create_woo_category_id(cat_name, api):
 	"""Search or create WooCommerce category by name and return its WooCommerce ID (preserving parent-child link)."""
+	if not cat_name:
+		return None
+
+	cat_key = cat_name.strip().lower()
+	if cat_key in _CAT_CACHE:
+		return _CAT_CACHE[cat_key]
+
 	try:
 		if frappe.db.exists("Woo Category", cat_name):
+			woo_cat_id = frappe.db.get_value("Woo Category", cat_name, "woo_category_id")
+			if woo_cat_id:
+				_CAT_CACHE[cat_key] = int(woo_cat_id)
+				return int(woo_cat_id)
+
 			from woo_prime.woo_prime.doctype.woo_category.woo_category import push_category_to_woo
 			res = push_category_to_woo(cat_name)
 			if res and isinstance(res, dict) and res.get("id"):
-				return res.get("id")
+				cid = int(res.get("id"))
+				_CAT_CACHE[cat_key] = cid
+				return cid
 
 		response = api.get("products/categories", params={"search": cat_name})
 		if response.status_code == 200:
 			categories = response.json()
 			for cat in categories:
-				if cat.get("name", "").strip().lower() == cat_name.strip().lower():
-					_save_woo_category_loc(cat_name, cat.get("id"), cat.get("slug"))
-					return cat.get("id")
+				if cat.get("name", "").strip().lower() == cat_key:
+					cid = int(cat.get("id"))
+					_save_woo_category_loc(cat_name, cid, cat.get("slug"))
+					_CAT_CACHE[cat_key] = cid
+					return cid
 
 		create_resp = api.post("products/categories", data={"name": cat_name})
 		if create_resp.status_code in (200, 201):
 			new_cat = create_resp.json()
-			cat_id = new_cat.get("id")
+			cat_id = int(new_cat.get("id"))
 			_save_woo_category_loc(cat_name, cat_id, new_cat.get("slug"))
+			_CAT_CACHE[cat_key] = cat_id
 			return cat_id
 	except Exception:
 		pass

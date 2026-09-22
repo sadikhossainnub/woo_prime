@@ -172,7 +172,7 @@ def sync_categories_from_woo():
 		frappe.db.commit()
 
 		# Rebuild the tree to fix lft/rgt values
-		rebuild_tree("Woo Category", "parent_woo_category")
+		rebuild_tree("Woo Category")
 		frappe.db.commit()
 
 		frappe.msgprint(
