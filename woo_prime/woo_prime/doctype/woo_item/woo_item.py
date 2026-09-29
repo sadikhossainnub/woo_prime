@@ -202,7 +202,11 @@ def fetch_items_from_woocommerce(auto_create_missing=True):
 	while True:
 		response = api.get("products", params={"per_page": 100, "page": page})
 		if response.status_code != 200:
-			frappe.throw(_("Failed to fetch products from WooCommerce: {0}").format(response.text[:300]))
+			error_details = (response.text or "").strip()[:300]
+			if not error_details:
+				reason = getattr(response, "reason", "No details returned")
+				error_details = f"HTTP Status {response.status_code} ({reason})"
+			frappe.throw(_("Failed to fetch products from WooCommerce: {0}").format(error_details))
 
 		products = response.json()
 		if not products:

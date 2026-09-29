@@ -7,6 +7,7 @@ import requests
 from requests.auth import HTTPBasicAuth
 
 import frappe
+from frappe import _
 
 
 def is_valid_json(response):
@@ -74,8 +75,14 @@ class WooAPI:
 				timeout=self.timeout,
 			)
 
-		# Initial request
-		response = make_call(self.use_rest_route, self.use_query_auth)
+		# Initial request with exception handling
+		try:
+			response = make_call(self.use_rest_route, self.use_query_auth)
+		except requests.exceptions.RequestException as req_err:
+			frappe.throw(
+				_("Unable to connect to WooCommerce site at '{0}'. Error: {1}").format(self.site_url, str(req_err)),
+				title=_("WooCommerce Connection Error"),
+			)
 
 		# Fallback 1: If HTTP Basic Auth fails with 401/403 (e.g. Apache strips Authorization header), try Query Param Auth
 		if response.status_code in (401, 403) and not self.use_query_auth:
