@@ -34,6 +34,7 @@ def create_custom_fields():
 			"no_copy": 1,
 			"print_hide": 1,
 			"in_standard_filter": 1,
+			"unique": 1,
 		},
 		{
 			"fieldname": "woo_order_status",

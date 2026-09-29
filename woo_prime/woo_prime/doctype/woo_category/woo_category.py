@@ -123,21 +123,18 @@ def sync_categories_from_woo():
 		# Map: WooCommerce category ID → ERPNext Woo Category name
 		woo_id_to_name = {}
 
-		# --- Pass 2: Create / Update categories in ERPNext (parents first) ---
-		# Sort so that root categories (parent=0) are created before children
-		sorted_categories = sorted(all_categories, key=lambda c: (c.get("parent") or 0))
-
-		for cat_data in sorted_categories:
+		# --- Pass 2A: Create/Update basic category records & set is_group ---
+		# Setting is_group = 1 on parent categories first prevents Frappe's
+		# NestedSet validation from throwing "cannot be a leaf node" errors.
+		for cat_data in all_categories:
 			cat_id = cat_data.get("id")
 			cat_name = cat_data.get("name")
 			slug = cat_data.get("slug")
 			description = cat_data.get("description", "")
-			parent_woo_id = cat_data.get("parent")
 
 			if not cat_name:
 				continue
 
-			# Find by woo_category_id first, then by category_name
 			existing_name = (
 				frappe.db.get_value("Woo Category", {"woo_category_id": cat_id})
 				or frappe.db.get_value("Woo Category", {"category_name": cat_name})
@@ -154,11 +151,40 @@ def sync_categories_from_woo():
 			cat_doc.description = description
 			cat_doc.is_group = 1 if cat_id in parent_ids else 0
 
-			# Set parent category
+			cat_doc.flags.ignore_mandatory = True
+			cat_doc.save(ignore_permissions=True)
+			woo_id_to_name[cat_id] = cat_doc.name
+
+		frappe.db.commit()
+
+		# --- Pass 2B: Topologically sort by tree depth & link parent categories ---
+		parent_map = {cat.get("id"): (cat.get("parent") or 0) for cat in all_categories}
+
+		def get_depth(cat_id):
+			depth = 0
+			curr = cat_id
+			visited = set()
+			while curr in parent_map and parent_map[curr] != 0:
+				if curr in visited:
+					break
+				visited.add(curr)
+				curr = parent_map[curr]
+				depth += 1
+			return depth
+
+		sorted_categories = sorted(all_categories, key=lambda c: get_depth(c.get("id")))
+
+		for cat_data in sorted_categories:
+			cat_id = cat_data.get("id")
+			cat_name = woo_id_to_name.get(cat_id)
+			if not cat_name:
+				continue
+
+			parent_woo_id = cat_data.get("parent")
+			cat_doc = frappe.get_doc("Woo Category", cat_name)
+
 			if parent_woo_id and parent_woo_id != 0:
-				parent_name = woo_id_to_name.get(parent_woo_id)
-				if not parent_name:
-					parent_name = frappe.db.get_value("Woo Category", {"woo_category_id": parent_woo_id})
+				parent_name = woo_id_to_name.get(parent_woo_id) or frappe.db.get_value("Woo Category", {"woo_category_id": parent_woo_id})
 				if parent_name:
 					cat_doc.parent_woo_category = parent_name
 			else:
@@ -166,8 +192,6 @@ def sync_categories_from_woo():
 
 			cat_doc.save(ignore_permissions=True)
 			total_synced += 1
-
-			woo_id_to_name[cat_id] = cat_doc.name
 
 		frappe.db.commit()
 
@@ -224,6 +248,11 @@ def add_node():
 	cat.category_name = category_name
 
 	if not is_root or is_root == "false":
+		if parent:
+			parent_doc = frappe.get_doc("Woo Category", parent)
+			if not parent_doc.is_group:
+				parent_doc.is_group = 1
+				parent_doc.save(ignore_permissions=True)
 		cat.parent_woo_category = parent
 
 	cat.is_group = 1 if args.get("is_group") else 0

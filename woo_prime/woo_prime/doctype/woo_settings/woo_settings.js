@@ -19,6 +19,11 @@ frappe.ui.form.on("Woo Settings", {
 			frm.fields_dict.fetch_categories_btn.$input.addClass("btn-info");
 		}
 
+		// Fetch Items button styling
+		if (frm.fields_dict.fetch_items_btn) {
+			frm.fields_dict.fetch_items_btn.$input.addClass("btn-warning");
+		}
+
 		// Download Plugin button styling
 		if (frm.fields_dict.download_plugin_btn) {
 			frm.fields_dict.download_plugin_btn.$input.addClass("btn-success");
@@ -60,6 +65,44 @@ frappe.ui.form.on("Woo Settings", {
 								indicator: "green",
 							});
 						}
+					},
+				});
+			},
+			__("Sync")
+		);
+
+		// Add custom button for items fetch
+		frm.add_custom_button(
+			__("Fetch WooCommerce Items"),
+			function () {
+				frappe.call({
+					method: "woo_prime.woo_prime.doctype.woo_item.woo_item.fetch_items_from_woocommerce",
+					args: { auto_create_missing: true },
+					freeze: true,
+					freeze_message: __("Fetching products from WooCommerce & auto-linking to Item Master..."),
+					callback: function (r) {
+						if (r && r.message) {
+							frappe.show_alert({
+								message: __("Fetched {0} products (Linked: {1}, Created: {2})", [r.message.fetched, r.message.linked, r.message.created || 0]),
+								indicator: "green",
+							});
+						}
+					},
+				});
+			},
+			__("Sync")
+		);
+		// Add custom button for orders fetch
+		frm.add_custom_button(
+			__("Fetch WooCommerce Orders"),
+			function () {
+				frappe.call({
+					method: "woo_prime.api.sync.auto_sync_orders",
+					args: { force: true },
+					freeze: true,
+					freeze_message: __("Fetching orders from WooCommerce & creating Sales Orders..."),
+					callback: function (r) {
+						frm.reload_doc();
 					},
 				});
 			},
@@ -151,6 +194,28 @@ frappe.ui.form.on("Woo Settings", {
 				if (r && r.message) {
 					frappe.show_alert({
 						message: __("Synced {0} categories!", [r.message]),
+						indicator: "green",
+					});
+				}
+			},
+		});
+	},
+
+	fetch_items_btn(frm) {
+		if (!frm.doc.woo_site_url || !frm.doc.consumer_key) {
+			frappe.msgprint(__("Please set up WooCommerce connection first."));
+			return;
+		}
+
+		frappe.call({
+			method: "woo_prime.woo_prime.doctype.woo_item.woo_item.fetch_items_from_woocommerce",
+			args: { auto_create_missing: true },
+			freeze: true,
+			freeze_message: __("Fetching products from WooCommerce & auto-linking to Item Master..."),
+			callback: function (r) {
+				if (r && r.message) {
+					frappe.show_alert({
+						message: __("Fetched {0} products (Linked: {1}, Created: {2})", [r.message.fetched, r.message.linked, r.message.created || 0]),
 						indicator: "green",
 					});
 				}

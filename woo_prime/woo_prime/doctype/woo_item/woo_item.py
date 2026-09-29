@@ -178,14 +178,26 @@ def bulk_publish(items):
 
 
 @frappe.whitelist()
-def fetch_items_from_woocommerce():
-	"""Fetch products from WooCommerce, create/update Woo Item records, and auto-link to ERPNext Items by SKU."""
+def fetch_items_from_woocommerce(auto_create_missing=True):
+	"""Fetch products from WooCommerce, create/update Woo Item records, and auto-link to ERPNext Items by SKU.
+	
+	If an ERPNext Item Master record does not exist for a fetched product, it will be automatically created.
+	"""
 	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
+
+	if isinstance(auto_create_missing, str):
+		auto_create_missing = frappe.parse_json(auto_create_missing) if auto_create_missing.startswith("{") else (auto_create_missing.lower() in ("true", "1"))
+
+	settings = frappe.get_single("Woo Settings")
+	default_item_group = getattr(settings, "default_item_group", None)
+	if not default_item_group:
+		default_item_group = frappe.db.get_value("Item Group", {"is_group": 0}, "name") or "All Item Groups"
 
 	api = get_woo_api()
 	page = 1
 	total_fetched = 0
 	auto_linked = 0
+	created_erpnext_items = 0
 
 	while True:
 		response = api.get("products", params={"per_page": 100, "page": page})
@@ -234,18 +246,39 @@ def fetch_items_from_woocommerce():
 			if sale_p > 0:
 				woo_item.sale_price = sale_p
 
-			# Auto-link to ERPNext Item by matching SKU / item_code
+			# Auto-link to ERPNext Item by matching SKU / item_code / name
 			matched_item = (
 				frappe.db.get_value("Item", {"item_code": sku}, "name")
 				or frappe.db.get_value("Item", {"name": sku}, "name")
+				or frappe.db.get_value("Item", {"item_name": name}, "name")
 			)
 
 			if matched_item:
 				woo_item.item_code = matched_item
 				woo_item.sync_status = "Synced"
 				auto_linked += 1
-			elif not woo_item.item_code:
-				woo_item.sync_status = "Not Synced"
+			else:
+				if auto_create_missing and not frappe.db.exists("Item", sku):
+					try:
+						new_item = frappe.new_doc("Item")
+						new_item.item_code = sku
+						new_item.item_name = name or sku
+						new_item.item_group = default_item_group
+						new_item.stock_uom = "Nos"
+						new_item.is_stock_item = 1
+						if description:
+							new_item.description = description
+						new_item.insert(ignore_permissions=True)
+
+						woo_item.item_code = new_item.name
+						woo_item.sync_status = "Synced"
+						created_erpnext_items += 1
+						auto_linked += 1
+					except Exception as err:
+						frappe.log_error(title="Auto-create Item Error", message=str(err))
+						woo_item.sync_status = "Not Synced"
+				elif not woo_item.item_code:
+					woo_item.sync_status = "Not Synced"
 
 			woo_item.save(ignore_permissions=True)
 			total_fetched += 1
@@ -253,14 +286,14 @@ def fetch_items_from_woocommerce():
 		page += 1
 
 	frappe.db.commit()
-	frappe.msgprint(
-		_("✅ Fetched {0} products from WooCommerce!<br>🔗 Automatically linked {1} items to ERPNext by SKU.").format(
-			total_fetched, auto_linked
-		),
-		title=_("Fetch Complete"),
-		indicator="green",
+	msg = _("✅ Fetched <b>{0}</b> products from WooCommerce!<br>🔗 Automatically linked <b>{1}</b> items to ERPNext Item Master.").format(
+		total_fetched, auto_linked
 	)
-	return {"fetched": total_fetched, "linked": auto_linked}
+	if created_erpnext_items > 0:
+		msg += _("<br>✨ Created <b>{0}</b> new ERPNext Item Master records.").format(created_erpnext_items)
+
+	frappe.msgprint(msg, title=_("Fetch Complete"), indicator="green")
+	return {"fetched": total_fetched, "linked": auto_linked, "created": created_erpnext_items}
 
 
 @frappe.whitelist()

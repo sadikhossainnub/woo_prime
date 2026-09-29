@@ -172,12 +172,16 @@ def sync_order(order_data):
 		if customer_note:
 			so.add_comment("Comment", text=f"Customer Note (WooCommerce): {customer_note}")
 
-		# Save and submit (respect auto_submit_order setting)
-		so.flags.ignore_permissions = True
-		so.flags.ignore_mandatory = True
-		so.save()
-		if getattr(settings, "auto_submit_order", 1):
-			so.submit()
+		# Save and submit (respect auto_submit_order setting with DuplicateEntryError protection)
+		try:
+			so.flags.ignore_permissions = True
+			so.flags.ignore_mandatory = True
+			so.save()
+			if getattr(settings, "auto_submit_order", 1):
+				so.submit()
+		except frappe.DuplicateEntryError:
+			frappe.logger("woo_prime").info(f"Sales Order for WooCommerce Order WC-{woo_order_id} already exists. Skipping duplicate insert.")
+			return
 
 		# Send email notification if enabled
 		if getattr(settings, "order_email_notification", 0) and getattr(settings, "notification_email", None):
@@ -1472,6 +1476,79 @@ def reconcile_orders():
 			title="WooCommerce Reconciliation Failed",
 			message=frappe.get_traceback(),
 		)
+
+
+@frappe.whitelist()
+def auto_sync_orders(force=False):
+	"""Fetch pending/processing orders from WooCommerce according to configured sync interval in minutes.
+
+	- Checks enable_order_sync and order_sync_interval (in minutes) from Woo Settings.
+	- Fetches WooCommerce orders, converts them to Sales Orders in ERPNext.
+	- Can also be triggered manually (force=True).
+	"""
+	if isinstance(force, str):
+		force = force.lower() in ("true", "1")
+
+	try:
+		settings = frappe.get_single("Woo Settings")
+		if not settings.enabled:
+			return {"synced": 0, "message": "WooCommerce integration is disabled"}
+
+		enable_order_sync = getattr(settings, "enable_order_sync", 1)
+		if not enable_order_sync and not force:
+			return {"synced": 0, "message": "Automatic Order Sync is disabled"}
+
+		interval_minutes = int(getattr(settings, "order_sync_interval", 5) or 5)
+		last_sync = getattr(settings, "last_order_sync_time", None)
+
+		if not force and last_sync:
+			from frappe.utils import get_datetime, now_datetime
+			last_sync_dt = get_datetime(last_sync)
+			elapsed_minutes = (now_datetime() - last_sync_dt).total_seconds() / 60.0
+			if elapsed_minutes < interval_minutes:
+				return {"synced": 0, "message": f"Interval of {interval_minutes}m has not elapsed yet"}
+
+		from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
+		api = get_woo_api()
+
+		# Get recent orders from WooCommerce
+		orders = api.get_orders(params={
+			"per_page": 100,
+			"status": "processing,completed,on-hold,pending",
+		})
+
+		if not orders:
+			frappe.db.set_value("Woo Settings", "Woo Settings", "last_order_sync_time", frappe.utils.now_datetime())
+			frappe.db.commit()
+			return {"synced": 0, "message": "No new orders found on WooCommerce"}
+
+		synced_count = 0
+		for order in orders:
+			woo_order_id = order.get("id")
+			if not woo_order_id:
+				continue
+
+			if not frappe.db.exists("Sales Order", {"woo_order_id": str(woo_order_id)}):
+				try:
+					sync_order(order)
+					synced_count += 1
+				except Exception as err:
+					frappe.log_error(title=f"Auto Order Sync Error (WC #{woo_order_id})", message=str(err))
+
+		frappe.db.set_value("Woo Settings", "Woo Settings", "last_order_sync_time", frappe.utils.now_datetime())
+		frappe.db.commit()
+
+		msg = f"Synced {synced_count} new orders from WooCommerce"
+		if force:
+			frappe.msgprint(_("✅ Successfully synced <b>{0}</b> orders from WooCommerce!").format(synced_count), indicator="green")
+
+		return {"synced": synced_count, "message": msg}
+
+	except Exception as e:
+		frappe.log_error(title="Auto Order Sync Exception", message=frappe.get_traceback())
+		if force:
+			frappe.throw(_("Failed to sync orders from WooCommerce: {0}").format(str(e)))
+		return {"synced": 0, "error": str(e)}
 
 
 # ═══════════════════════════════════════════════════

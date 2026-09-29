@@ -43,8 +43,12 @@ required_apps = ["erpnext"]
 # page_js = {"page" : "public/js/file.js"}
 
 # include js in doctype views
-# doctype_js = {"doctype" : "public/js/doctype.js"}
-# doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
+doctype_js = {
+	"Item": "public/js/item.js"
+}
+doctype_list_js = {
+	"Item": "public/js/item_list.js"
+}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
 
@@ -151,6 +155,9 @@ doc_events = {
 # ---------------
 
 scheduler_events = {
+	"all": [
+		"woo_prime.api.sync.auto_sync_orders",
+	],
 	"hourly": [
 		"woo_prime.api.sync.sync_all_stock",
 	],

@@ -13,6 +13,7 @@
   "consumer_secret",
   "test_connection_btn",
   "fetch_categories_btn",
+  "fetch_items_btn",
   "webhook_section",
   "webhook_secret",
   "column_break_webhook",
@@ -47,6 +48,9 @@
   "column_break_sync",
   "enable_price_sync",
   "price_sync_interval",
+  "enable_order_sync",
+  "order_sync_interval",
+  "last_order_sync_time",
   "reconcile_days"
  ],
  "fields": [
@@ -93,6 +97,11 @@
    "fieldname": "fetch_categories_btn",
    "fieldtype": "Button",
    "label": "Fetch Categories from WooCommerce"
+  },
+  {
+   "fieldname": "fetch_items_btn",
+   "fieldtype": "Button",
+   "label": "Fetch Items from WooCommerce"
   },
   {
    "fieldname": "webhook_section",
@@ -302,6 +311,26 @@
    "label": "Price Sync Schedule",
    "options": "Daily\nHourly\nEvery 6 Hours",
    "depends_on": "eval:doc.enable_price_sync==1"
+  },
+  {
+   "default": "1",
+   "fieldname": "enable_order_sync",
+   "fieldtype": "Check",
+   "label": "Enable Automatic Order Sync (WooCommerce → ERPNext)"
+  },
+  {
+   "default": "5",
+   "fieldname": "order_sync_interval",
+   "fieldtype": "Int",
+   "label": "Order Sync Interval (Minutes)",
+   "description": "System will automatically fetch WooCommerce orders every X minutes and create Sales Orders",
+   "depends_on": "eval:doc.enable_order_sync==1"
+  },
+  {
+   "fieldname": "last_order_sync_time",
+   "fieldtype": "Datetime",
+   "label": "Last Order Sync Time",
+   "read_only": 1
   },
   {
    "default": "2",
