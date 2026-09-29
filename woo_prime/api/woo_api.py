@@ -50,6 +50,8 @@ class WooAPI:
 			"Accept": "application/json, text/plain, */*",
 		}
 
+		logger = frappe.logger("woo_prime", allow_site=True, max_size=1, file_count=50)
+
 		def make_call(use_rest, use_query):
 			req_params = dict(params) if params else {}
 			if use_query:
@@ -65,7 +67,11 @@ class WooAPI:
 			else:
 				url = f"{self.base_url}/{endpoint}"
 
-			return self.session.request(
+			# Log the outgoing request
+			safe_params = {k: v for k, v in req_params.items() if k not in ("consumer_key", "consumer_secret")}
+			logger.info(f"[WooAPI] {method} → {url} | params={safe_params} | rest_route={use_rest} | query_auth={use_query}")
+
+			resp = self.session.request(
 				method=method,
 				url=url,
 				auth=auth,
@@ -75,10 +81,16 @@ class WooAPI:
 				timeout=self.timeout,
 			)
 
+			# Log the response
+			logger.info(f"[WooAPI] ← HTTP {resp.status_code} from {url} | body_preview={resp.text[:300]}")
+
+			return resp
+
 		# Initial request with exception handling
 		try:
 			response = make_call(self.use_rest_route, self.use_query_auth)
 		except requests.exceptions.RequestException as req_err:
+			logger.error(f"[WooAPI] Connection error to {self.site_url}: {req_err}")
 			frappe.throw(
 				_("Unable to connect to WooCommerce site at '{0}'. Error: {1}").format(self.site_url, str(req_err)),
 				title=_("WooCommerce Connection Error"),
@@ -362,8 +374,28 @@ class WooAPI:
 		data = {
 			"manage_stock": manage_stock,
 			"stock_quantity": int(stock_quantity),
+			"stock_status": "instock" if int(stock_quantity) > 0 else "outofstock",
 		}
 		return self.update_product(product_id, data)
+
+	def update_variation_stock(self, parent_id, variation_id, stock_quantity, manage_stock=True):
+		"""Update stock quantity for a product variation.
+
+		Args:
+			parent_id: Parent WooCommerce product ID
+			variation_id: WooCommerce variation ID
+			stock_quantity: New stock quantity
+			manage_stock: Whether to enable stock management
+
+		Returns:
+			dict: WooCommerce variation response
+		"""
+		data = {
+			"manage_stock": manage_stock,
+			"stock_quantity": int(stock_quantity),
+			"stock_status": "instock" if int(stock_quantity) > 0 else "outofstock",
+		}
+		return self.update_product_variation(parent_id, variation_id, data)
 
 	def update_price(self, product_id, regular_price, sale_price=None):
 		"""Update price for a product.
@@ -381,7 +413,25 @@ class WooAPI:
 			data["sale_price"] = str(sale_price)
 		return self.update_product(product_id, data)
 
+	def update_variation_price(self, parent_id, variation_id, regular_price, sale_price=None):
+		"""Update price for a product variation.
+
+		Args:
+			parent_id: Parent WooCommerce product ID
+			variation_id: WooCommerce variation ID
+			regular_price: Regular price
+			sale_price: Optional sale price
+
+		Returns:
+			dict: WooCommerce variation response
+		"""
+		data = {"regular_price": str(regular_price)}
+		if sale_price is not None:
+			data["sale_price"] = str(sale_price)
+		return self.update_product_variation(parent_id, variation_id, data)
+
 	# --- Order Methods ---
+
 
 	def get_order(self, order_id):
 		"""Get an order from WooCommerce."""

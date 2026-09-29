@@ -167,8 +167,40 @@ def sync_order(order_data):
 					"warehouse": settings.default_warehouse,
 				})
 
+		# Fee lines handling (surcharges, COD fees, packaging charges)
+		fee_lines = order_data.get("fee_lines", [])
+		if fee_lines:
+			for fee in fee_lines:
+				fee_title = fee.get("name") or "Additional Fee"
+				fee_total = flt(fee.get("total", 0))
+				if fee_total != 0:
+					account_head = getattr(settings, "shipping_charge_account", None)
+					if not account_head and settings.default_company:
+						account_head = frappe.db.get_value(
+							"Account",
+							{"company": settings.default_company, "account_name": ["like", "%Fee%"], "is_group": 0},
+							"name"
+						)
+					if account_head:
+						so.append("taxes", {
+							"charge_type": "Actual",
+							"account_head": account_head,
+							"description": f"WooCommerce Fee: {fee_title}",
+							"tax_amount": fee_total,
+						})
+					elif settings.shipping_item:
+						so.append("items", {
+							"item_code": settings.shipping_item,
+							"item_name": f"Fee - {fee_title}",
+							"qty": 1,
+							"rate": fee_total,
+							"delivery_date": so.delivery_date,
+							"warehouse": settings.default_warehouse,
+						})
+
 		# Customer notes
 		customer_note = order_data.get("customer_note", "")
+
 		if customer_note:
 			so.add_comment("Comment", text=f"Customer Note (WooCommerce): {customer_note}")
 
@@ -262,12 +294,20 @@ def update_order_from_woo(order_data, existing_so):
 		)
 
 
+def _normalize_phone(phone):
+	"""Extract digits from phone string and return trailing 10 digits for fuzzy match."""
+	if not phone:
+		return ""
+	digits = "".join(c for c in str(phone) if c.isdigit())
+	return digits[-10:] if len(digits) >= 10 else digits
+
+
 def _get_or_create_customer(order_data, settings):
 	"""Find existing customer or create new one from WooCommerce billing data.
 
 	Matching priority:
 	1. Match by email
-	2. Match by phone / mobile
+	2. Match by phone / mobile (including normalized phone matching)
 	3. Match by linked Contact
 	4. Match by Customer Name
 	5. Auto-create new Customer if not found
@@ -300,12 +340,15 @@ def _get_or_create_customer(order_data, settings):
 
 	# 2. Try to find by phone / mobile
 	if not customer_name and phone:
+		clean_phone = _normalize_phone(phone)
 		existing = (
 			frappe.db.get_value("Customer", {"mobile_no": phone}, "name")
+			or (frappe.db.get_value("Customer", {"mobile_no": ["like", f"%{clean_phone}%"]}, "name") if clean_phone else None)
 			or frappe.db.get_value("Customer", {"primary_address": ["like", f"%{phone}%"]}, "name")
 		)
 		if existing:
 			customer_name = existing
+
 
 	# 3. Try to find by Contact record
 	if not customer_name and (email or phone):
@@ -750,10 +793,15 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings):
 		"short_description": html.unescape(getattr(woo_item, "woo_short_description", None) or item.description or ""),
 		"manage_stock": True,
 		"stock_quantity": int(stock_qty),
+		"stock_status": "instock" if int(stock_qty) > 0 else "outofstock",
 		"status": "publish",
 	}
 	if sale_price is not None:
 		product_data["sale_price"] = str(flt(sale_price))
+
+	if getattr(item, "weight_per_unit", None):
+		product_data["weight"] = str(flt(item.weight_per_unit))
+
 
 	category_ids = _get_woo_category_ids(woo_item, api)
 	if category_ids:
@@ -1019,11 +1067,16 @@ def _prepare_variation_payload(child_woo_item, v_item, api, settings):
 		"regular_price": str(flt(regular_price)),
 		"manage_stock": True,
 		"stock_quantity": int(stock_qty),
+		"stock_status": "instock" if int(stock_qty) > 0 else "outofstock",
 		"attributes": var_attributes,
 		"description": html.unescape(child_woo_item.woo_description or v_item.description or ""),
 	}
 	if sale_price is not None:
 		var_data["sale_price"] = str(flt(sale_price))
+
+	if getattr(v_item, "weight_per_unit", None):
+		var_data["weight"] = str(flt(v_item.weight_per_unit))
+
 
 	images = _get_item_images(v_item, child_woo_item, api)
 	if images:
@@ -1286,7 +1339,17 @@ def sync_stock_to_woo(woo_item):
 	settings = frappe.get_single("Woo Settings")
 
 	stock_qty = _get_stock_qty(woo_item.item_code, settings.default_warehouse)
-	api.update_stock(woo_item.woo_product_id, stock_qty)
+
+	# Check if item is a Variant of a Template product
+	variant_of = frappe.db.get_value("Item", woo_item.item_code, "variant_of")
+	parent_woo_id = None
+	if variant_of:
+		parent_woo_id = frappe.db.get_value("Woo Item", {"item_code": variant_of}, "woo_product_id")
+
+	if parent_woo_id:
+		api.update_variation_stock(parent_woo_id, woo_item.woo_product_id, stock_qty)
+	else:
+		api.update_stock(woo_item.woo_product_id, stock_qty)
 
 	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
 
@@ -1316,7 +1379,16 @@ def sync_price_to_woo(woo_item):
 	regular_price = flt(woo_item.regular_price) if getattr(woo_item, "regular_price", None) else flt(price)
 	sale_price = flt(woo_item.sale_price) if getattr(woo_item, "sale_price", None) and flt(woo_item.sale_price) > 0 else None
 
-	api.update_price(woo_item.woo_product_id, regular_price, sale_price=sale_price)
+	# Check if item is a Variant of a Template product
+	variant_of = frappe.db.get_value("Item", woo_item.item_code, "variant_of")
+	parent_woo_id = None
+	if variant_of:
+		parent_woo_id = frappe.db.get_value("Woo Item", {"item_code": variant_of}, "woo_product_id")
+
+	if parent_woo_id:
+		api.update_variation_price(parent_woo_id, woo_item.woo_product_id, regular_price, sale_price=sale_price)
+	else:
+		api.update_price(woo_item.woo_product_id, regular_price, sale_price=sale_price)
 
 	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
 
@@ -1329,6 +1401,7 @@ def sync_price_to_woo(woo_item):
 		woo_reference_id=str(woo_item.woo_product_id),
 		response_data=json.dumps({"regular_price": regular_price, "sale_price": sale_price}),
 	)
+
 
 
 def _get_item_price(item_code, price_list):
@@ -1425,6 +1498,28 @@ def sync_all_prices():
 	frappe.db.commit()
 
 
+def _get_all_woo_orders(api, params=None):
+	"""Fetch all orders from WooCommerce handling pagination across multiple pages."""
+	all_orders = []
+	req_params = dict(params) if params else {}
+	req_params["per_page"] = req_params.get("per_page", 100)
+	page = 1
+
+	while True:
+		req_params["page"] = page
+		batch = api.get_orders(params=req_params)
+		if not batch:
+			break
+		all_orders.extend(batch)
+		if len(batch) < req_params["per_page"]:
+			break
+		page += 1
+		if page > 50:  # Safety cap
+			break
+
+	return all_orders
+
+
 def reconcile_orders():
 	"""Scheduled task: Reconcile WooCommerce orders with ERPNext.
 
@@ -1446,7 +1541,7 @@ def reconcile_orders():
 		lookback_days = getattr(settings, "reconcile_days", 2) or 2
 		after_date = (datetime.datetime.now() - datetime.timedelta(days=lookback_days)).strftime("%Y-%m-%dT00:00:00")
 
-		orders = api.get_orders(params={
+		orders = _get_all_woo_orders(api, params={
 			"after": after_date,
 			"per_page": 100,
 			"status": "processing,completed",
@@ -1511,11 +1606,12 @@ def auto_sync_orders(force=False):
 		from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
 		api = get_woo_api()
 
-		# Get recent orders from WooCommerce
-		orders = api.get_orders(params={
+		# Get recent orders from WooCommerce (handling multi-page pagination)
+		orders = _get_all_woo_orders(api, params={
 			"per_page": 100,
 			"status": "processing,completed,on-hold,pending",
 		})
+
 
 		if not orders:
 			frappe.db.set_value("Woo Settings", "Woo Settings", "last_order_sync_time", frappe.utils.now_datetime())
@@ -1659,3 +1755,45 @@ def sync_price_for_item_code(item_code):
 		frappe.db.commit()
 	except Exception as e:
 		frappe.log_error(title=f"Real-Time Price Sync Failed - {item_code}", message=str(e))
+
+
+def on_sales_order_status_change(doc, method):
+	"""Real-time event hook: Triggered when Sales Order is submitted or cancelled in ERPNext.
+
+	Pushes the updated order status (e.g. processing, completed, cancelled) to WooCommerce.
+	"""
+	woo_order_id = getattr(doc, "woo_order_id", None)
+	if not woo_order_id:
+		return
+
+	try:
+		settings = frappe.get_single("Woo Settings")
+		if not settings.enabled:
+			return
+
+		from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
+		api = get_woo_api()
+
+		new_status = None
+		if doc.docstatus == 1:  # Submitted
+			new_status = getattr(settings, "submitted_order_status", "processing") or "processing"
+		elif doc.docstatus == 2:  # Cancelled
+			new_status = "cancelled"
+
+		if new_status:
+			api.update_order_status(woo_order_id, new_status)
+			doc.db_set("woo_order_status", new_status)
+
+			from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
+			create_log(
+				sync_type="Order",
+				direction="Outgoing",
+				status="Success",
+				reference_doctype="Sales Order",
+				reference_name=doc.name,
+				woo_reference_id=str(woo_order_id),
+				response_data=json.dumps({"action": "status_update", "status": new_status}),
+			)
+	except Exception as e:
+		frappe.log_error(title=f"ERPNext → WooCommerce Order Status Sync Failed ({doc.name})", message=str(e))
+
