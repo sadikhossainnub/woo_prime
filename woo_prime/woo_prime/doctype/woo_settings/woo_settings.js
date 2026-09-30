@@ -9,39 +9,19 @@ frappe.ui.form.on("Woo Settings", {
 			frm.set_value("webhook_delivery_url", webhook_url);
 		}
 
-		// Test Connection button styling
+		// Button styling
 		if (frm.fields_dict.test_connection_btn) {
 			frm.fields_dict.test_connection_btn.$input.addClass("btn-primary");
 		}
-
-		// Fetch Categories button styling
 		if (frm.fields_dict.fetch_categories_btn) {
 			frm.fields_dict.fetch_categories_btn.$input.addClass("btn-info");
 		}
-
-		// Fetch Items button styling
 		if (frm.fields_dict.fetch_items_btn) {
 			frm.fields_dict.fetch_items_btn.$input.addClass("btn-warning");
 		}
-
-		// Download Plugin button styling
 		if (frm.fields_dict.download_plugin_btn) {
 			frm.fields_dict.download_plugin_btn.$input.addClass("btn-success");
 		}
-	},
-
-	generate_secret_btn(frm) {
-		frappe.call({
-			method: "woo_prime.woo_prime.doctype.woo_settings.woo_settings.generate_api_shared_secret",
-			callback: function (r) {
-				if (r && r.message) {
-					frm.set_value("api_shared_secret", r.message);
-					frappe.show_alert({ message: __("Generated new API Shared Secret! Remember to save Woo Settings."), indicator: "green" });
-				}
-			}
-		});
-	},
-
 
 		// Add custom button to copy Webhook Delivery URL
 		frm.add_custom_button(
@@ -106,6 +86,7 @@ frappe.ui.form.on("Woo Settings", {
 			},
 			__("Sync")
 		);
+
 		// Add custom button for orders fetch
 		frm.add_custom_button(
 			__("Fetch WooCommerce Orders"),
@@ -180,6 +161,18 @@ frappe.ui.form.on("Woo Settings", {
 		);
 	},
 
+	generate_secret_btn(frm) {
+		frappe.call({
+			method: "woo_prime.woo_prime.doctype.woo_settings.woo_settings.generate_api_shared_secret",
+			callback: function (r) {
+				if (r && r.message) {
+					frm.set_value("api_shared_secret", r.message);
+					frappe.show_alert({ message: __("Generated new API Shared Secret! Remember to save Woo Settings."), indicator: "green" });
+				}
+			}
+		});
+	},
+
 	test_connection_btn(frm) {
 		if (!frm.doc.woo_site_url || !frm.doc.consumer_key) {
 			frappe.msgprint(__("Please fill in WooCommerce Site URL and Consumer Key first."));
@@ -243,4 +236,3 @@ frappe.ui.form.on("Woo Settings", {
 		);
 	},
 });
-
