@@ -48,19 +48,29 @@ frappe.ui.form.on("Woo Settings", {
 		frm.add_custom_button(
 			__("Fetch WooCommerce Categories"),
 			function () {
-				frappe.call({
-					method: "woo_prime.woo_prime.doctype.woo_category.woo_category.sync_categories_from_woo",
-					freeze: true,
-					freeze_message: __("Fetching product categories from WooCommerce..."),
-					callback: function (r) {
-						if (r && r.message) {
-							frappe.show_alert({
-								message: __("Synced {0} categories!", [r.message]),
-								indicator: "green",
-							});
-						}
-					},
-				});
+				frappe.confirm(
+					__('Fetch all product categories from WooCommerce? This will run in the background.'),
+					function() {
+						// Show progress dialog
+						show_fetch_progress_dialog('fetch_categories');
+						
+						// Start background fetch
+						frappe.call({
+							method: 'woo_prime.woo_prime.doctype.woo_category.woo_category.sync_categories_from_woo',
+							args: {
+								background: true
+							},
+							callback: function(r) {
+								if (r.message && r.message.status === 'queued') {
+									frappe.show_alert({
+										message: __('Category fetch queued successfully'),
+										indicator: 'blue'
+									}, 5);
+								}
+							}
+						});
+					}
+				);
 			},
 			__("Sync")
 		);
@@ -69,18 +79,62 @@ frappe.ui.form.on("Woo Settings", {
 		frm.add_custom_button(
 			__("Fetch WooCommerce Items"),
 			function () {
-				frappe.call({
-					method: "woo_prime.woo_prime.doctype.woo_item.woo_item.fetch_items_from_woocommerce",
-					args: { auto_create_missing: true, batch_size: 10, background: true },
-					callback: function (r) {
-						if (r && r.message) {
-							frappe.show_alert({
-								message: r.message.message || __("Started background product fetch (10 items per batch)..."),
-								indicator: "blue",
-							});
+				// Create dialog with fetch options
+				let d = new frappe.ui.Dialog({
+					title: __('Fetch Items from WooCommerce'),
+					fields: [
+						{
+							fieldname: 'batch_size',
+							fieldtype: 'Int',
+							label: __('Products per Page'),
+							default: 10,
+							reqd: 1,
+							description: __('Number of products to fetch per API request (1-100)')
+						},
+						{
+							fieldname: 'auto_create_missing',
+							fieldtype: 'Check',
+							label: __('Auto-create ERPNext Items'),
+							default: 0,  // Changed to 0 (False)
+							description: __('Automatically create ERPNext Item records for unmatched products')
+						},
+						{
+							fieldname: 'skip_empty_products',
+							fieldtype: 'Check',
+							label: __('Skip Empty Products'),
+							default: frm.doc.skip_empty_products || 0,
+							description: __('Skip products with empty name or SKU')
 						}
-					},
+					],
+					primary_action_label: __('Start Fetch'),
+					primary_action: function(values) {
+						d.hide();
+						
+						// Show progress dialog
+						show_fetch_progress_dialog('fetch_products');
+						
+						// Start background fetch
+						frappe.call({
+							method: 'woo_prime.woo_prime.doctype.woo_item.woo_item.fetch_items_from_woocommerce',
+							args: {
+								batch_size: values.batch_size,
+								auto_create_missing: values.auto_create_missing,
+								skip_empty_products: values.skip_empty_products,
+								background: true
+							},
+							callback: function(r) {
+								if (r.message && r.message.status === 'queued') {
+									frappe.show_alert({
+										message: __('Product fetch queued successfully'),
+										indicator: 'blue'
+									}, 5);
+								}
+							}
+						});
+					}
 				});
+				
+				d.show();
 			},
 			__("Sync")
 		);
@@ -191,19 +245,29 @@ frappe.ui.form.on("Woo Settings", {
 			return;
 		}
 
-		frappe.call({
-			method: "woo_prime.woo_prime.doctype.woo_category.woo_category.sync_categories_from_woo",
-			freeze: true,
-			freeze_message: __("Fetching product categories from WooCommerce..."),
-			callback: function (r) {
-				if (r && r.message) {
-					frappe.show_alert({
-						message: __("Synced {0} categories!", [r.message]),
-						indicator: "green",
-					});
-				}
-			},
-		});
+		frappe.confirm(
+			__('Fetch all product categories from WooCommerce? This will run in the background.'),
+			function() {
+				// Show progress dialog
+				show_fetch_progress_dialog('fetch_categories');
+				
+				// Start background fetch
+				frappe.call({
+					method: 'woo_prime.woo_prime.doctype.woo_category.woo_category.sync_categories_from_woo',
+					args: {
+						background: true
+					},
+					callback: function(r) {
+						if (r.message && r.message.status === 'queued') {
+							frappe.show_alert({
+								message: __('Category fetch queued successfully'),
+								indicator: 'blue'
+							}, 5);
+						}
+					}
+				});
+			}
+		);
 	},
 
 	fetch_items_btn(frm) {
@@ -212,18 +276,62 @@ frappe.ui.form.on("Woo Settings", {
 			return;
 		}
 
-		frappe.call({
-			method: "woo_prime.woo_prime.doctype.woo_item.woo_item.fetch_items_from_woocommerce",
-			args: { auto_create_missing: true, batch_size: 10, background: true },
-			callback: function (r) {
-				if (r && r.message) {
-					frappe.show_alert({
-						message: r.message.message || __("Started background product fetch (10 items per batch)..."),
-						indicator: "blue",
-					});
+		// Create dialog with fetch options
+		let d = new frappe.ui.Dialog({
+			title: __('Fetch Items from WooCommerce'),
+			fields: [
+				{
+					fieldname: 'batch_size',
+					fieldtype: 'Int',
+					label: __('Products per Page'),
+					default: 10,
+					reqd: 1,
+					description: __('Number of products to fetch per API request (1-100)')
+				},
+				{
+					fieldname: 'auto_create_missing',
+					fieldtype: 'Check',
+					label: __('Auto-create ERPNext Items'),
+					default: 0,  // Changed to 0 (False)
+					description: __('Automatically create ERPNext Item records for unmatched products')
+				},
+				{
+					fieldname: 'skip_empty_products',
+					fieldtype: 'Check',
+					label: __('Skip Empty Products'),
+					default: frm.doc.skip_empty_products || 0,
+					description: __('Skip products with empty name or SKU')
 				}
-			},
+			],
+			primary_action_label: __('Start Fetch'),
+			primary_action: function(values) {
+				d.hide();
+				
+				// Show progress dialog
+				show_fetch_progress_dialog('fetch_products');
+				
+				// Start background fetch
+				frappe.call({
+					method: 'woo_prime.woo_prime.doctype.woo_item.woo_item.fetch_items_from_woocommerce',
+					args: {
+						batch_size: values.batch_size,
+						auto_create_missing: values.auto_create_missing,
+						skip_empty_products: values.skip_empty_products,
+						background: true
+					},
+					callback: function(r) {
+						if (r.message && r.message.status === 'queued') {
+							frappe.show_alert({
+								message: __('Product fetch queued successfully'),
+								indicator: 'blue'
+							}, 5);
+						}
+					}
+				});
+			}
 		});
+		
+		d.show();
 	},
 
 	download_plugin_btn(frm) {
@@ -232,3 +340,145 @@ frappe.ui.form.on("Woo Settings", {
 		);
 	},
 });
+
+// Progress dialog
+let progress_dialog = null;
+let progress_subscription = null;
+
+function show_fetch_progress_dialog(operation) {
+	// Close existing dialog if any
+	if (progress_dialog) {
+		progress_dialog.hide();
+	}
+	
+	// Create progress dialog
+	progress_dialog = new frappe.ui.Dialog({
+		title: operation === 'fetch_products' ? __('Fetching Products') : __('Fetching Categories'),
+		indicator: 'blue',
+		size: 'large',
+		fields: [
+			{
+				fieldname: 'progress_html',
+				fieldtype: 'HTML'
+			}
+		],
+		primary_action_label: __('Close'),
+		primary_action: function() {
+			progress_dialog.hide();
+			if (progress_subscription) {
+				frappe.realtime.off('woo_fetch_progress', progress_subscription);
+				progress_subscription = null;
+			}
+		}
+	});
+	
+	// Initialize progress HTML
+	let html = `
+		<div class="woo-fetch-progress">
+			<div class="progress" style="height: 30px; margin-bottom: 20px;">
+				<div class="progress-bar progress-bar-striped progress-bar-animated" 
+					role="progressbar" 
+					style="width: 0%;" 
+					id="woo-progress-bar">
+				</div>
+			</div>
+			<div class="row" style="margin-bottom: 15px;">
+				<div class="col-sm-12">
+					<p id="woo-status-message" style="font-size: 14px; color: #555;">
+						<i class="fa fa-spinner fa-spin"></i> Initializing...
+					</p>
+				</div>
+			</div>
+			<div class="row" id="woo-stats-row" style="display: none;">
+				<div class="col-sm-3">
+					<div class="well well-sm text-center">
+						<h4 id="woo-stat-fetched">0</h4>
+						<p class="text-muted" style="margin: 0;">Fetched</p>
+					</div>
+				</div>
+				<div class="col-sm-3">
+					<div class="well well-sm text-center">
+						<h4 id="woo-stat-linked">0</h4>
+						<p class="text-muted" style="margin: 0;">Linked</p>
+					</div>
+				</div>
+				<div class="col-sm-3">
+					<div class="well well-sm text-center">
+						<h4 id="woo-stat-created">0</h4>
+						<p class="text-muted" style="margin: 0;">Created</p>
+					</div>
+				</div>
+				<div class="col-sm-3">
+					<div class="well well-sm text-center">
+						<h4 id="woo-stat-failed">0</h4>
+						<p class="text-muted" style="margin: 0;">Failed</p>
+					</div>
+				</div>
+			</div>
+		</div>
+	`;
+	
+	progress_dialog.fields_dict.progress_html.$wrapper.html(html);
+	progress_dialog.show();
+	
+	// Subscribe to realtime updates
+	progress_subscription = function(data) {
+		if (data.operation !== operation) {
+			return;
+		}
+		
+		update_progress_dialog(data);
+		
+		// Auto-close on completion or error after 5 seconds
+		if (data.status === 'completed' || data.status === 'error') {
+			setTimeout(function() {
+				if (progress_dialog) {
+					progress_dialog.hide();
+				}
+			}, 5000);
+		}
+	};
+	
+	frappe.realtime.on('woo_fetch_progress', progress_subscription);
+}
+
+function update_progress_dialog(data) {
+	if (!progress_dialog) {
+		return;
+	}
+	
+	// Update status message
+	let status_icon = 'fa-spinner fa-spin';
+	let status_color = '#555';
+	
+	if (data.status === 'completed') {
+		status_icon = 'fa-check-circle';
+		status_color = '#28a745';
+	} else if (data.status === 'error') {
+		status_icon = 'fa-exclamation-circle';
+		status_color = '#dc3545';
+	}
+	
+	$('#woo-status-message').html(
+		`<i class="fa ${status_icon}" style="color: ${status_color};"></i> ${data.message}`
+	);
+	
+	// Update progress bar (estimate based on page number if not provided)
+	if (data.status === 'completed') {
+		$('#woo-progress-bar').css('width', '100%').removeClass('progress-bar-animated');
+	} else if (data.status === 'error') {
+		$('#woo-progress-bar').removeClass('progress-bar-striped progress-bar-animated').addClass('bg-danger');
+	}
+	
+	// Update stats
+	if (data.operation === 'fetch_products') {
+		$('#woo-stats-row').show();
+		$('#woo-stat-fetched').text(data.total_fetched || 0);
+		$('#woo-stat-linked').text(data.linked || 0);
+		$('#woo-stat-created').text(data.created || 0);
+		$('#woo-stat-failed').text(data.failed || 0);
+	} else if (data.operation === 'fetch_categories') {
+		// Simplified stats for categories
+		$('#woo-stats-row').hide();
+	}
+}

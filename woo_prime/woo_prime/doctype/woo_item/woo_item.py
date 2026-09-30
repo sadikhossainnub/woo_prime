@@ -177,38 +177,275 @@ def bulk_publish(items):
 	return {"success": success_count, "failed": fail_count}
 
 
+def _parse_bool(value):
+	"""Parse various boolean representations to Python bool.
+	
+	Converts string representations like "true", "1", "yes" to True,
+	and other values to False. Handles direct boolean values and None.
+	
+	Args:
+		value: Input value to parse (bool, str, int, or None)
+	
+	Returns:
+		bool: Parsed boolean value
+	
+	Examples:
+		>>> _parse_bool(True)
+		True
+		>>> _parse_bool("true")
+		True
+		>>> _parse_bool("1")
+		True
+		>>> _parse_bool("yes")
+		True
+		>>> _parse_bool("false")
+		False
+		>>> _parse_bool("")
+		False
+	"""
+	if isinstance(value, bool):
+		return value
+	if isinstance(value, str):
+		return value.lower() in ("true", "1", "yes")
+	return bool(value)
+
+
+def _parse_int(value, default=10):
+	"""Parse integer value with default fallback.
+	
+	Attempts to convert the input value to an integer. If conversion fails
+	(ValueError or TypeError), returns the specified default value.
+	
+	Args:
+		value: Input value to parse (int, str, or other)
+		default (int): Default value to return on parsing failure (default: 10)
+	
+	Returns:
+		int: Parsed integer or default value
+	
+	Examples:
+		>>> _parse_int(100)
+		100
+		>>> _parse_int("50")
+		50
+		>>> _parse_int("invalid", default=20)
+		20
+		>>> _parse_int(None, default=15)
+		15
+	"""
+	try:
+		return int(value)
+	except (ValueError, TypeError):
+		return default
+
+
+def _publish_progress(user, operation, current_page, total_fetched, linked, created, skipped, failed, status, message):
+	"""Publish real-time progress update for product fetch operations.
+	
+	Sends a realtime notification via Frappe's publish_realtime to update
+	the user interface with current progress of the background job. The
+	notification is sent immediately (after_commit=False) to provide
+	responsive feedback.
+	
+	Args:
+		user (str): Target user to receive the notification
+		operation (str): Operation identifier ("fetch_products")
+		current_page (int): Current page number being processed
+		total_fetched (int): Total number of products fetched so far
+		linked (int): Total number of products auto-linked to ERPNext Items
+		created (int): Total number of new ERPNext Items created
+		skipped (int): Total number of products skipped (e.g., empty products)
+		failed (int): Total number of products that failed processing
+		status (str): Current status ("starting", "fetching", "in_progress", "completed", "error")
+		message (str): Human-readable status message for display
+	
+	Returns:
+		None
+	
+	Note:
+		Exceptions during publish are caught and logged to prevent
+		disruption of the main background job execution.
+	"""
+	if not user:
+		return
+	
+	try:
+		frappe.publish_realtime(
+			event="woo_fetch_progress",
+			message={
+				"operation": operation,
+				"current_page": current_page,
+				"total_fetched": total_fetched,
+				"linked": linked,
+				"created": created,
+				"skipped": skipped,
+				"failed": failed,
+				"status": status,
+				"message": message,
+				"timestamp": frappe.utils.now()
+			},
+			user=user,
+			after_commit=False
+		)
+	except Exception as e:
+		frappe.logger("woo_prime").error(f"Failed to publish progress: {e}")
+
+
+def _process_single_product(prod, settings, default_item_group, auto_create_missing, logger):
+	"""Process a single product from WooCommerce response.
+	
+	Creates or updates a Woo Item record and optionally auto-links or creates
+	the corresponding ERPNext Item. This function encapsulates the matching
+	and linking logic for a single product.
+	
+	Args:
+		prod (dict): Product data from WooCommerce API response
+		settings (Document): Woo Settings singleton document
+		default_item_group (str): Default Item Group name for new ERPNext Items
+		auto_create_missing (bool): Whether to auto-create ERPNext Items for unmatched products
+		logger (Logger): Frappe logger instance for logging operations
+	
+	Returns:
+		dict: Result dictionary with keys:
+			- "linked" (bool): True if Woo Item was linked to an ERPNext Item
+			- "created" (bool): True if a new ERPNext Item was created
+	
+	Matching Logic:
+		1. Find existing Woo Item by: woo_product_id, then sku, then primary key name
+		2. Auto-link to ERPNext Item by: item_code match, then name match, then item_name match
+		3. If matched: set item_code, set sync_status="Synced"
+		4. If not matched and auto_create_missing=False: create new ERPNext Item
+		5. If not matched and auto_create_missing=False: set sync_status="Not Synced"
+	
+	Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7, 10.1, 10.2, 10.3
+	"""
+	from frappe.utils import flt
+	
+	# Extract product data
+	woo_id = prod.get("id")
+	sku = (prod.get("sku") or "").strip()
+	name = html.unescape(prod.get("name") or "")
+	permalink = prod.get("permalink", "")
+	description = html.unescape(prod.get("description", "") or "")
+	short_description = html.unescape(prod.get("short_description", "") or "")
+	
+	# Generate Fake_SKU if SKU is empty (Requirement 8.7)
+	if not sku:
+		sku = f"WC-{woo_id}"
+	
+	# Find existing Woo Item (Requirements 10.1, 10.2)
+	# Priority: woo_product_id, then sku field, then primary key name
+	existing_name = (
+		frappe.db.get_value("Woo Item", {"woo_product_id": woo_id})
+		or frappe.db.get_value("Woo Item", {"sku": sku})
+		or (frappe.db.exists("Woo Item", sku) and sku)
+	)
+	
+	if existing_name:
+		woo_item = frappe.get_doc("Woo Item", existing_name)
+	else:
+		woo_item = frappe.new_doc("Woo Item")
+		woo_item.sku = sku
+	
+	# Set Woo Item fields (Requirements 8.1, 8.2, 8.6)
+	woo_item.woo_product_id = woo_id
+	woo_item.woo_product_url = permalink
+	woo_item.woo_description = description
+	woo_item.woo_short_description = short_description
+	woo_item.published = 1
+	
+	# Set prices using frappe.utils.flt() (Requirement 8.2)
+	reg_p = flt(prod.get("regular_price") or 0)
+	sale_p = flt(prod.get("sale_price") or 0)
+	if reg_p > 0:
+		woo_item.regular_price = reg_p
+	if sale_p > 0:
+		woo_item.sale_price = sale_p
+	
+	# Auto-link to ERPNext Item (Requirements 8.3, 8.4)
+	# Priority: item_code match, then name match, then item_name match
+	matched_item = (
+		frappe.db.get_value("Item", {"item_code": sku}, "name")
+		or frappe.db.get_value("Item", {"name": sku}, "name")
+		or frappe.db.get_value("Item", {"item_name": name}, "name")
+	)
+	
+	linked = False
+	created = False
+	
+	if matched_item:
+		# Item found: link it (Requirement 8.4)
+		woo_item.item_code = matched_item
+		woo_item.sync_status = "Synced"
+		linked = True
+	else:
+		# No match found
+		if auto_create_missing and not frappe.db.exists("Item", sku):
+			# Create new ERPNext Item (Requirement 8.5)
+			new_item = frappe.new_doc("Item")
+			new_item.item_code = sku
+			new_item.item_name = name or sku
+			new_item.item_group = default_item_group
+			new_item.stock_uom = "Nos"
+			new_item.is_stock_item = 1
+			if description:
+				new_item.description = description
+			new_item.insert(ignore_permissions=True)
+			
+			# Link to newly created Item (Requirement 8.5)
+			woo_item.item_code = new_item.name
+			woo_item.sync_status = "Synced"
+			created = True
+			linked = True
+		elif not woo_item.item_code:
+			# Not auto-creating and no match (Requirement 8.4)
+			woo_item.sync_status = "Not Synced"
+	
+	# Save Woo Item (Requirement 8.2)
+	woo_item.save(ignore_permissions=True)
+	
+	return {"linked": linked, "created": created}
+
+
 @frappe.whitelist()
-def fetch_items_from_woocommerce(auto_create_missing=True, batch_size=10, background=False):
+def fetch_items_from_woocommerce(auto_create_missing=False, batch_size=10, skip_empty_products=False, background=True):
 	"""Fetch products from WooCommerce in batches (default 10 items per request), create/update Woo Item records, and auto-link to ERPNext Items by SKU.
 	
 	If background=True, enqueues execution into Frappe background worker and returns immediately.
+	
+	Args:
+		auto_create_missing (bool): Auto-create ERPNext Items for unmatched products (default False)
+		batch_size (int): Products per API page request (default 10)
+		skip_empty_products (bool): Skip products with empty name or SKU (default False)
+		background (bool): If True, enqueue to background; if False, run synchronously (default True)
+	
+	Returns:
+		dict: Status and message if background=True, or fetched/linked/created counts if background=False
 	"""
 	import json as _json
 	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
 	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
 
-	if isinstance(auto_create_missing, str):
-		auto_create_missing = frappe.parse_json(auto_create_missing) if auto_create_missing.startswith("{") else (auto_create_missing.lower() in ("true", "1"))
-
-	if isinstance(background, str):
-		background = background.lower() in ("true", "1")
-
-	try:
-		batch_size = int(batch_size) if batch_size else 10
-	except (ValueError, TypeError):
-		batch_size = 10
+	# Parse parameters with string support
+	auto_create_missing = _parse_bool(auto_create_missing)
+	skip_empty_products = _parse_bool(skip_empty_products)
+	background = _parse_bool(background)
+	batch_size = _parse_int(batch_size, default=10)
 
 	if background:
+		# Enqueue background job with job deduplication
 		frappe.enqueue(
-			"woo_prime.woo_prime.doctype.woo_item.woo_item.fetch_items_from_woocommerce",
+			"woo_prime.woo_prime.doctype.woo_item.woo_item.fetch_items_from_woocommerce_background",
 			auto_create_missing=auto_create_missing,
 			batch_size=batch_size,
-			background=False,
+			skip_empty_products=skip_empty_products,
+			user=frappe.session.user,
 			queue="long",
-			timeout=3600,
+			timeout=7200,
 			enqueue_after_commit=True,
+			job_name=f"woo_fetch_products_{frappe.session.user}",
 		)
-		msg = _("Background product fetch started ({0} items per batch). You can monitor progress in Woo Sync Log.").format(batch_size)
+		msg = _("Product fetch started in background ({0} items per page). You can monitor progress in real-time.").format(batch_size)
 		if frappe.request:
 			frappe.msgprint(msg, title=_("Fetch Queued"), indicator="blue")
 		return {
@@ -227,6 +464,7 @@ def fetch_items_from_woocommerce(auto_create_missing=True, batch_size=10, backgr
 	total_fetched = 0
 	auto_linked = 0
 	created_erpnext_items = 0
+	skipped_empty = 0
 
 	while True:
 		req_params = {"per_page": batch_size, "page": page}
@@ -292,6 +530,12 @@ def fetch_items_from_woocommerce(auto_create_missing=True, batch_size=10, backgr
 			permalink = prod.get("permalink", "")
 			description = html.unescape(prod.get("description", "") or "")
 			short_description = html.unescape(prod.get("short_description", "") or "")
+
+			# Skip empty products if enabled
+			if skip_empty_products and (not sku or not name):
+				logger.info(f"[FetchProducts] Skipping empty product ID {woo_id} (sku={sku}, name={name})")
+				skipped_empty += 1
+				continue
 
 			if not sku:
 				sku = f"WC-{woo_id}"
@@ -368,9 +612,329 @@ def fetch_items_from_woocommerce(auto_create_missing=True, batch_size=10, backgr
 	)
 	if created_erpnext_items > 0:
 		msg += _("<br>✨ Created <b>{0}</b> new ERPNext Item Master records.").format(created_erpnext_items)
+	if skipped_empty > 0:
+		msg += _("<br>⏭️ Skipped <b>{0}</b> empty products.").format(skipped_empty)
 
 	frappe.msgprint(msg, title=_("Fetch Complete"), indicator="green")
-	return {"fetched": total_fetched, "linked": auto_linked, "created": created_erpnext_items}
+	return {"fetched": total_fetched, "linked": auto_linked, "created": created_erpnext_items, "skipped": skipped_empty}
+
+
+def fetch_items_from_woocommerce_background(
+	auto_create_missing=False,
+	batch_size=10,
+	skip_empty_products=False,
+	user=None
+):
+	"""Background worker function for fetching products from WooCommerce.
+	
+	This function is executed by the background worker process.
+	It performs pagination, per-page commits, per-product savepoints,
+	and real-time progress updates.
+	
+	Args:
+		auto_create_missing (bool): Auto-create ERPNext Items for unmatched products (default False)
+		batch_size (int): Products per API page request
+		skip_empty_products (bool): Skip products with empty name or SKU
+		user (str): User who initiated the fetch (for realtime notifications)
+	
+	Returns:
+		dict: Statistics (fetched, linked, created, skipped, failed counts)
+	"""
+	import json as _json
+	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
+	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
+
+	# Initialize logger with site-specific logging
+	logger = frappe.logger("woo_prime", allow_site=True, max_size=1, file_count=50)
+	
+	# Load Woo Settings and get default Item Group
+	settings = frappe.get_single("Woo Settings")
+	default_item_group = getattr(settings, "default_item_group", None)
+	if not default_item_group:
+		default_item_group = frappe.db.get_value("Item Group", {"is_group": 0}, "name") or "All Item Groups"
+	
+	api = get_woo_api()
+	
+	# Initialize counters
+	page = 1
+	total_fetched = 0
+	auto_linked = 0
+	created_erpnext_items = 0
+	skipped_empty = 0
+	failed_products = 0
+	
+	# Send initial progress notification with status "starting"
+	_publish_progress(
+		user=user,
+		operation="fetch_products",
+		current_page=0,
+		total_fetched=0,
+		linked=0,
+		created=0,
+		skipped=0,
+		failed=0,
+		status="starting",
+		message="Initializing product fetch..."
+	)
+	
+	logger.info(f"[FetchProducts] Starting background fetch: auto_create_missing={auto_create_missing}, batch_size={batch_size}, skip_empty_products={skip_empty_products}")
+	
+	try:
+		# Main pagination loop
+		while True:
+			req_params = {"per_page": batch_size, "page": page}
+			logger.info(f"[FetchProducts] Page {page} — GET products | params={req_params}")
+			
+			# Send progress update
+			_publish_progress(
+				user=user,
+				operation="fetch_products",
+				current_page=page,
+				total_fetched=total_fetched,
+				linked=auto_linked,
+				created=created_erpnext_items,
+				skipped=skipped_empty,
+				failed=failed_products,
+				status="fetching",
+				message=f"Fetching page {page}..."
+			)
+			
+			# API request
+			response = api.get("products", params=req_params)
+			
+			# Build request/response data for Woo Sync Log
+			request_log = _json.dumps({
+				"method": "GET",
+				"endpoint": "products",
+				"params": req_params,
+				"page": page
+			}, indent=2, default=str)
+			
+			resp_body_preview = (response.text or "")[:5000]
+			response_log = _json.dumps({
+				"status_code": response.status_code,
+				"headers": dict(response.headers) if hasattr(response, "headers") else {},
+				"body_preview": resp_body_preview
+			}, indent=2, default=str)
+			
+			# Handle API errors
+			if response.status_code != 200:
+				error_details = (response.text or "").strip()[:300]
+				if not error_details:
+					reason = getattr(response, "reason", "No details returned")
+					error_details = f"HTTP Status {response.status_code} ({reason})"
+				
+				logger.error(f"[FetchProducts] FAILED page {page} — HTTP {response.status_code}: {error_details}")
+				
+				# Log failed request
+				create_log(
+					sync_type="Item",
+					direction="Incoming",
+					status="Failed",
+					request_data=request_log,
+					response_data=response_log,
+					error_message=f"HTTP {response.status_code}: {error_details}"
+				)
+				
+				# Send error notification
+				_publish_progress(
+					user=user,
+					operation="fetch_products",
+					current_page=page,
+					total_fetched=total_fetched,
+					linked=auto_linked,
+					created=created_erpnext_items,
+					skipped=skipped_empty,
+					failed=failed_products,
+					status="error",
+					message=f"API Error: {error_details}"
+				)
+				
+				# Break pagination on API error
+				break
+			
+			products = response.json()
+			logger.info(f"[FetchProducts] Page {page} — received {len(products)} products")
+			
+			# Check for end of pagination
+			if not products:
+				break
+			
+			# Log successful batch fetch
+			create_log(
+				sync_type="Item",
+				direction="Incoming",
+				status="Success",
+				request_data=request_log,
+				response_data=response_log
+			)
+			
+			# Process products with per-product savepoints
+			page_linked = 0
+			page_created = 0
+			page_skipped = 0
+			page_failed = 0
+			
+			for prod in products:
+				woo_id = prod.get("id")
+				sku = (prod.get("sku") or "").strip()
+				name = html.unescape(prod.get("name") or "")
+				
+				# Skip empty products if enabled
+				if skip_empty_products and (not sku or not name):
+					logger.info(f"[FetchProducts] Skipping empty product ID {woo_id} (sku={sku}, name={name})")
+					page_skipped += 1
+					skipped_empty += 1
+					continue
+				
+				# Process product with savepoint
+				savepoint_name = f"product_{woo_id}"
+				try:
+					frappe.db.savepoint(savepoint_name)
+					
+					result = _process_single_product(
+						prod=prod,
+						settings=settings,
+						default_item_group=default_item_group,
+						auto_create_missing=auto_create_missing,
+						logger=logger
+					)
+					
+					# Update counters based on result
+					if result["linked"]:
+						page_linked += 1
+						auto_linked += 1
+					if result["created"]:
+						page_created += 1
+						created_erpnext_items += 1
+					
+					total_fetched += 1
+					
+				except Exception as prod_error:
+					# Rollback to savepoint
+					frappe.db.rollback(savepoint_name)
+					
+					# Log error with traceback
+					error_traceback = frappe.get_traceback()
+					logger.error(f"[FetchProducts] Product {woo_id} failed: {prod_error}\n{error_traceback}")
+					
+					# Create Individual_Error_Log
+					create_log(
+						sync_type="Item",
+						direction="Incoming",
+						status="Failed",
+						woo_reference_id=str(woo_id),
+						error_message=f"Product {woo_id} (SKU: {sku}): {str(prod_error)[:500]}"
+					)
+					
+					page_failed += 1
+					failed_products += 1
+			
+			# Commit page
+			try:
+				frappe.db.commit()
+				logger.info(
+					f"[FetchProducts] Page {page} committed: "
+					f"{len(products)} products, {page_linked} linked, "
+					f"{page_created} created, {page_skipped} skipped, {page_failed} failed"
+				)
+			except Exception as commit_error:
+				logger.error(f"[FetchProducts] Commit failed for page {page}: {commit_error}")
+				frappe.db.rollback()
+				
+				# Send error notification
+				_publish_progress(
+					user=user,
+					operation="fetch_products",
+					current_page=page,
+					total_fetched=total_fetched,
+					linked=auto_linked,
+					created=created_erpnext_items,
+					skipped=skipped_empty,
+					failed=failed_products,
+					status="error",
+					message=f"Database commit failed: {str(commit_error)[:200]}"
+				)
+				break
+			
+			# Send progress update after page commit
+			_publish_progress(
+				user=user,
+				operation="fetch_products",
+				current_page=page,
+				total_fetched=total_fetched,
+				linked=auto_linked,
+				created=created_erpnext_items,
+				skipped=skipped_empty,
+				failed=failed_products,
+				status="in_progress",
+				message=f"Page {page} complete ({len(products)} products processed)"
+			)
+			
+			page += 1
+		
+		# Send final completion notification
+		msg = _(
+			"✅ Fetched <b>{0}</b> products from WooCommerce!<br>"
+			"🔗 Automatically linked <b>{1}</b> items to ERPNext Item Master."
+		).format(total_fetched, auto_linked)
+		
+		if created_erpnext_items > 0:
+			msg += _("<br>✨ Created <b>{0}</b> new ERPNext Item Master records.").format(created_erpnext_items)
+		
+		if skipped_empty > 0:
+			msg += _("<br>⏭️ Skipped <b>{0}</b> empty products.").format(skipped_empty)
+		
+		if failed_products > 0:
+			msg += _("<br>⚠️ <b>{0}</b> products failed (see Woo Sync Log).").format(failed_products)
+		
+		_publish_progress(
+			user=user,
+			operation="fetch_products",
+			current_page=page - 1,
+			total_fetched=total_fetched,
+			linked=auto_linked,
+			created=created_erpnext_items,
+			skipped=skipped_empty,
+			failed=failed_products,
+			status="completed",
+			message=msg
+		)
+		
+		logger.info(
+			f"[FetchProducts] Completed: {total_fetched} fetched, {auto_linked} linked, "
+			f"{created_erpnext_items} created, {skipped_empty} skipped, {failed_products} failed"
+		)
+		
+		return {
+			"status": "success",
+			"fetched": total_fetched,
+			"linked": auto_linked,
+			"created": created_erpnext_items,
+			"skipped": skipped_empty,
+			"failed": failed_products
+		}
+		
+	except Exception as e:
+		# Fatal error
+		error_traceback = frappe.get_traceback()
+		logger.error(f"[FetchProducts] Fatal error: {e}\n{error_traceback}")
+		
+		# Send error notification
+		_publish_progress(
+			user=user,
+			operation="fetch_products",
+			current_page=page,
+			total_fetched=total_fetched,
+			linked=auto_linked,
+			created=created_erpnext_items,
+			skipped=skipped_empty,
+			failed=failed_products,
+			status="error",
+			message=f"Fatal error: {str(e)[:200]}"
+		)
+		
+		raise
 
 
 @frappe.whitelist()

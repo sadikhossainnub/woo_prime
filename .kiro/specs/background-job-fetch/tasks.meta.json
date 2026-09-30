@@ -1,0 +1,493 @@
+{
+  "pbtResults": {},
+  "executionHistory": {
+    "1.1 Create helper functions for background job infrastructure": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776448377
+      },
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776470403
+      },
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790785750913
+      }
+    ],
+    "2.1 Update `fetch_items_from_woocommerce()` entry point function": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776448562
+      },
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790785759981
+      },
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790786418850
+      }
+    ],
+    "2.2 Create `fetch_items_from_woocommerce_background()` worker function": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776448841
+      },
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790786427040
+      },
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790787258784
+      }
+    ],
+    "2.3 Implement per-page API request and response handling": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776448971
+      },
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790787270157
+      },
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790787500781
+      }
+    ],
+    "2.4 Implement per-product processing with savepoints": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776449041
+      },
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790787513800
+      },
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790788403966
+      }
+    ],
+    "2.5 Create `_process_single_product()` helper function": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776449122
+      },
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790786427504
+      },
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790787259635
+      }
+    ],
+    "2.6 Implement per-page commit and progress notifications": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776449188
+      },
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790788411870
+      }
+    ],
+    "2.7 Implement final completion and error handling": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776449261
+      },
+      {
+        "executionId": "807005a1-7cdb-40f5-b7d5-983c9df234d8",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790794675242
+      }
+    ],
+    "2.8 Add success logging for product page fetches": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776449337
+      },
+      {
+        "executionId": "807005a1-7cdb-40f5-b7d5-983c9df234d8",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790794675930
+      }
+    ],
+    "3.1 Update `sync_categories_from_woo()` entry point function": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776449405
+      },
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790785760264
+      },
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790786419804
+      }
+    ],
+    "3.2 Create `sync_categories_from_woo_background()` worker function": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776449477
+      },
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790787271033
+      },
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790787501843
+      }
+    ],
+    "3.3 Implement Pass 2A: Create/update category records with savepoints": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776449588
+      },
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790787514068
+      },
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790788403378
+      }
+    ],
+    "3.4 Implement Pass 2B: Link parent-child relationships": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776449729
+      },
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790788412178
+      },
+      {
+        "executionId": "807005a1-7cdb-40f5-b7d5-983c9df234d8",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790794384820
+      },
+      {
+        "executionId": "807005a1-7cdb-40f5-b7d5-983c9df234d8",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790794398780
+      },
+      {
+        "executionId": "807005a1-7cdb-40f5-b7d5-983c9df234d8",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790794653173
+      }
+    ],
+    "3.5 Implement tree rebuild and completion": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776449807
+      },
+      {
+        "executionId": "807005a1-7cdb-40f5-b7d5-983c9df234d8",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790794676696
+      }
+    ],
+    "3.6 Add success logging for category page fetches": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776449888
+      },
+      {
+        "executionId": "807005a1-7cdb-40f5-b7d5-983c9df234d8",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790794677503
+      }
+    ],
+    "4.1 Update Woo Settings DocType JSON schema": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776450016
+      },
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776471098
+      },
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790785750474
+      }
+    ],
+    "5.1 Implement product fetch button with dialog": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776450143
+      },
+      {
+        "executionId": "807005a1-7cdb-40f5-b7d5-983c9df234d8",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790794770149
+      }
+    ],
+    "5.2 Implement category fetch button with confirmation": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776450212
+      },
+      {
+        "executionId": "807005a1-7cdb-40f5-b7d5-983c9df234d8",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790794771010
+      }
+    ],
+    "5.3 Implement progress dialog UI component": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776450290
+      },
+      {
+        "executionId": "807005a1-7cdb-40f5-b7d5-983c9df234d8",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790794771833
+      }
+    ],
+    "5.4 Implement realtime progress subscription": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776450359
+      },
+      {
+        "executionId": "807005a1-7cdb-40f5-b7d5-983c9df234d8",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790794772666
+      }
+    ],
+    "5.5 Implement progress dialog update logic": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776450430
+      },
+      {
+        "executionId": "807005a1-7cdb-40f5-b7d5-983c9df234d8",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790794773499
+      }
+    ],
+    "6.1 Implement Individual_Error_Log creation for product failures": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776450506
+      },
+      {
+        "executionId": "807005a1-7cdb-40f5-b7d5-983c9df234d8",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790794774934
+      }
+    ],
+    "6.2 Implement Individual_Error_Log creation for category failures": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776450578
+      },
+      {
+        "executionId": "807005a1-7cdb-40f5-b7d5-983c9df234d8",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790794776099
+      }
+    ],
+    "7. Checkpoint - Test background job execution": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776450647
+      }
+    ],
+    "8.1 Test skipping products with empty name": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776450727
+      }
+    ],
+    "8.2 Test skipping products with empty SKU": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776450793
+      }
+    ],
+    "8.3 Test processing empty products when flag is disabled": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776450861
+      }
+    ],
+    "9.1 Test synchronous execution mode": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776450928
+      }
+    ],
+    "9.2 Test string parameter parsing": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776451006
+      }
+    ],
+    "9.3 Test duplicate prevention for products": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776451109
+      }
+    ],
+    "9.4 Test duplicate prevention for categories": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776451180
+      }
+    ],
+    "9.5 Test matching logic preservation for products": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776451262
+      }
+    ],
+    "9.6 Test category hierarchy preservation": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776451414
+      }
+    ],
+    "10.1 Test large product fetch (1000+ products)": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776451498
+      }
+    ],
+    "10.2 Test category fetch with deep hierarchy": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776451577
+      }
+    ],
+    "10.3 Test error resilience": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776451647
+      }
+    ],
+    "10.4 Test API error handling": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776451709
+      }
+    ],
+    "10.5 Test realtime notifications in browser": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776451775
+      }
+    ],
+    "11. Final checkpoint - Ensure all tests pass and requirements are met": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790776451843
+      }
+    ],
+    "4. Add skip_empty_products configuration field to Woo Settings": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790785750598
+      }
+    ],
+    "1. Set up helper functions and utilities": [
+      {
+        "executionId": "1bb962d6-19b2-4d0d-871b-50a23ac876ea",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790785751049
+      }
+    ],
+    "3. Implement category fetch background job infrastructure": [
+      {
+        "executionId": "807005a1-7cdb-40f5-b7d5-983c9df234d8",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790794677583
+      }
+    ],
+    "5. Update UI JavaScript for Woo Settings form": [
+      {
+        "executionId": "807005a1-7cdb-40f5-b7d5-983c9df234d8",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790794773699
+      }
+    ],
+    "6. Add comprehensive error logging": [
+      {
+        "executionId": "807005a1-7cdb-40f5-b7d5-983c9df234d8",
+        "chatSessionId": "sess_87257a39-9452-4b20-aa83-9c7327447736",
+        "timestamp": 1790794776162
+      }
+    ]
+  }
+}
