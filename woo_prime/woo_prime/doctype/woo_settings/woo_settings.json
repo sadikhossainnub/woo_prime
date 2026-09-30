@@ -1,7 +1,6 @@
 {
  "actions": [],
- "allow_rename": 0,
- "creation": "2026-08-11 02:50:00.000000",
+ "creation": "2026-08-11 02:50:00",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
@@ -17,7 +16,6 @@
   "generate_secret_btn",
   "fetch_categories_btn",
   "fetch_items_btn",
-
   "webhook_section",
   "webhook_secret",
   "column_break_webhook",
@@ -70,17 +68,18 @@
    "label": "Enabled"
   },
   {
+   "description": "e.g. https://shop.example.com (without trailing slash)",
    "fieldname": "woo_site_url",
    "fieldtype": "Data",
+   "in_list_view": 1,
    "label": "WooCommerce Site URL",
-   "reqd": 1,
-   "description": "e.g. https://shop.example.com (without trailing slash)"
+   "reqd": 1
   },
   {
+   "description": "Custom User-Agent header sent to WooCommerce (Default: curl/8.5.0)",
    "fieldname": "api_user_agent",
    "fieldtype": "Data",
-   "label": "API User Agent",
-   "description": "Custom User-Agent header sent to WooCommerce (Default: curl/8.5.0)"
+   "label": "API User Agent"
   },
   {
    "fieldname": "column_break_conn",
@@ -89,12 +88,14 @@
   {
    "fieldname": "consumer_key",
    "fieldtype": "Data",
+   "in_list_view": 1,
    "label": "Consumer Key",
    "reqd": 1
   },
   {
    "fieldname": "consumer_secret",
    "fieldtype": "Password",
+   "in_list_view": 1,
    "label": "Consumer Secret",
    "reqd": 1
   },
@@ -104,10 +105,10 @@
    "label": "Test Connection"
   },
   {
+   "description": "Shared token used to authenticate guest requests from WordPress plugin (X-Woo-Prime-Token)",
    "fieldname": "api_shared_secret",
    "fieldtype": "Password",
-   "label": "API Shared Secret",
-   "description": "Shared token used to authenticate guest requests from WordPress plugin (X-Woo-Prime-Token)"
+   "label": "API Shared Secret"
   },
   {
    "fieldname": "generate_secret_btn",
@@ -119,7 +120,6 @@
    "fieldtype": "Button",
    "label": "Fetch Categories from WooCommerce"
   },
-
   {
    "fieldname": "fetch_items_btn",
    "fieldtype": "Button",
@@ -131,21 +131,21 @@
    "label": "Webhook Settings"
   },
   {
+   "description": "Used to verify incoming webhook signatures (HMAC-SHA256)",
    "fieldname": "webhook_secret",
    "fieldtype": "Password",
-   "label": "Webhook Secret",
-   "description": "Used to verify incoming webhook signatures (HMAC-SHA256)"
+   "label": "Webhook Secret"
   },
   {
    "fieldname": "column_break_webhook",
    "fieldtype": "Column Break"
   },
   {
+   "description": "Copy and paste this URL into WooCommerce (Settings \u2192 Advanced \u2192 Webhooks)",
    "fieldname": "webhook_delivery_url",
    "fieldtype": "Data",
    "label": "Webhook Delivery URL",
-   "read_only": 1,
-   "description": "Copy and paste this URL into WooCommerce (Settings → Advanced → Webhooks)"
+   "read_only": 1
   },
   {
    "fieldname": "wp_plugin_section",
@@ -153,9 +153,9 @@
    "label": "WordPress Connector Plugin"
   },
   {
-   "options": "<p>Download and install the Woo Prime Connector plugin on your WooCommerce website to enable real-time Pricing Rules and Loyalty Points redemption.</p>",
    "fieldname": "plugin_info_html",
-   "fieldtype": "HTML"
+   "fieldtype": "HTML",
+   "options": "<p>Download and install the Woo Prime Connector plugin on your WooCommerce website to enable real-time Pricing Rules and Loyalty Points redemption.</p>"
   },
   {
    "fieldname": "download_plugin_btn",
@@ -170,6 +170,7 @@
   {
    "fieldname": "default_company",
    "fieldtype": "Link",
+   "in_list_view": 1,
    "label": "Default Company",
    "options": "Company",
    "reqd": 1
@@ -207,11 +208,12 @@
    "reqd": 1
   },
   {
+   "description": "Used when auto-creating ERPNext items from WooCommerce products",
    "fieldname": "default_item_group",
    "fieldtype": "Link",
    "label": "Default Item Group",
    "options": "Item Group",
-   "description": "Used when auto-creating ERPNext items from WooCommerce products"
+   "reqd": 1
   },
   {
    "fieldname": "order_settings_section",
@@ -232,45 +234,45 @@
    "options": "Line Item\nTaxes and Charges Table"
   },
   {
+   "depends_on": "eval:doc.shipping_sync_type=='Line Item'",
+   "description": "ERPNext Item used to represent WooCommerce shipping charges in Items table",
    "fieldname": "shipping_item",
    "fieldtype": "Link",
    "label": "Shipping Charges Item",
-   "options": "Item",
-   "depends_on": "eval:doc.shipping_sync_type=='Line Item'",
-   "description": "ERPNext Item used to represent WooCommerce shipping charges in Items table"
+   "options": "Item"
   },
   {
+   "depends_on": "eval:doc.shipping_sync_type=='Taxes and Charges Table'",
+   "description": "Income/Expense Account for Shipping Charges in Taxes & Charges table",
    "fieldname": "shipping_charge_account",
    "fieldtype": "Link",
    "label": "Shipping Charge Account",
-   "options": "Account",
-   "depends_on": "eval:doc.shipping_sync_type=='Taxes and Charges Table'",
-   "description": "Income/Expense Account for Shipping Charges in Taxes & Charges table"
+   "options": "Account"
   },
   {
+   "description": "Default ERPNext Shipping Rule to apply on incoming WooCommerce orders if no specific mapping matches",
    "fieldname": "default_shipping_rule",
    "fieldtype": "Link",
    "label": "Default Shipping Rule",
-   "options": "Shipping Rule",
-   "description": "Default ERPNext Shipping Rule to apply on incoming WooCommerce orders if no specific mapping matches"
+   "options": "Shipping Rule"
   },
   {
+   "description": "Map WooCommerce Shipping Zone / Method names (e.g. Inside Dhaka, Outside Dhaka) to ERPNext Shipping Rules",
    "fieldname": "shipping_rule_mappings",
    "fieldtype": "Table",
    "label": "Shipping Zone / Method Mappings",
-   "options": "Woo Shipping Rule Mapping",
-   "description": "Map WooCommerce Shipping Zone / Method names (e.g. Inside Dhaka, Outside Dhaka) to ERPNext Shipping Rules"
+   "options": "Woo Shipping Rule Mapping"
   },
   {
    "fieldname": "column_break_order",
    "fieldtype": "Column Break"
   },
   {
+   "description": "Sales Type to set on Sales Orders created from WooCommerce orders",
    "fieldname": "sales_type",
    "fieldtype": "Select",
    "label": "Sales Type",
-   "options": "\nInbound\nOutbound\nWebsite\nAds",
-   "description": "Sales Type to set on Sales Orders created from WooCommerce orders"
+   "options": "\nInbound\nOutbound\nWebsite\nAds"
   },
   {
    "default": "1",
@@ -291,11 +293,11 @@
    "label": "Send Email Notification on New Order"
   },
   {
+   "depends_on": "eval:doc.order_email_notification==1",
+   "description": "Email address where order notifications will be sent",
    "fieldname": "notification_email",
    "fieldtype": "Data",
-   "label": "Notification Email Address",
-   "depends_on": "eval:doc.order_email_notification==1",
-   "description": "Email address where order notifications will be sent"
+   "label": "Notification Email Address"
   },
   {
    "fieldname": "sync_features_section",
@@ -306,15 +308,15 @@
    "default": "1",
    "fieldname": "enable_stock_sync",
    "fieldtype": "Check",
-   "label": "Enable Stock Sync (ERPNext → WooCommerce)"
+   "label": "Enable Stock Sync (ERPNext \u2192 WooCommerce)"
   },
   {
    "default": "Hourly",
+   "depends_on": "eval:doc.enable_stock_sync==1",
    "fieldname": "stock_sync_interval",
    "fieldtype": "Select",
    "label": "Stock Sync Schedule",
-   "options": "Hourly\nEvery 30 Minutes\nEvery 15 Minutes\nEvery 6 Hours\nDaily",
-   "depends_on": "eval:doc.enable_stock_sync==1"
+   "options": "Hourly\nEvery 30 Minutes\nEvery 15 Minutes\nEvery 6 Hours\nDaily"
   },
   {
    "fieldname": "column_break_sync",
@@ -324,29 +326,29 @@
    "default": "1",
    "fieldname": "enable_price_sync",
    "fieldtype": "Check",
-   "label": "Enable Price Sync (ERPNext → WooCommerce)"
+   "label": "Enable Price Sync (ERPNext \u2192 WooCommerce)"
   },
   {
    "default": "Daily",
+   "depends_on": "eval:doc.enable_price_sync==1",
    "fieldname": "price_sync_interval",
    "fieldtype": "Select",
    "label": "Price Sync Schedule",
-   "options": "Daily\nHourly\nEvery 6 Hours",
-   "depends_on": "eval:doc.enable_price_sync==1"
+   "options": "Daily\nHourly\nEvery 6 Hours"
   },
   {
    "default": "1",
    "fieldname": "enable_order_sync",
    "fieldtype": "Check",
-   "label": "Enable Automatic Order Sync (WooCommerce → ERPNext)"
+   "label": "Enable Automatic Order Sync (WooCommerce \u2192 ERPNext)"
   },
   {
    "default": "5",
+   "depends_on": "eval:doc.enable_order_sync==1",
+   "description": "System will automatically fetch WooCommerce orders every X minutes and create Sales Orders",
    "fieldname": "order_sync_interval",
    "fieldtype": "Int",
-   "label": "Order Sync Interval (Minutes)",
-   "description": "System will automatically fetch WooCommerce orders every X minutes and create Sales Orders",
-   "depends_on": "eval:doc.enable_order_sync==1"
+   "label": "Order Sync Interval (Minutes)"
   },
   {
    "fieldname": "last_order_sync_time",
@@ -356,16 +358,15 @@
   },
   {
    "default": "2",
+   "description": "Number of past days to check for missing orders during daily reconciliation",
    "fieldname": "reconcile_days",
    "fieldtype": "Int",
-   "label": "Order Reconciliation Lookback (Days)",
-   "description": "Number of past days to check for missing orders during daily reconciliation"
+   "label": "Order Reconciliation Lookback (Days)"
   }
  ],
- "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-09-18 22:58:00.000000",
+ "modified": "2026-09-30 07:36:01.398977",
  "modified_by": "Administrator",
  "module": "Woo Prime",
  "name": "Woo Settings",
@@ -382,7 +383,9 @@
    "write": 1
   }
  ],
+ "row_format": "Dynamic",
  "sort_field": "creation",
  "sort_order": "DESC",
+ "states": [],
  "track_changes": 1
 }

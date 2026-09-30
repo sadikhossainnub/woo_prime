@@ -4,4 +4,4 @@
 
 [post_model_sync]
 # Patches added in this section will be executed after doctypes are migrated
-woo_prime.patches.v1_1.add_settings_fields.execute
+woo_prime.patches.v1_1.add_settings_fields

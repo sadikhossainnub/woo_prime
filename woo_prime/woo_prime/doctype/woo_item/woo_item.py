@@ -183,7 +183,9 @@ def fetch_items_from_woocommerce(auto_create_missing=True):
 	
 	If an ERPNext Item Master record does not exist for a fetched product, it will be automatically created.
 	"""
+	import json as _json
 	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
+	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
 
 	if isinstance(auto_create_missing, str):
 		auto_create_missing = frappe.parse_json(auto_create_missing) if auto_create_missing.startswith("{") else (auto_create_missing.lower() in ("true", "1"))
@@ -193,6 +195,7 @@ def fetch_items_from_woocommerce(auto_create_missing=True):
 	if not default_item_group:
 		default_item_group = frappe.db.get_value("Item Group", {"is_group": 0}, "name") or "All Item Groups"
 
+	logger = frappe.logger("woo_prime", allow_site=True, max_size=1, file_count=50)
 	api = get_woo_api()
 	page = 1
 	total_fetched = 0
@@ -200,15 +203,59 @@ def fetch_items_from_woocommerce(auto_create_missing=True):
 	created_erpnext_items = 0
 
 	while True:
-		response = api.get("products", params={"per_page": 100, "page": page})
+		req_params = {"per_page": 100, "page": page}
+		logger.info(f"[FetchProducts] Requesting page {page} — GET products | params={req_params}")
+
+		response = api.get("products", params=req_params)
+
+		# Build request/response data for Woo Sync Log
+		request_log = _json.dumps({
+			"method": "GET",
+			"endpoint": "products",
+			"params": req_params,
+			"url": response.url if hasattr(response, "url") else "",
+		}, indent=2, default=str)
+
+		# Truncate response body to 5000 chars to avoid DB bloat
+		resp_body_preview = (response.text or "")[:5000]
+		response_log = _json.dumps({
+			"status_code": response.status_code,
+			"headers": dict(response.headers) if hasattr(response, "headers") else {},
+			"body_preview": resp_body_preview,
+		}, indent=2, default=str)
+
 		if response.status_code != 200:
 			error_details = (response.text or "").strip()[:300]
 			if not error_details:
 				reason = getattr(response, "reason", "No details returned")
 				error_details = f"HTTP Status {response.status_code} ({reason})"
+
+			logger.error(f"[FetchProducts] FAILED page {page} — HTTP {response.status_code}: {error_details}")
+
+			# Log failed request to Woo Sync Log
+			create_log(
+				sync_type="Item",
+				direction="Incoming",
+				status="Failed",
+				request_data=request_log,
+				response_data=response_log,
+				error_message=f"HTTP {response.status_code}: {error_details}",
+			)
 			frappe.throw(_("Failed to fetch products from WooCommerce: {0}").format(error_details))
 
 		products = response.json()
+
+		logger.info(f"[FetchProducts] Page {page} — HTTP {response.status_code}, received {len(products)} products")
+
+		# Log successful page fetch to Woo Sync Log
+		create_log(
+			sync_type="Item",
+			direction="Incoming",
+			status="Success",
+			request_data=request_log,
+			response_data=response_log,
+		)
+
 		if not products:
 			break
 
@@ -410,4 +457,66 @@ def create_erpnext_items_from_woo(items):
 		indicator="green",
 	)
 	return created_count
+
+
+@frappe.whitelist()
+def publish_item_from_item_master(item_code):
+	"""Publish an ERPNext Item to WooCommerce directly from the Item Master form.
+
+	Finds or auto-creates the linked Woo Item, then triggers publish_to_woocommerce.
+
+	Args:
+		item_code: ERPNext Item code
+
+	Returns:
+		dict with woo_product_id, woo_product_url, woo_item_name
+	"""
+	if not item_code or not frappe.db.exists("Item", item_code):
+		frappe.throw(_("Item {0} not found.").format(item_code))
+
+	item = frappe.get_doc("Item", item_code)
+
+	# Find existing Woo Item linked to this item_code
+	woo_item_name = frappe.db.get_value("Woo Item", {"item_code": item_code})
+
+	if not woo_item_name:
+		# Also try matching by SKU = item_code
+		woo_item_name = frappe.db.get_value("Woo Item", {"sku": item_code})
+
+	if woo_item_name:
+		woo_item = frappe.get_doc("Woo Item", woo_item_name)
+		# Ensure item_code is linked
+		if not woo_item.item_code:
+			woo_item.item_code = item_code
+			woo_item.save(ignore_permissions=True)
+	else:
+		# Auto-create a Woo Item for this ERPNext Item
+		settings = frappe.get_single("Woo Settings")
+		price_list = getattr(settings, "default_price_list", None) or "Standard Selling"
+
+		from woo_prime.api.sync import _get_item_price
+		from frappe.utils import flt
+
+		price = _get_item_price(item_code, price_list)
+
+		woo_item = frappe.new_doc("Woo Item")
+		woo_item.sku = item_code
+		woo_item.item_code = item_code
+		woo_item.item_name = html.unescape(item.item_name or item_code)
+		woo_item.regular_price = flt(price) if price else 0
+		if item.description:
+			woo_item.woo_description = item.description
+		woo_item.save(ignore_permissions=True)
+		frappe.db.commit()
+
+	# Now publish
+	woo_item.publish_to_woocommerce()
+	woo_item.reload()
+
+	return {
+		"woo_product_id": woo_item.woo_product_id,
+		"woo_product_url": woo_item.woo_product_url or "",
+		"woo_item_name": woo_item.name,
+	}
+
 
