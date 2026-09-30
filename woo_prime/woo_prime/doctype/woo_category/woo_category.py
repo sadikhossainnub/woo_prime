@@ -82,6 +82,62 @@ def _parse_int(value, default=10):
 		return default
 
 
+
+
+def _is_within_sync_window():
+	"""Check if current time is within the configured auto sync window.
+	
+	Returns:
+		bool: True if within sync window or schedule is disabled, False otherwise
+	
+	Note:
+		- If enable_auto_sync_schedule is False, always returns True (no restriction)
+		- If times are not configured, always returns True
+		- Silently returns False if outside window (no user notification)
+		- Logs at INFO level when outside window for debugging
+	"""
+	settings = frappe.get_single("Woo Settings")
+	
+	# If schedule is not enabled, allow sync anytime
+	if not getattr(settings, "enable_auto_sync_schedule", 0):
+		return True
+	
+	start_time = getattr(settings, "auto_sync_start_time", None)
+	end_time = getattr(settings, "auto_sync_end_time", None)
+	
+	# If times not configured, allow sync anytime
+	if not start_time or not end_time:
+		return True
+	
+	from datetime import datetime, time as dt_time
+	
+	# Get current time
+	now = datetime.now().time()
+	
+	# Parse time strings if they're strings
+	if isinstance(start_time, str):
+		start_time = datetime.strptime(start_time, "%H:%M:%S").time()
+	if isinstance(end_time, str):
+		end_time = datetime.strptime(end_time, "%H:%M:%S").time()
+	
+	# Handle overnight windows (e.g., 22:00 to 06:00)
+	if start_time <= end_time:
+		# Normal case: start < end (e.g., 02:00 to 06:00)
+		within_window = start_time <= now <= end_time
+	else:
+		# Overnight case: start > end (e.g., 22:00 to 06:00)
+		within_window = now >= start_time or now <= end_time
+	
+	if not within_window:
+		logger = frappe.logger("woo_prime", allow_site=True, max_size=1, file_count=50)
+		logger.info(
+			f"[SyncWindow] Outside sync window (current: {now.strftime('%H:%M:%S')}, "
+			f"window: {start_time.strftime('%H:%M:%S')} - {end_time.strftime('%H:%M:%S')}). "
+			f"Skipping auto sync."
+		)
+	
+	return within_window
+
 def _publish_progress_category(user, current_page, total_synced, status, message):
 	"""Publish real-time progress update for category fetch operations.
 	
@@ -282,6 +338,14 @@ def sync_categories_from_woo_background(user=None):
 	Requirements: 2.1, 2.5, 6.1-6.8, 9.1-9.6, 14.1-14.5
 	"""
 	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
+	
+	# Check if within sync window (silently skip if outside)
+	if not _is_within_sync_window():
+		return {
+			"status": "skipped",
+			"message": "Outside auto sync window",
+			"total_synced": 0
+		}
 	
 	logger = frappe.logger("woo_prime", allow_site=True, max_size=1, file_count=50)
 	

@@ -46,6 +46,9 @@
   "order_email_notification",
   "notification_email",
   "sync_features_section",
+  "enable_auto_sync_schedule",
+  "auto_sync_start_time",
+  "auto_sync_end_time",
   "enable_stock_sync",
   "stock_sync_interval",
   "column_break_sync",
@@ -370,6 +373,27 @@
    "fieldname": "reconcile_days",
    "fieldtype": "Int",
    "label": "Order Reconciliation Lookback (Days)"
+  },
+  {
+   "default": "0",
+   "description": "Enable time window for automatic background sync operations",
+   "fieldname": "enable_auto_sync_schedule",
+   "fieldtype": "Check",
+   "label": "Enable Auto Sync Schedule"
+  },
+  {
+   "depends_on": "eval:doc.enable_auto_sync_schedule==1",
+   "description": "Start time for auto sync window (e.g., 02:00:00 for 2 AM)",
+   "fieldname": "auto_sync_start_time",
+   "fieldtype": "Time",
+   "label": "Auto Sync Start Time"
+  },
+  {
+   "depends_on": "eval:doc.enable_auto_sync_schedule==1",
+   "description": "End time for auto sync window (e.g., 06:00:00 for 6 AM)",
+   "fieldname": "auto_sync_end_time",
+   "fieldtype": "Time",
+   "label": "Auto Sync End Time"
   }
  ],
  "issingle": 1,
