@@ -602,8 +602,13 @@ def sync_categories_from_woo_background(user=None):
 @frappe.whitelist()
 def get_children(doctype, parent=None, is_root=False, **filters):
 	"""Return child categories for tree view."""
-	cond_filters = {"ifnull(`parent_woo_category`, '')": ""}
-	if not is_root:
+	if is_root or is_root == "true":
+		# Get root categories (no parent)
+		cond_filters = [
+			["parent_woo_category", "is", "not set"]
+		]
+	else:
+		# Get children of specific parent
 		cond_filters = {"parent_woo_category": parent}
 
 	categories = frappe.get_all(
