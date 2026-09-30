@@ -71,14 +71,12 @@ frappe.ui.form.on("Woo Settings", {
 			function () {
 				frappe.call({
 					method: "woo_prime.woo_prime.doctype.woo_item.woo_item.fetch_items_from_woocommerce",
-					args: { auto_create_missing: true },
-					freeze: true,
-					freeze_message: __("Fetching products from WooCommerce & auto-linking to Item Master..."),
+					args: { auto_create_missing: true, batch_size: 10, background: true },
 					callback: function (r) {
 						if (r && r.message) {
 							frappe.show_alert({
-								message: __("Fetched {0} products (Linked: {1}, Created: {2})", [r.message.fetched, r.message.linked, r.message.created || 0]),
-								indicator: "green",
+								message: r.message.message || __("Started background product fetch (10 items per batch)..."),
+								indicator: "blue",
 							});
 						}
 					},
@@ -216,14 +214,12 @@ frappe.ui.form.on("Woo Settings", {
 
 		frappe.call({
 			method: "woo_prime.woo_prime.doctype.woo_item.woo_item.fetch_items_from_woocommerce",
-			args: { auto_create_missing: true },
-			freeze: true,
-			freeze_message: __("Fetching products from WooCommerce & auto-linking to Item Master..."),
+			args: { auto_create_missing: true, batch_size: 10, background: true },
 			callback: function (r) {
 				if (r && r.message) {
 					frappe.show_alert({
-						message: __("Fetched {0} products (Linked: {1}, Created: {2})", [r.message.fetched, r.message.linked, r.message.created || 0]),
-						indicator: "green",
+						message: r.message.message || __("Started background product fetch (10 items per batch)..."),
+						indicator: "blue",
 					});
 				}
 			},

@@ -50,11 +50,14 @@ frappe.ui.form.on("Item", {
 				function () {
 					frappe.call({
 						method: "woo_prime.woo_prime.doctype.woo_item.woo_item.fetch_items_from_woocommerce",
-						args: { auto_create_missing: true },
-						freeze: true,
-						freeze_message: __("Fetching products from WooCommerce & auto-linking to Item Master..."),
+						args: { auto_create_missing: true, batch_size: 10, background: true },
 						callback: function (r) {
-							frm.reload_doc();
+							if (r && r.message) {
+								frappe.show_alert({
+									message: r.message.message || __("Started background product fetch (10 items per batch)..."),
+									indicator: "blue",
+								});
+							}
 						},
 					});
 				},

@@ -178,10 +178,10 @@ def bulk_publish(items):
 
 
 @frappe.whitelist()
-def fetch_items_from_woocommerce(auto_create_missing=True):
-	"""Fetch products from WooCommerce, create/update Woo Item records, and auto-link to ERPNext Items by SKU.
+def fetch_items_from_woocommerce(auto_create_missing=True, batch_size=10, background=False):
+	"""Fetch products from WooCommerce in batches (default 10 items per request), create/update Woo Item records, and auto-link to ERPNext Items by SKU.
 	
-	If an ERPNext Item Master record does not exist for a fetched product, it will be automatically created.
+	If background=True, enqueues execution into Frappe background worker and returns immediately.
 	"""
 	import json as _json
 	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
@@ -189,6 +189,32 @@ def fetch_items_from_woocommerce(auto_create_missing=True):
 
 	if isinstance(auto_create_missing, str):
 		auto_create_missing = frappe.parse_json(auto_create_missing) if auto_create_missing.startswith("{") else (auto_create_missing.lower() in ("true", "1"))
+
+	if isinstance(background, str):
+		background = background.lower() in ("true", "1")
+
+	try:
+		batch_size = int(batch_size) if batch_size else 10
+	except (ValueError, TypeError):
+		batch_size = 10
+
+	if background:
+		frappe.enqueue(
+			"woo_prime.woo_prime.doctype.woo_item.woo_item.fetch_items_from_woocommerce",
+			auto_create_missing=auto_create_missing,
+			batch_size=batch_size,
+			background=False,
+			queue="long",
+			timeout=3600,
+			enqueue_after_commit=True,
+		)
+		msg = _("Background product fetch started ({0} items per batch). You can monitor progress in Woo Sync Log.").format(batch_size)
+		if frappe.request:
+			frappe.msgprint(msg, title=_("Fetch Queued"), indicator="blue")
+		return {
+			"status": "queued",
+			"message": msg,
+		}
 
 	settings = frappe.get_single("Woo Settings")
 	default_item_group = getattr(settings, "default_item_group", None)
@@ -203,7 +229,7 @@ def fetch_items_from_woocommerce(auto_create_missing=True):
 	created_erpnext_items = 0
 
 	while True:
-		req_params = {"per_page": 100, "page": page}
+		req_params = {"per_page": batch_size, "page": page}
 		logger.info(f"[FetchProducts] Requesting page {page} — GET products | params={req_params}")
 
 		response = api.get("products", params=req_params)
@@ -247,7 +273,10 @@ def fetch_items_from_woocommerce(auto_create_missing=True):
 
 		logger.info(f"[FetchProducts] Page {page} — HTTP {response.status_code}, received {len(products)} products")
 
-		# Log successful page fetch to Woo Sync Log
+		if not products:
+			break
+
+		# Log successful batch fetch to Woo Sync Log
 		create_log(
 			sync_type="Item",
 			direction="Incoming",
@@ -255,9 +284,6 @@ def fetch_items_from_woocommerce(auto_create_missing=True):
 			request_data=request_log,
 			response_data=response_log,
 		)
-
-		if not products:
-			break
 
 		for prod in products:
 			woo_id = prod.get("id")
