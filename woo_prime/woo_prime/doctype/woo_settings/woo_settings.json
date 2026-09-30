@@ -16,6 +16,7 @@
   "generate_secret_btn",
   "fetch_categories_btn",
   "fetch_items_btn",
+  "skip_empty_products",
   "webhook_section",
   "webhook_secret",
   "column_break_webhook",
@@ -124,6 +125,13 @@
    "fieldname": "fetch_items_btn",
    "fieldtype": "Button",
    "label": "Fetch Items from WooCommerce"
+  },
+  {
+   "default": "0",
+   "description": "Skip products with empty name or SKU during fetch from WooCommerce",
+   "fieldname": "skip_empty_products",
+   "fieldtype": "Check",
+   "label": "Skip Empty Products"
   },
   {
    "fieldname": "webhook_section",
