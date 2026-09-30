@@ -8,12 +8,16 @@
   "connection_section",
   "enabled",
   "woo_site_url",
+  "api_user_agent",
   "column_break_conn",
   "consumer_key",
   "consumer_secret",
   "test_connection_btn",
+  "api_shared_secret",
+  "generate_secret_btn",
   "fetch_categories_btn",
   "fetch_items_btn",
+
   "webhook_section",
   "webhook_secret",
   "column_break_webhook",
@@ -73,6 +77,12 @@
    "description": "e.g. https://shop.example.com (without trailing slash)"
   },
   {
+   "fieldname": "api_user_agent",
+   "fieldtype": "Data",
+   "label": "API User Agent",
+   "description": "Custom User-Agent header sent to WooCommerce (Default: curl/8.5.0)"
+  },
+  {
    "fieldname": "column_break_conn",
    "fieldtype": "Column Break"
   },
@@ -94,10 +104,22 @@
    "label": "Test Connection"
   },
   {
+   "fieldname": "api_shared_secret",
+   "fieldtype": "Password",
+   "label": "API Shared Secret",
+   "description": "Shared token used to authenticate guest requests from WordPress plugin (X-Woo-Prime-Token)"
+  },
+  {
+   "fieldname": "generate_secret_btn",
+   "fieldtype": "Button",
+   "label": "Generate Shared Secret"
+  },
+  {
    "fieldname": "fetch_categories_btn",
    "fieldtype": "Button",
    "label": "Fetch Categories from WooCommerce"
   },
+
   {
    "fieldname": "fetch_items_btn",
    "fieldtype": "Button",

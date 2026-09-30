@@ -6,9 +6,13 @@ from frappe import _
 from frappe.utils import add_days, today
 
 
+from woo_prime.api.auth import verify_api_secret
+
+
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
 def get_dashboard_stats():
 	"""Endpoint for WordPress Admin Dashboard and Widget to display sync statistics & transaction logs."""
+	verify_api_secret()
 	try:
 		settings = frappe.get_single("Woo Settings")
 		if not settings.enabled:
@@ -42,7 +46,7 @@ def get_dashboard_stats():
 			as_dict=True,
 		)
 
-		# Fetch top 30 recent sync transaction logs
+		# Fetch top 30 recent sync transaction logs (excluding request_data and response_data for security/PII protection)
 		logs = frappe.db.get_all(
 			"Woo Sync Log",
 			fields=[
@@ -53,8 +57,6 @@ def get_dashboard_stats():
 				"reference_doctype",
 				"reference_name",
 				"woo_reference_id",
-				"request_data",
-				"response_data",
 				"error_message",
 				"creation",
 			],
@@ -62,10 +64,12 @@ def get_dashboard_stats():
 			limit=30,
 		)
 
-		# Format timestamps
+		# Format timestamps and truncate error messages
 		for log in logs:
 			if log.get("creation"):
 				log["formatted_time"] = str(log["creation"])[:19]
+			if log.get("error_message"):
+				log["error_message"] = str(log["error_message"])[:300]
 
 		return {
 			"status": "success",
@@ -77,6 +81,9 @@ def get_dashboard_stats():
 			"last_synced_order": last_order,
 			"recent_transactions": logs,
 		}
+	except frappe.AuthenticationError:
+		raise
 	except Exception as e:
 		frappe.log_error("Dashboard API Error", frappe.get_traceback())
 		return {"status": "error", "message": str(e)}
+

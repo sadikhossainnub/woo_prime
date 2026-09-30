@@ -825,7 +825,7 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings):
 				if search_resp.status_code == 200 and search_resp.json():
 					existing_id = search_resp.json()[0].get("id")
 			except Exception:
-				pass
+				frappe.log_error(title="woo_prime: SKU search error in _publish_simple_item_to_woo", message=frappe.get_traceback())
 
 		if existing_id:
 			woo_item.woo_product_id = existing_id
@@ -893,7 +893,8 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 				if search_resp.status_code == 200 and search_resp.json():
 					existing_id = search_resp.json()[0].get("id")
 			except Exception:
-				pass
+				frappe.log_error(title="woo_prime: SKU search error in _publish_template_item_to_woo", message=frappe.get_traceback())
+
 
 		if existing_id:
 			woo_item.woo_product_id = existing_id
@@ -1291,7 +1292,7 @@ def _get_or_create_woo_category_id(cat_name, api):
 			_CAT_CACHE[cat_key] = cat_id
 			return cat_id
 	except Exception:
-		pass
+		frappe.log_error(title=f"woo_prime: Category creation/fetch error for {cat_name}", message=frappe.get_traceback())
 	return None
 
 
@@ -1324,7 +1325,8 @@ def _save_woo_category_loc(cat_name, woo_cat_id, slug=None):
 		else:
 			frappe.db.set_value("Woo Category", cat_name, "woo_category_id", woo_cat_id)
 	except Exception:
-		pass
+		frappe.log_error(title=f"woo_prime: _save_woo_category_loc error for {cat_name}", message=frappe.get_traceback())
+
 
 
 def sync_stock_to_woo(woo_item):

@@ -10,6 +10,9 @@ import frappe
 from frappe import _
 
 
+DEFAULT_USER_AGENT = "curl/8.5.0"
+
+
 def is_valid_json(response):
 	"""Check if requests.Response contains valid JSON content."""
 	if not response or not response.text or not response.text.strip():
@@ -21,12 +24,38 @@ def is_valid_json(response):
 		return False
 
 
+def is_cloudflare_response(response):
+	"""Check if the response is a Cloudflare block or challenge page."""
+	if not response:
+		return False
+	server_header = (response.headers.get("Server") or "").lower()
+	text = (response.text or "").lower()
+	if "attention required" in text or "sorry, you have been blocked" in text:
+		return True
+	if "cloudflare" in server_header and (response.status_code in (403, 503) or not is_valid_json(response)):
+		return True
+	return False
+
+
+def is_woocommerce_json_error(response):
+	"""Check if response is a valid WooCommerce / WordPress REST API JSON error payload."""
+	if not is_valid_json(response):
+		return False
+	try:
+		data = response.json()
+		if isinstance(data, dict) and ("code" in data or "message" in data):
+			return True
+	except Exception:
+		pass
+	return False
+
+
 class WooAPI:
 	"""WooCommerce REST API v3 wrapper."""
 
 	API_VERSION = "wc/v3"
 
-	def __init__(self, url, consumer_key, consumer_secret):
+	def __init__(self, url, consumer_key, consumer_secret, user_agent=None):
 		site_url = url.rstrip("/")
 		if site_url.endswith("/index.php"):
 			site_url = site_url[:-10].rstrip("/")
@@ -35,6 +64,7 @@ class WooAPI:
 		consumer_secret = consumer_secret.strip() if consumer_secret else ""
 		self.consumer_key = consumer_key
 		self.consumer_secret = consumer_secret
+		self.user_agent = user_agent.strip() if user_agent and user_agent.strip() else DEFAULT_USER_AGENT
 		self.base_url = f"{self.site_url}/wp-json/{self.API_VERSION}"
 		self.auth = HTTPBasicAuth(consumer_key, consumer_secret)
 		self.timeout = 30
@@ -45,10 +75,11 @@ class WooAPI:
 	def _request(self, method, endpoint, data=None, params=None):
 		"""Make an authenticated request to WooCommerce API."""
 		headers = {
-			"Content-Type": "application/json",
-			"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 WooPrime/1.0",
+			"User-Agent": self.user_agent,
 			"Accept": "application/json, text/plain, */*",
 		}
+		if data is not None:
+			headers["Content-Type"] = "application/json"
 
 		logger = frappe.logger("woo_prime", allow_site=True, max_size=1, file_count=50)
 
@@ -96,32 +127,39 @@ class WooAPI:
 				title=_("WooCommerce Connection Error"),
 			)
 
-		# Fallback 1: If HTTP Basic Auth fails with 401/403 (e.g. Apache strips Authorization header), try Query Param Auth
+		# Fallback 1: If HTTP Basic Auth fails with 401/403, check if query param auth should be attempted.
+		# Only run query auth fallback if response is a genuine WooCommerce/WordPress JSON error and NOT a Cloudflare block.
 		if response.status_code in (401, 403) and not self.use_query_auth:
-			try:
-				fallback_response = make_call(self.use_rest_route, True)
-				if fallback_response.status_code not in (401, 403):
-					self.use_query_auth = True
-					return fallback_response
-				elif fallback_response.status_code == 404 and not self.use_rest_route:
-					fallback_response2 = make_call(True, True)
-					if fallback_response2.status_code not in (401, 403, 404):
+			if is_cloudflare_response(response):
+				return response
+			if is_woocommerce_json_error(response):
+				try:
+					fallback_response = make_call(self.use_rest_route, True)
+					if fallback_response.status_code not in (401, 403):
 						self.use_query_auth = True
-						self.use_rest_route = True
-						return fallback_response2
-			except Exception:
-				pass
+						return fallback_response
+					elif fallback_response.status_code == 404 and not self.use_rest_route:
+						fallback_response2 = make_call(True, True)
+						if fallback_response2.status_code not in (401, 403, 404):
+							self.use_query_auth = True
+							self.use_rest_route = True
+							return fallback_response2
+				except Exception:
+					frappe.log_error(title="woo_prime: Query Auth Fallback Error", message=frappe.get_traceback())
 
 		# Fallback 2: If direct wp-json endpoint returned 404 or HTTP 200 with non-JSON HTML (e.g. Plain Permalinks), try rest_route fallback
 		if not self.use_rest_route and (response.status_code == 404 or (response.status_code == 200 and not is_valid_json(response))):
+			if is_cloudflare_response(response):
+				return response
 			try:
 				fallback_response = make_call(True, self.use_query_auth)
 				if fallback_response.status_code in (401, 403) and not self.use_query_auth:
-					fallback_response2 = make_call(True, True)
-					if fallback_response2.status_code not in (401, 403, 404) and is_valid_json(fallback_response2):
-						self.use_query_auth = True
-						self.use_rest_route = True
-						return fallback_response2
+					if is_woocommerce_json_error(fallback_response):
+						fallback_response2 = make_call(True, True)
+						if fallback_response2.status_code not in (401, 403, 404) and is_valid_json(fallback_response2):
+							self.use_query_auth = True
+							self.use_rest_route = True
+							return fallback_response2
 				elif fallback_response.status_code == 200 and is_valid_json(fallback_response):
 					self.use_rest_route = True
 					return fallback_response
@@ -129,9 +167,10 @@ class WooAPI:
 					self.use_rest_route = True
 					return fallback_response
 			except Exception:
-				pass
+				frappe.log_error(title="woo_prime: REST Route Fallback Error", message=frappe.get_traceback())
 
 		return response
+
 
 	def get(self, endpoint, params=None):
 		"""GET request."""
@@ -293,9 +332,10 @@ class WooAPI:
 		headers = {
 			"Content-Type": mime_type,
 			"Content-Disposition": f'attachment; filename="{filename}"',
-			"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 WooPrime/1.0",
+			"User-Agent": self.user_agent,
 			"Accept": "application/json, text/plain, */*",
 		}
+
 
 		try:
 			with open(abs_path, "rb") as f:

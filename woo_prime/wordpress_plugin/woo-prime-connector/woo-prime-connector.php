@@ -3,7 +3,7 @@
  * Plugin Name:       Woo Prime Connector
  * Plugin URI:        https://primetechbd.com
  * Description:       Integrates WooCommerce with ERPNext for real-time Pricing Rules evaluation, Loyalty Points redemption, and sync dashboard.
- * Version:           2.0.0
+ * Version:           2.1.0
  * Author:            Prime Tech BD
  * Author URI:        https://primetechbd.com
  * Text Domain:       woo-prime-connector
@@ -18,7 +18,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit; // Exit if accessed directly.
 }
 
-define( 'WOO_PRIME_VERSION', '2.0.0' );
+define( 'WOO_PRIME_VERSION', '2.1.0' );
+
 define( 'WOO_PRIME_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'WOO_PRIME_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 

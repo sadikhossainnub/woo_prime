@@ -31,10 +31,11 @@ def handle_order():
 		wc_topic = frappe.request.headers.get("X-WC-Webhook-Topic", "")
 		if not wc_topic:
 			# Could be a ping/test
-			return {"status": "ok", "message": "Webhook endpoint is active"}
+			return {"status": "ok"}
 
 		# Verify HMAC signature
 		verify_webhook_signature(data)
+
 
 		# Parse the order data
 		order_data = json.loads(data)
@@ -117,11 +118,18 @@ def verify_webhook_signature(payload):
 	settings = frappe.get_single("Woo Settings")
 	webhook_secret = settings.get_password("webhook_secret")
 
-	if not webhook_secret:
-		# If no webhook secret is configured, skip verification
-		return
+	if not webhook_secret or not webhook_secret.strip():
+		frappe.log_error(
+			title="WooCommerce Webhook Signature Error",
+			message="Webhook secret not configured in Woo Settings",
+		)
+		frappe.throw(
+			_("Webhook secret not configured in Woo Settings"),
+			frappe.AuthenticationError,
+		)
 
 	signature = frappe.request.headers.get("X-WC-Webhook-Signature", "")
+
 	if not signature:
 		frappe.throw(
 			_("Missing webhook signature header"),

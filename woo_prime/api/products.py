@@ -8,9 +8,13 @@ from frappe import _
 from frappe.utils import flt
 
 
+from woo_prime.api.auth import verify_api_secret
+
+
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
 def get_items_for_sync(start=0, limit=100, item_group=None, search=None, item_codes=None):
 	"""Endpoint for WordPress plugin to fetch items live from ERPNext for selective sync."""
+	verify_api_secret()
 	try:
 		settings = frappe.get_single("Woo Settings")
 
@@ -27,6 +31,7 @@ def get_items_for_sync(start=0, limit=100, item_group=None, search=None, item_co
 				try:
 					item_codes = json.loads(item_codes)
 				except Exception:
+					frappe.log_error("woo_prime: JSON decode item_codes error", frappe.get_traceback())
 					item_codes = [x.strip() for x in item_codes.split(",") if x.strip()]
 			if isinstance(item_codes, list) and item_codes:
 				filters["item_code"] = ["in", item_codes]
@@ -67,6 +72,7 @@ def get_items_for_sync(start=0, limit=100, item_group=None, search=None, item_co
 					from erpnext.stock.utils import get_latest_stock_qty
 					stock_qty = flt(get_latest_stock_qty(item.item_code, warehouse))
 				except Exception:
+					frappe.log_error(f"woo_prime: get_latest_stock_qty error for {item.item_code}", frappe.get_traceback())
 					stock_qty = 0
 
 			image_url = None
@@ -92,6 +98,9 @@ def get_items_for_sync(start=0, limit=100, item_group=None, search=None, item_co
 			"count": len(result),
 			"items": result,
 		}
+	except frappe.AuthenticationError:
+		raise
 	except Exception as e:
 		frappe.log_error("Get Items API Error", frappe.get_traceback())
 		return {"status": "error", "message": str(e)}
+

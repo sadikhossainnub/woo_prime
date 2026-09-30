@@ -27,11 +27,15 @@ class WooSettings(Document):
 
 
 	@frappe.whitelist()
+	@frappe.whitelist()
 	def test_connection(self):
 		"""Test WooCommerce API connection."""
 		import json
+		from urllib.parse import urlparse
 		try:
 			api = get_woo_api()
+			host = urlparse(self.woo_site_url or "").netloc or "your-site.com"
+			ua_used = getattr(api, "user_agent", "curl/8.5.0")
 
 			# Attempt 1: system_status endpoint
 			response = api.get("system_status")
@@ -69,10 +73,14 @@ class WooSettings(Document):
 				except (ValueError, json.JSONDecodeError):
 					pass
 
-			resp_text = (response.text or (prod_response.text if 'prod_response' in locals() else "") or "").strip()
+			active_resp = prod_response if ('prod_response' in locals() and prod_response is not None) else response
+			resp_text = (active_resp.text or "").strip()
+			server_hdr = active_resp.headers.get("Server") or active_resp.headers.get("server") or "N/A"
+			cf_ray = active_resp.headers.get("cf-ray") or active_resp.headers.get("CF-RAY") or "N/A"
+			is_cf = "cloudflare" in server_hdr.lower() or "attention required" in resp_text.lower() or "sorry, you have been blocked" in resp_text.lower() or active_resp.status_code == 403
 
 			# If HTTP 200 returned HTML or non-JSON body
-			if response.status_code == 200 or ('prod_response' in locals() and prod_response.status_code == 200):
+			if active_resp.status_code == 200:
 				escaped_preview = frappe.utils.escape_html(resp_text[:300]) if resp_text else "Empty response body"
 				msg = (
 					"❌ Connection Failed!<br>"
@@ -80,32 +88,37 @@ class WooSettings(Document):
 					"<b>Troubleshooting Non-JSON / HTML Response:</b><br>"
 					"1. <b>WordPress Permalinks:</b> Go to WP Admin → Settings → Permalinks and change structure from <i>'Plain'</i> to <i>'Post name'</i>.<br>"
 					"2. <b>WooCommerce Plugin:</b> Verify WooCommerce plugin is installed and activated.<br>"
-					"3. <b>Site URL:</b> Ensure <i>Woo Site URL</i> (e.g. <code>http://demo.ptb18.xyz</code>) is correct and does not redirect to a login page.<br>"
-					"4. <b>Security/Cache Plugins:</b> Disable security, caching plugins, or Cloudflare rules returning HTML pages instead of REST API JSON.<br><br>"
+					"3. <b>Site URL:</b> Ensure <i>Woo Site URL</i> is correct and does not redirect to a login page.<br>"
+					"4. <b>Security/Cache Plugins:</b> Disable security or caching rules returning HTML pages instead of REST API JSON.<br><br>"
 					f"<b>Response Preview:</b> <code>{escaped_preview}</code>"
 				)
 				frappe.msgprint(msg, title="Connection Test", indicator="red")
 				return
 
-			msg = f"❌ Connection Failed!<br>Status Code: {response.status_code}<br>"
-			if "cloudflare" in resp_text.lower() or "attention required" in resp_text.lower():
+			msg = f"❌ Connection Failed!<br>Status Code: {active_resp.status_code}<br>"
+			if is_cf:
 				msg += (
-					"<br><b>Troubleshooting Cloudflare Block (403 Forbidden):</b><br>"
-					"Cloudflare WAF or Bot Protection is intercepting requests before reaching WordPress.<br>"
-					"1. <b>Create Cloudflare WAF Rule:</b> In Cloudflare Dashboard → Security → WAF → Custom Rules, add a rule:<br>"
-					"   Field: <i>URI Path</i> starts with <code>/wp-json/</code> → Action: <b>Skip</b> (WAF, Bot Fight Mode, Browser Integrity Check).<br>"
-					"2. <b>Allow Server IP:</b> Go to Cloudflare → Security → WAF → Tools → IP Access Rules. Add your ERPNext Server IP to <b>Allow</b> list.<br>"
-					"3. <b>Check REST API Key Permissions:</b> Ensure Key has <b>Read/Write</b> permissions in WP Admin → WooCommerce → Settings → Advanced → REST API.<br><br>"
+					f"<br><b>Cloudflare Diagnostic Info:</b><br>"
+					f"• <b>CF-Ray ID:</b> <code>{frappe.utils.escape_html(cf_ray)}</code><br>"
+					f"• <b>Server Header:</b> <code>{frappe.utils.escape_html(server_hdr)}</code><br>"
+					f"• <b>User-Agent Used:</b> <code>{frappe.utils.escape_html(ua_used)}</code><br><br>"
+					"<b>Troubleshooting Cloudflare Block:</b><br>"
+					f"1. <b>Search Ray ID in Cloudflare:</b> Go to Cloudflare → Security → Events and search Ray ID <code>{frappe.utils.escape_html(cf_ray)}</code> to see which rule blocked the request.<br>"
+					"2. <b>Add Scoped Skip Rule:</b> In Cloudflare Dashboard → Security → WAF → Custom Rules, add a Skip rule scoped to your server IP:<br>"
+					f"   <code>(http.host eq \"{frappe.utils.escape_html(host)}\" and starts_with(http.request.uri.path, \"/wp-json/\") and ip.src in {{&lt;server IPv4&gt; &lt;server IPv6 /64&gt;}})</code><br>"
+					"   <i>Action:</i> <b>Skip</b> (WAF components, Bot Fight Mode, Browser Integrity Check).<br>"
+					"   <i>Note:</i> The ERPNext server may connect over IPv6, so include both IPv4 and IPv6 /64 in the IP list.<br>"
+					"3. <b>API Key Permissions:</b> Verify REST API Key has <b>Read/Write</b> permissions in WP Admin → WooCommerce → Settings → Advanced → REST API.<br><br>"
 				)
-			elif response.status_code == 404:
+			elif active_resp.status_code == 404:
 				msg += (
 					"<br><b>Troubleshooting 404 Not Found:</b><br>"
 					"1. <b>WordPress Permalinks:</b> Go to WP Admin → Settings → Permalinks and change structure from <i>'Plain'</i> to <i>'Post name'</i>.<br>"
 					"2. <b>WooCommerce Plugin:</b> Verify WooCommerce is installed and active.<br>"
-					"3. <b>Site URL:</b> Ensure <i>Woo Site URL</i> (e.g. <code>http://demo.ptb18.xyz</code>) is entered correctly.<br>"
+					"3. <b>Site URL:</b> Ensure <i>Woo Site URL</i> is entered correctly.<br>"
 					"4. <b>Apache Config:</b> Ensure <code>mod_rewrite</code> is enabled and <code>AllowOverride All</code> is set in Apache.<br><br>"
 				)
-			elif response.status_code in (401, 403):
+			elif active_resp.status_code in (401, 403):
 				msg += (
 					"<br><b>Troubleshooting Auth Error (401 / 403):</b><br>"
 					"1. <b>REST API Key Permissions:</b> Go to WP Admin → WooCommerce → Settings → Advanced → REST API. Edit your API Key and ensure permissions are set to <b>Read/Write</b>.<br>"
@@ -114,15 +127,17 @@ class WooSettings(Document):
 					"4. <b>Apache Authorization Header:</b> If your web server strips HTTP Authorization headers, add the following to your WordPress <code>.htaccess</code> file:<br>"
 					"<code>SetEnvIf Authorization \"(.*)\" HTTP_AUTHORIZATION=$1</code> or <code>CGIPassAuth On</code><br><br>"
 				)
-			msg += f"Response: {frappe.utils.escape_html(resp_text[:500])}"
+			escaped_preview = frappe.utils.escape_html(resp_text[:500]) if resp_text else "Empty body"
+			msg += f"Response Preview: <code>{escaped_preview}</code>"
 			frappe.msgprint(
 				msg,
 				title="Connection Test",
 				indicator="red",
 			)
 		except Exception as e:
+			frappe.log_error(title="woo_prime: test_connection error", message=frappe.get_traceback())
 			frappe.msgprint(
-				f"❌ Connection Failed!<br>Error: {str(e)}",
+				f"❌ Connection Failed!<br>Error: {frappe.utils.escape_html(str(e))}",
 				title="Connection Test",
 				indicator="red",
 			)
@@ -137,6 +152,11 @@ class WooSettings(Document):
 		"""Fetch a specific order from WooCommerce by ID."""
 		return fetch_missing_order(woo_order_id)
 
+
+@frappe.whitelist()
+def generate_api_shared_secret():
+	"""Generate a random 40-character API shared secret."""
+	return frappe.generate_hash(length=40)
 
 
 @frappe.whitelist()
@@ -163,11 +183,15 @@ def get_woo_api():
 	if not settings.enabled:
 		frappe.throw("WooCommerce integration is not enabled. Please enable it in Woo Settings.")
 
+	user_agent = getattr(settings, "api_user_agent", None)
+
 	return WooAPI(
 		url=settings.woo_site_url,
 		consumer_key=settings.consumer_key,
 		consumer_secret=settings.get_password("consumer_secret"),
+		user_agent=user_agent,
 	)
+
 
 
 @frappe.whitelist()

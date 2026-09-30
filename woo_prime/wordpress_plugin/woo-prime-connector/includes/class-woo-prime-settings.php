@@ -48,10 +48,25 @@ class Woo_Prime_Settings {
 		register_setting( 'woo_prime_options_group', 'woo_prime_erpnext_url' );
 		register_setting( 'woo_prime_options_group', 'woo_prime_api_key' );
 		register_setting( 'woo_prime_options_group', 'woo_prime_api_secret' );
+		register_setting( 'woo_prime_options_group', 'woo_prime_shared_secret' );
 		register_setting( 'woo_prime_options_group', 'woo_prime_enable_pricing_rules' );
 		register_setting( 'woo_prime_options_group', 'woo_prime_enable_loyalty' );
 		register_setting( 'woo_prime_options_group', 'woo_prime_cache_ttl' );
 		register_setting( 'woo_prime_options_group', 'woo_prime_enable_logging' );
+	}
+
+	public static function get_request_headers() {
+		$headers = array( 'Content-Type' => 'application/json' );
+		$api_key    = get_option( 'woo_prime_api_key' );
+		$api_secret = get_option( 'woo_prime_api_secret' );
+		if ( ! empty( $api_key ) && ! empty( $api_secret ) ) {
+			$headers['Authorization'] = 'token ' . $api_key . ':' . $api_secret;
+		}
+		$shared_secret = get_option( 'woo_prime_shared_secret' );
+		if ( ! empty( $shared_secret ) ) {
+			$headers['X-Woo-Prime-Token'] = $shared_secret;
+		}
+		return $headers;
 	}
 
 	public static function add_admin_bar_badge() {
@@ -65,7 +80,7 @@ class Woo_Prime_Settings {
 		$is_connected = Woo_Prime_Cache::get( 'connection_status' );
 		if ( false === $is_connected ) {
 			// Quick ping check
-			$response     = wp_remote_get( $erpnext_url . '/api/method/frappe.handler.ping', array( 'timeout' => 3 ) );
+			$response     = wp_remote_get( $erpnext_url . '/api/method/frappe.handler.ping', array( 'headers' => self::get_request_headers(), 'timeout' => 3 ) );
 			$is_connected = ( ! is_wp_error( $response ) && 200 === wp_remote_retrieve_response_code( $response ) ) ? 1 : 0;
 			Woo_Prime_Cache::set( 'connection_status', $is_connected, 300 );
 		}
@@ -88,18 +103,13 @@ class Woo_Prime_Settings {
 			wp_send_json_error( __( 'ERPNext URL is empty.', 'woo-prime-connector' ) );
 		}
 
-		$api_key    = get_option( 'woo_prime_api_key' );
-		$api_secret = get_option( 'woo_prime_api_secret' );
-		$headers    = array( 'Content-Type' => 'application/json' );
-
-		if ( ! empty( $api_key ) && ! empty( $api_secret ) ) {
-			$headers['Authorization'] = 'token ' . $api_key . ':' . $api_secret;
-		}
+		$headers = self::get_request_headers();
 
 		$response = wp_remote_get( $erpnext_url . '/api/method/woo_prime.api.dashboard.get_dashboard_stats', array(
 			'headers' => $headers,
 			'timeout' => 10,
 		) );
+
 
 		if ( is_wp_error( $response ) ) {
 			Woo_Prime_Logger::log( 'error', 'Connection test failed', array( 'error' => $response->get_error_message() ) );
@@ -164,13 +174,7 @@ class Woo_Prime_Settings {
 			wp_send_json_error( __( 'ERPNext URL is empty.', 'woo-prime-connector' ) );
 		}
 
-		$api_key    = get_option( 'woo_prime_api_key' );
-		$api_secret = get_option( 'woo_prime_api_secret' );
-		$headers    = array( 'Content-Type' => 'application/json' );
-
-		if ( ! empty( $api_key ) && ! empty( $api_secret ) ) {
-			$headers['Authorization'] = 'token ' . $api_key . ':' . $api_secret;
-		}
+		$headers = self::get_request_headers();
 
 		$search   = isset( $_POST['search'] ) ? sanitize_text_field( $_POST['search'] ) : '';
 		$endpoint = $erpnext_url . '/api/method/woo_prime.api.products.get_items_for_sync?limit=200';
@@ -182,6 +186,7 @@ class Woo_Prime_Settings {
 			'headers' => $headers,
 			'timeout' => 20,
 		) );
+
 
 		if ( is_wp_error( $response ) ) {
 			wp_send_json_error( __( 'Failed to fetch items from ERPNext: ', 'woo-prime-connector' ) . $response->get_error_message() );
@@ -335,6 +340,14 @@ class Woo_Prime_Settings {
 							<p class="description"><?php esc_html_e( 'ERPNext API Secret.', 'woo-prime-connector' ); ?></p>
 						</td>
 					</tr>
+					<tr valign="top">
+						<th scope="row"><?php esc_html_e( 'Shared Secret (Required)', 'woo-prime-connector' ); ?></th>
+						<td>
+							<input type="password" name="woo_prime_shared_secret" value="<?php echo esc_attr( get_option( 'woo_prime_shared_secret', '' ) ); ?>" class="regular-text" placeholder="e.g. 40-character token" required />
+							<p class="description"><?php esc_html_e( 'Shared Secret token configured in ERPNext Woo Settings (X-Woo-Prime-Token).', 'woo-prime-connector' ); ?></p>
+						</td>
+					</tr>
+
 					<tr valign="top">
 						<th scope="row"><?php esc_html_e( 'Enable Pricing Rules', 'woo-prime-connector' ); ?></th>
 						<td>

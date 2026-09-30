@@ -8,6 +8,9 @@ from frappe import _
 from frappe.utils import flt, today
 
 
+from woo_prime.api.auth import verify_api_secret
+
+
 @frappe.whitelist(allow_guest=True, methods=["POST", "GET"])
 def calculate_cart_price(cart_data=None, customer_email=None, price_list=None):
 	"""Calculate ERPNext Pricing Rules for WooCommerce Cart Items.
@@ -23,6 +26,7 @@ def calculate_cart_price(cart_data=None, customer_email=None, price_list=None):
 	Returns:
 		dict: Evaluated cart items with applied pricing rules, discount amounts, and free items
 	"""
+	verify_api_secret()
 	try:
 		if isinstance(cart_data, str):
 			cart_data = json.loads(cart_data)
@@ -97,6 +101,7 @@ def calculate_cart_price(cart_data=None, customer_email=None, price_list=None):
 
 				pricing_rule_result = get_pricing_rule_for_item(rule_args)
 			except Exception:
+				frappe.log_error(f"woo_prime: get_pricing_rule_for_item error for {item_code}", frappe.get_traceback())
 				pricing_rule_result = {}
 
 			discount_percentage = flt(pricing_rule_result.get("discount_percentage", 0))
@@ -127,6 +132,9 @@ def calculate_cart_price(cart_data=None, customer_email=None, price_list=None):
 			"total_cart_discount": total_discount,
 		}
 
+	except frappe.AuthenticationError:
+		raise
 	except Exception as e:
 		frappe.log_error("Calculate Cart Price API Error", frappe.get_traceback())
 		return {"status": "error", "message": str(e)}
+

@@ -44,13 +44,7 @@ class Woo_Prime_Dashboard {
 			wp_send_json_error( __( 'ERPNext URL is not configured.', 'woo-prime-connector' ) );
 		}
 
-		$api_key    = get_option( 'woo_prime_api_key' );
-		$api_secret = get_option( 'woo_prime_api_secret' );
-		$headers    = array( 'Content-Type' => 'application/json' );
-
-		if ( ! empty( $api_key ) && ! empty( $api_secret ) ) {
-			$headers['Authorization'] = 'token ' . $api_key . ':' . $api_secret;
-		}
+		$headers = Woo_Prime_Settings::get_request_headers();
 
 		$response = wp_remote_get(
 			$erpnext_url . '/api/method/woo_prime.api.dashboard.get_dashboard_stats',
@@ -88,18 +82,13 @@ class Woo_Prime_Dashboard {
 		$stats     = Woo_Prime_Cache::get( $cache_key );
 
 		if ( false === $stats ) {
-			$api_key    = get_option( 'woo_prime_api_key' );
-			$api_secret = get_option( 'woo_prime_api_secret' );
-			$headers    = array( 'Content-Type' => 'application/json' );
-
-			if ( ! empty( $api_key ) && ! empty( $api_secret ) ) {
-				$headers['Authorization'] = 'token ' . $api_key . ':' . $api_secret;
-			}
+			$headers = Woo_Prime_Settings::get_request_headers();
 
 			$response = wp_remote_get(
 				$erpnext_url . '/api/method/woo_prime.api.dashboard.get_dashboard_stats',
 				array( 'headers' => $headers, 'timeout' => 8 )
 			);
+
 
 			if ( ! is_wp_error( $response ) && 200 === wp_remote_retrieve_response_code( $response ) ) {
 				$body  = wp_remote_retrieve_body( $response );

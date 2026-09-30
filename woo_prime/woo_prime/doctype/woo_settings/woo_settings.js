@@ -28,6 +28,20 @@ frappe.ui.form.on("Woo Settings", {
 		if (frm.fields_dict.download_plugin_btn) {
 			frm.fields_dict.download_plugin_btn.$input.addClass("btn-success");
 		}
+	},
+
+	generate_secret_btn(frm) {
+		frappe.call({
+			method: "woo_prime.woo_prime.doctype.woo_settings.woo_settings.generate_api_shared_secret",
+			callback: function (r) {
+				if (r && r.message) {
+					frm.set_value("api_shared_secret", r.message);
+					frappe.show_alert({ message: __("Generated new API Shared Secret! Remember to save Woo Settings."), indicator: "green" });
+				}
+			}
+		});
+	},
+
 
 		// Add custom button to copy Webhook Delivery URL
 		frm.add_custom_button(

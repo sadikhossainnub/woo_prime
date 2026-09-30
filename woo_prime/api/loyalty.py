@@ -6,6 +6,9 @@ from frappe import _
 from frappe.utils import flt, today
 
 
+from woo_prime.api.auth import verify_api_secret
+
+
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])
 def get_customer_loyalty_points(customer_email=None, phone=None, customer_name=None):
 	"""Get Customer Loyalty Points balance and redemption value.
@@ -20,6 +23,7 @@ def get_customer_loyalty_points(customer_email=None, phone=None, customer_name=N
 	Returns:
 		dict: loyalty_points, conversion_factor, redeemable_amount
 	"""
+	verify_api_secret()
 	try:
 		# Find customer
 		if not customer_name:
@@ -46,7 +50,7 @@ def get_customer_loyalty_points(customer_email=None, phone=None, customer_name=N
 
 			loyalty_points = get_loyalty_point_balance(customer_name)
 		except Exception:
-			pass
+			frappe.log_error(f"woo_prime: get_loyalty_point_balance error for {customer_name}", frappe.get_traceback())
 
 		# Find loyalty program details & conversion factor
 		loyalty_program = frappe.db.get_value("Customer", customer_name, "loyalty_program")
@@ -72,6 +76,9 @@ def get_customer_loyalty_points(customer_email=None, phone=None, customer_name=N
 			"redeemable_amount": redeemable_amount,
 		}
 
+	except frappe.AuthenticationError:
+		raise
 	except Exception as e:
 		frappe.log_error("Get Loyalty Points API Error", frappe.get_traceback())
 		return {"status": "error", "message": str(e)}
+
