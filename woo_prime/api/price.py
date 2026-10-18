@@ -75,12 +75,8 @@ def calculate_cart_price(cart_data=None, customer_email=None, price_list=None):
 
 			# Fetch price list rate if rate not passed
 			if not rate:
-				price_list_rate = frappe.db.get_value(
-					"Item Price",
-					{"item_code": item_code, "price_list": price_list, "selling": 1},
-					"price_list_rate",
-				)
-				rate = flt(price_list_rate)
+				from woo_prime.api.sync import _get_item_price
+				rate = _get_item_price(item_code, price_list)
 
 			# Call ERPNext pricing rule engine
 			rule_args = {

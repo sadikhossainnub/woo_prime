@@ -15,6 +15,8 @@
   "api_shared_secret",
   "generate_secret_btn",
   "fetch_categories_btn",
+  "fetch_attributes_btn",
+  "fetch_tags_btn",
   "fetch_items_btn",
   "skip_empty_products",
   "webhook_section",
@@ -38,6 +40,7 @@
   "shipping_item",
   "shipping_charge_account",
   "default_shipping_rule",
+  "fetch_shipping_btn",
   "shipping_rule_mappings",
   "column_break_order",
   "sales_type",
@@ -45,6 +48,9 @@
   "auto_submit_order",
   "order_email_notification",
   "notification_email",
+  "attribute_mapping_section",
+  "auto_map_attributes_btn",
+  "attribute_mappings",
   "sync_features_section",
   "enable_auto_sync_schedule",
   "auto_sync_start_time",
@@ -123,6 +129,16 @@
    "fieldname": "fetch_categories_btn",
    "fieldtype": "Button",
    "label": "Fetch Categories from WooCommerce"
+  },
+  {
+   "fieldname": "fetch_attributes_btn",
+   "fieldtype": "Button",
+   "label": "Fetch Attributes from WooCommerce"
+  },
+  {
+   "fieldname": "fetch_tags_btn",
+   "fieldtype": "Button",
+   "label": "Fetch Tags from WooCommerce"
   },
   {
    "fieldname": "fetch_items_btn",
@@ -268,6 +284,11 @@
    "options": "Shipping Rule"
   },
   {
+   "fieldname": "fetch_shipping_btn",
+   "fieldtype": "Button",
+   "label": "Fetch Shipping from WooCommerce"
+  },
+  {
    "description": "Map WooCommerce Shipping Zone / Method names (e.g. Inside Dhaka, Outside Dhaka) to ERPNext Shipping Rules",
    "fieldname": "shipping_rule_mappings",
    "fieldtype": "Table",
@@ -309,6 +330,23 @@
    "fieldname": "notification_email",
    "fieldtype": "Data",
    "label": "Notification Email Address"
+  },
+  {
+   "fieldname": "attribute_mapping_section",
+   "fieldtype": "Section Break",
+   "label": "Attribute Mappings"
+  },
+  {
+   "fieldname": "auto_map_attributes_btn",
+   "fieldtype": "Button",
+   "label": "Auto-Map Attributes by Name"
+  },
+  {
+   "description": "Explicitly map ERPNext Item Attributes to WooCommerce Global Attributes (ensures WooCommerce Swatches & Variation IDs link perfectly)",
+   "fieldname": "attribute_mappings",
+   "fieldtype": "Table",
+   "label": "ERPNext \u2194 WooCommerce Attribute Mappings",
+   "options": "Woo Attribute Mapping"
   },
   {
    "fieldname": "sync_features_section",

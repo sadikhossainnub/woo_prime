@@ -16,11 +16,23 @@ frappe.ui.form.on("Woo Settings", {
 		if (frm.fields_dict.fetch_categories_btn) {
 			frm.fields_dict.fetch_categories_btn.$input.addClass("btn-info");
 		}
+		if (frm.fields_dict.fetch_attributes_btn) {
+			frm.fields_dict.fetch_attributes_btn.$input.addClass("btn-secondary");
+		}
+		if (frm.fields_dict.fetch_tags_btn) {
+			frm.fields_dict.fetch_tags_btn.$input.addClass("btn-secondary");
+		}
+		if (frm.fields_dict.auto_map_attributes_btn) {
+			frm.fields_dict.auto_map_attributes_btn.$input.addClass("btn-primary");
+		}
 		if (frm.fields_dict.fetch_items_btn) {
 			frm.fields_dict.fetch_items_btn.$input.addClass("btn-warning");
 		}
 		if (frm.fields_dict.download_plugin_btn) {
 			frm.fields_dict.download_plugin_btn.$input.addClass("btn-success");
+		}
+		if (frm.fields_dict.fetch_shipping_btn) {
+			frm.fields_dict.fetch_shipping_btn.$input.addClass("btn-primary");
 		}
 
 		// Add custom button to copy Webhook Delivery URL
@@ -68,6 +80,79 @@ frappe.ui.form.on("Woo Settings", {
 									}, 5);
 								}
 							}
+						});
+					}
+				);
+			},
+			__("Sync")
+		);
+
+		// Add custom button for attributes fetch
+		frm.add_custom_button(
+			__("Fetch WooCommerce Attributes"),
+			function () {
+				frappe.confirm(
+					__("Fetch all product attributes and terms from WooCommerce?"),
+					function () {
+						frappe.call({
+							method: "woo_prime.woo_prime.doctype.woo_attribute.woo_attribute.fetch_attributes_from_woo",
+							freeze: true,
+							freeze_message: __("Fetching attributes from WooCommerce..."),
+							callback: function (r) {
+								if (r && r.message) {
+									frappe.show_alert({
+										message: r.message.message || __("Attributes synced!"),
+										indicator: "green",
+									});
+								}
+							},
+						});
+					}
+				);
+			},
+			__("Sync")
+		);
+
+		// Add custom button for tags fetch
+		frm.add_custom_button(
+			__("Fetch WooCommerce Tags"),
+			function () {
+				frappe.confirm(
+					__("Fetch all product tags from WooCommerce?"),
+					function () {
+						frappe.call({
+							method: "woo_prime.woo_prime.doctype.woo_tag.woo_tag.fetch_tags_from_woo",
+							freeze: true,
+							freeze_message: __("Fetching tags from WooCommerce..."),
+							callback: function (r) {
+								if (r && r.message) {
+									frappe.show_alert({
+										message: r.message.message || __("Tags synced!"),
+										indicator: "green",
+									});
+								}
+							},
+						});
+					}
+				);
+			},
+			__("Sync")
+		);
+
+		// Add custom button for shipping fetch
+		frm.add_custom_button(
+			__("Fetch WooCommerce Shipping"),
+			function () {
+				frappe.confirm(
+					__("Fetch all shipping zones and methods from WooCommerce?"),
+					function () {
+						frappe.call({
+							method: "woo_prime.woo_prime.doctype.woo_settings.woo_settings.fetch_shipping_from_woo",
+							freeze: true,
+							freeze_message: __("Fetching shipping methods from WooCommerce..."),
+							callback: function (r) {
+								frm.reload_doc();
+							},
 						});
 					}
 				);
@@ -265,6 +350,90 @@ frappe.ui.form.on("Woo Settings", {
 							}, 5);
 						}
 					}
+				});
+			}
+		);
+	},
+
+	fetch_attributes_btn(frm) {
+		if (!frm.doc.woo_site_url || !frm.doc.consumer_key) {
+			frappe.msgprint(__("Please set up WooCommerce connection first."));
+			return;
+		}
+
+		frappe.confirm(
+			__("Fetch all product attributes and terms from WooCommerce?"),
+			function () {
+				frappe.call({
+					method: "woo_prime.woo_prime.doctype.woo_attribute.woo_attribute.fetch_attributes_from_woo",
+					freeze: true,
+					freeze_message: __("Fetching attributes from WooCommerce..."),
+					callback: function (r) {
+						if (r && r.message) {
+							frappe.show_alert({
+								message: r.message.message || __("Attributes synced!"),
+								indicator: "green",
+							});
+						}
+					},
+				});
+			}
+		);
+	},
+
+	fetch_tags_btn(frm) {
+		if (!frm.doc.woo_site_url || !frm.doc.consumer_key) {
+			frappe.msgprint(__("Please set up WooCommerce connection first."));
+			return;
+		}
+
+		frappe.confirm(
+			__("Fetch all product tags from WooCommerce?"),
+			function () {
+				frappe.call({
+					method: "woo_prime.woo_prime.doctype.woo_tag.woo_tag.fetch_tags_from_woo",
+					freeze: true,
+					freeze_message: __("Fetching tags from WooCommerce..."),
+					callback: function (r) {
+						if (r && r.message) {
+							frappe.show_alert({
+								message: r.message.message || __("Tags synced!"),
+								indicator: "green",
+							});
+						}
+					},
+				});
+			}
+		);
+	},
+
+	auto_map_attributes_btn(frm) {
+		frappe.call({
+			method: "woo_prime.woo_prime.doctype.woo_settings.woo_settings.auto_map_attributes",
+			freeze: true,
+			freeze_message: __("Auto-mapping ERPNext and WooCommerce attributes..."),
+			callback: function (r) {
+				frm.reload_doc();
+			},
+		});
+	},
+
+	fetch_shipping_btn(frm) {
+		if (!frm.doc.woo_site_url || !frm.doc.consumer_key) {
+			frappe.msgprint(__("Please set up WooCommerce connection first."));
+			return;
+		}
+
+		frappe.confirm(
+			__("Fetch all shipping zones and methods from WooCommerce?"),
+			function () {
+				frappe.call({
+					method: "woo_prime.woo_prime.doctype.woo_settings.woo_settings.fetch_shipping_from_woo",
+					freeze: true,
+					freeze_message: __("Fetching shipping methods from WooCommerce..."),
+					callback: function (r) {
+						frm.reload_doc();
+					},
 				});
 			}
 		);

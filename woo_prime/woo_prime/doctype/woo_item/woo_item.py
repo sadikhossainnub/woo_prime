@@ -20,7 +20,7 @@ class WooItem(Document):
 				self.item_name = html.unescape(self.item_name)
 
 			# Auto-fetch regular_price if empty
-			if not self.regular_price:
+			if not self.regular_price or flt(self.regular_price) <= 0:
 				settings = frappe.get_single("Woo Settings")
 				price_list = getattr(settings, "default_price_list", None) or "Standard Selling"
 				from woo_prime.api.sync import _get_item_price
@@ -1176,5 +1176,55 @@ def publish_item_from_item_master(item_code):
 		"woo_product_url": woo_item.woo_product_url or "",
 		"woo_item_name": woo_item.name,
 	}
+
+
+@frappe.whitelist()
+def get_item_price_rate(item_code):
+	"""Get current ERPNext item price rate for an Item (with fallback for variant items)."""
+	if not item_code:
+		return 0.0
+	settings = frappe.get_single("Woo Settings")
+	price_list = getattr(settings, "default_price_list", None) or "Standard Selling"
+	from woo_prime.api.sync import _get_item_price
+	return _get_item_price(item_code, price_list)
+
+
+@frappe.whitelist()
+def update_regular_prices(items=None):
+	"""Bulk update regular_price from ERPNext Item Price for specified items or all Woo Items with empty price."""
+	import json
+	if isinstance(items, str):
+		items = json.loads(items)
+
+	settings = frappe.get_single("Woo Settings")
+	price_list = getattr(settings, "default_price_list", None) or "Standard Selling"
+	from woo_prime.api.sync import _get_item_price
+	from frappe.utils import flt
+
+	if items:
+		woo_items = frappe.get_all(
+			"Woo Item",
+			filters={"name": ["in", items], "item_code": ["!=", ""]},
+			fields=["name", "item_code", "regular_price"]
+		)
+	else:
+		woo_items = frappe.get_all(
+			"Woo Item",
+			filters={"item_code": ["!=", ""], "regular_price": ["in", [0, None]]},
+			fields=["name", "item_code", "regular_price"]
+		)
+
+	updated_count = 0
+	for row in woo_items:
+		price = _get_item_price(row.item_code, price_list)
+		if price and flt(price) > 0:
+			doc = frappe.get_doc("Woo Item", row.name)
+			doc.regular_price = flt(price)
+			doc.save(ignore_permissions=True)
+			updated_count += 1
+
+	frappe.db.commit()
+	return updated_count
+
 
 

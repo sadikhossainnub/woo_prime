@@ -152,6 +152,11 @@ class WooSettings(Document):
 		"""Fetch a specific order from WooCommerce by ID."""
 		return fetch_missing_order(woo_order_id)
 
+	@frappe.whitelist()
+	def fetch_shipping_from_woo(self):
+		"""Fetch WooCommerce shipping zones and methods."""
+		return fetch_shipping_from_woo()
+
 
 @frappe.whitelist()
 def generate_api_shared_secret():
@@ -256,4 +261,263 @@ def fetch_missing_order(woo_order_id):
 			indicator="orange",
 		)
 		return None
+
+
+@frappe.whitelist()
+def auto_map_attributes():
+	"""Auto-match and populate ERPNext Item Attributes to WooCommerce Global Attributes in Woo Settings."""
+	settings = frappe.get_single("Woo Settings")
+	existing_erp_attrs = {row.erpnext_attribute for row in (settings.attribute_mappings or [])}
+
+	# Get all Woo Attributes
+	woo_attrs = frappe.get_all("Woo Attribute", fields=["name", "attribute_name", "woo_attribute_id", "slug"])
+	if not woo_attrs:
+		from woo_prime.woo_prime.doctype.woo_attribute.woo_attribute import fetch_attributes_from_woo
+		fetch_attributes_from_woo()
+		woo_attrs = frappe.get_all("Woo Attribute", fields=["name", "attribute_name", "woo_attribute_id", "slug"])
+
+	woo_dict = {}
+	for wa in woo_attrs:
+		name_key = (wa.attribute_name or "").strip().lower()
+		slug_key = (wa.slug or "").strip().lower().replace("pa_", "")
+		woo_dict[name_key] = wa
+		woo_dict[slug_key] = wa
+
+	erp_attributes = frappe.get_all("Item Attribute", fields=["name", "attribute_name"])
+	mapped_count = 0
+
+	for ea in erp_attributes:
+		attr_name = ea.name or ea.attribute_name
+		if attr_name in existing_erp_attrs:
+			continue
+
+		lookup_key = attr_name.strip().lower()
+		clean_key = frappe.scrub(attr_name).replace("_", "-").lower()
+
+		matched_wa = woo_dict.get(lookup_key) or woo_dict.get(clean_key)
+		if matched_wa:
+			settings.append("attribute_mappings", {
+				"erpnext_attribute": attr_name,
+				"woo_attribute": matched_wa.name,
+				"woo_attribute_id": matched_wa.woo_attribute_id,
+				"woo_attribute_slug": matched_wa.slug,
+			})
+			frappe.db.set_value("Woo Attribute", matched_wa.name, "erpnext_item_attribute", attr_name)
+			existing_erp_attrs.add(attr_name)
+			mapped_count += 1
+
+	if mapped_count > 0:
+		settings.flags.ignore_permissions = True
+		settings.save(ignore_permissions=True)
+		frappe.db.commit()
+
+	msg = _("Successfully auto-mapped {0} attribute(s)!").format(mapped_count)
+	if frappe.request:
+		frappe.msgprint(msg, title=_("Attribute Auto-Mapping"), indicator="green" if mapped_count else "blue")
+
+	return {"mapped_count": mapped_count, "message": msg}
+
+
+@frappe.whitelist()
+def fetch_shipping_from_woo():
+	"""Fetch WooCommerce shipping zones and methods, and map them to ERPNext Shipping Rules."""
+	from frappe.utils import flt
+	import re
+
+	api = get_woo_api()
+	settings = frappe.get_single("Woo Settings")
+
+	# 1. Fetch shipping zones
+	try:
+		resp = api.get("shipping/zones")
+		if resp.status_code != 200:
+			frappe.throw(_("Failed to fetch shipping zones from WooCommerce (Status {0}): {1}").format(
+				resp.status_code, resp.text[:200]
+			))
+		zones = resp.json() if isinstance(resp.json(), list) else []
+	except Exception as e:
+		frappe.log_error(title="woo_prime: fetch_shipping_from_woo error", message=frappe.get_traceback())
+		frappe.throw(_("Error fetching shipping zones from WooCommerce: {0}").format(str(e)))
+
+	# Include Zone 0: Rest of the World (Locations not covered by other zones)
+	zones.append({"id": 0, "name": "Locations not covered by other zones"})
+
+	fetched_methods = []
+	for zone in zones:
+		zone_id = zone.get("id")
+		zone_name = zone.get("name") or f"Zone {zone_id}"
+
+		try:
+			m_resp = api.get(f"shipping/zones/{zone_id}/methods")
+			if m_resp.status_code != 200:
+				continue
+			methods = m_resp.json()
+			if not isinstance(methods, list):
+				continue
+
+			for m in methods:
+				if not m.get("enabled", True):
+					continue
+
+				settings_obj = m.get("settings", {})
+				m_title = m.get("title")
+				if not m_title and isinstance(settings_obj, dict):
+					m_title = settings_obj.get("title", {}).get("value")
+				if not m_title:
+					m_title = m.get("method_title") or f"{zone_name} Delivery"
+				m_title = str(m_title).strip()
+
+				cost = 0.0
+				if isinstance(settings_obj, dict):
+					cost_val = settings_obj.get("cost", {}).get("value", 0)
+					try:
+						cost = flt(cost_val)
+					except (ValueError, TypeError):
+						try:
+							match = re.search(r"[-+]?\d*\.?\d+", str(cost_val))
+							if match:
+								cost = flt(match.group(0))
+						except Exception:
+							cost = 0.0
+
+				fetched_methods.append({
+					"zone_id": zone_id,
+					"zone_name": zone_name,
+					"instance_id": m.get("id") or m.get("instance_id"),
+					"method_id": m.get("method_id"),
+					"title": m_title,
+					"cost": cost,
+				})
+		except Exception as e:
+			frappe.log_error(title=f"woo_prime: Error fetching methods for zone {zone_id}", message=frappe.get_traceback())
+
+	# Fallback if no zones or zone methods found: try legacy shipping_methods endpoint
+	if not fetched_methods:
+		try:
+			leg_resp = api.get("shipping_methods")
+			if leg_resp.status_code == 200:
+				leg_methods = leg_resp.json()
+				if isinstance(leg_methods, list):
+					for lm in leg_methods:
+						fetched_methods.append({
+							"zone_id": 0,
+							"zone_name": "General",
+							"instance_id": lm.get("id"),
+							"method_id": lm.get("id"),
+							"title": lm.get("title") or lm.get("name") or "Standard Shipping",
+							"cost": 0.0,
+						})
+		except Exception:
+			pass
+
+	if not fetched_methods:
+		msg = _("No shipping methods found on your WooCommerce store.")
+		if frappe.request:
+			frappe.msgprint(msg, title=_("WooCommerce Shipping Sync"), indicator="orange")
+		return {"new_count": 0, "updated_count": 0, "total_found": 0, "message": msg}
+
+	# Existing mappings in Woo Settings
+	existing_mappings = {}
+	for row in (settings.shipping_rule_mappings or []):
+		if row.woo_shipping_method:
+			existing_mappings[row.woo_shipping_method.strip().lower()] = row
+
+	new_count = 0
+	updated_count = 0
+	company = settings.default_company
+
+	for item in fetched_methods:
+		title = item["title"]
+		cost = item["cost"]
+		lookup_key = title.strip().lower()
+
+		# Disambiguate if already used by another zone
+		if lookup_key in existing_mappings and item["zone_id"] != 0 and item["zone_name"] not in title:
+			title = f"{item['zone_name']} - {title}"
+			lookup_key = title.strip().lower()
+
+		# Find or auto-create ERPNext Shipping Rule
+		matched_rule = None
+		if frappe.db.exists("Shipping Rule", title):
+			matched_rule = title
+		else:
+			matched_rule = frappe.db.get_value("Shipping Rule", {"label": title}, "name")
+			if not matched_rule and item["zone_name"] and frappe.db.exists("Shipping Rule", item["zone_name"]):
+				matched_rule = item["zone_name"]
+
+		# Auto-create Shipping Rule if it does not exist
+		if not matched_rule:
+			try:
+				sr = frappe.new_doc("Shipping Rule")
+				sr.shipping_rule_type = "Selling"
+				sr.label = title
+				if company:
+					sr.company = company
+				account = getattr(settings, "shipping_charge_account", None)
+				if not account and company:
+					account = frappe.db.get_value(
+						"Account",
+						{"company": company, "account_name": ["like", "%Shipping%"], "is_group": 0},
+						"name",
+					)
+				if account:
+					sr.account = account
+				sr.calculate_based_on = "Fixed"
+				sr.shipping_amount = cost
+				sr.append("conditions", {
+					"shipping_amount": cost,
+				})
+				sr.flags.ignore_permissions = True
+				sr.flags.ignore_mandatory = True
+				sr.insert(ignore_permissions=True)
+				matched_rule = sr.name
+			except Exception as e:
+				frappe.log_error(title="woo_prime: Auto-create Shipping Rule failed", message=frappe.get_traceback())
+
+		# Fallback to default_shipping_rule
+		if not matched_rule and getattr(settings, "default_shipping_rule", None):
+			matched_rule = settings.default_shipping_rule
+
+		if lookup_key in existing_mappings:
+			row = existing_mappings[lookup_key]
+			changed = False
+			if cost and flt(row.cost) != flt(cost):
+				row.cost = cost
+				changed = True
+			if not row.shipping_rule and matched_rule:
+				row.shipping_rule = matched_rule
+				changed = True
+			if changed:
+				updated_count += 1
+		else:
+			settings.append("shipping_rule_mappings", {
+				"woo_shipping_method": title,
+				"shipping_rule": matched_rule,
+				"cost": cost,
+			})
+			existing_mappings[lookup_key] = True
+			new_count += 1
+
+	if new_count > 0 or updated_count > 0:
+		settings.flags.ignore_permissions = True
+		settings.save(ignore_permissions=True)
+		frappe.db.commit()
+
+	msg = _(
+		"✅ <b>WooCommerce Shipping Sync Completed!</b><br>"
+		"📦 Total Methods Found: <b>{0}</b><br>"
+		"➕ Added to Mappings: <b>{1}</b><br>"
+		"🔄 Updated: <b>{2}</b>"
+	).format(len(fetched_methods), new_count, updated_count)
+
+	if frappe.request:
+		frappe.msgprint(msg, title=_("Shipping Sync"), indicator="green" if (new_count or updated_count) else "blue")
+
+	return {
+		"new_count": new_count,
+		"updated_count": updated_count,
+		"total_found": len(fetched_methods),
+		"message": msg,
+	}
+
 

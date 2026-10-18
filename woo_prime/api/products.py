@@ -57,14 +57,10 @@ def get_items_for_sync(start=0, limit=100, item_group=None, search=None, item_co
 		price_list = getattr(settings, "default_price_list", None) or "Standard Selling"
 		warehouse = getattr(settings, "default_warehouse", None)
 
+		from woo_prime.api.sync import _get_item_price
+
 		for item in items:
-			price = frappe.db.get_value(
-				"Item Price",
-				{"item_code": item.item_code, "price_list": price_list, "selling": 1},
-				"price_list_rate",
-			)
-			if price is None:
-				price = item.standard_rate or 0
+			price = _get_item_price(item.item_code, price_list)
 
 			stock_qty = 0
 			if warehouse:

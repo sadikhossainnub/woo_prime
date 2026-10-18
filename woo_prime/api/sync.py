@@ -110,7 +110,12 @@ def sync_order(order_data):
 
 			for mapping in settings.shipping_rule_mappings:
 				target_method = (mapping.woo_shipping_method or "").strip().lower()
-				if target_method and (target_method == method_title or target_method == method_id or target_method in method_title):
+				if target_method and (
+					target_method == method_title
+					or target_method == method_id
+					or target_method in method_title
+					or (method_title and method_title in target_method)
+				):
 					matched_rule = mapping.shipping_rule
 					break
 
@@ -857,12 +862,16 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 
 	woo_attributes = []
 	for attr_name, options in attributes_dict.items():
-		woo_attributes.append({
-			"name": attr_name,
+		woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr_name, api)
+		attr_payload = {
+			"name": target_name or attr_name,
 			"visible": True,
 			"variation": True,
 			"options": sorted(list(options))
-		})
+		}
+		if woo_attr_id:
+			attr_payload["id"] = int(woo_attr_id)
+		woo_attributes.append(attr_payload)
 
 	product_data = {
 		"name": html.unescape(item.item_name or ""),
@@ -1007,6 +1016,13 @@ def get_or_create_woo_item(item_code, sku=None):
 		if not woo_item.sku and sku:
 			woo_item.sku = sku
 			changed = True
+		if not woo_item.regular_price or flt(woo_item.regular_price) <= 0:
+			settings = frappe.get_single("Woo Settings")
+			price_list = getattr(settings, "default_price_list", None) or "Standard Selling"
+			price = _get_item_price(item_code, price_list)
+			if price:
+				woo_item.regular_price = flt(price)
+				changed = True
 		if changed:
 			woo_item.save(ignore_permissions=True)
 		return woo_item
@@ -1015,14 +1031,27 @@ def get_or_create_woo_item(item_code, sku=None):
 	woo_item = frappe.new_doc("Woo Item")
 	woo_item.item_code = item_code
 	woo_item.sku = sku or item_code
+	settings = frappe.get_single("Woo Settings")
+	price_list = getattr(settings, "default_price_list", None) or "Standard Selling"
+	price = _get_item_price(item_code, price_list)
+	if price:
+		woo_item.regular_price = flt(price)
 	try:
 		woo_item.insert(ignore_permissions=True)
 	except Exception as e:
 		target_name = sku or item_code
 		if frappe.db.exists("Woo Item", target_name):
 			woo_item = frappe.get_doc("Woo Item", target_name)
+			changed = False
 			if not woo_item.item_code and item_code:
 				woo_item.item_code = item_code
+				changed = True
+			if not woo_item.regular_price or flt(woo_item.regular_price) <= 0:
+				price = _get_item_price(item_code, price_list)
+				if price:
+					woo_item.regular_price = flt(price)
+					changed = True
+			if changed:
 				woo_item.save(ignore_permissions=True)
 		else:
 			raise e
@@ -1052,16 +1081,22 @@ def _prepare_variation_payload(child_woo_item, v_item, api, settings):
 	"""Prepare variation payload dictionary for WooCommerce."""
 	import html
 	price = _get_item_price(v_item.name, settings.default_price_list)
-	regular_price = flt(child_woo_item.regular_price) if getattr(child_woo_item, "regular_price", None) else flt(price)
+	regular_price = flt(child_woo_item.regular_price) if getattr(child_woo_item, "regular_price", None) and flt(child_woo_item.regular_price) > 0 else flt(price)
+	if (not child_woo_item.regular_price or flt(child_woo_item.regular_price) <= 0) and regular_price > 0:
+		child_woo_item.regular_price = flt(regular_price)
 	sale_price = flt(child_woo_item.sale_price) if getattr(child_woo_item, "sale_price", None) and flt(child_woo_item.sale_price) > 0 else None
 	stock_qty = _get_stock_qty(v_item.name, settings.default_warehouse)
 
 	var_attributes = []
 	for attr in v_item.attributes:
-		var_attributes.append({
-			"name": attr.attribute,
+		woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr.attribute, api)
+		var_attr = {
+			"name": target_name or attr.attribute,
 			"option": attr.attribute_value
-		})
+		}
+		if woo_attr_id:
+			var_attr["id"] = int(woo_attr_id)
+		var_attributes.append(var_attr)
 
 	var_data = {
 		"sku": child_woo_item.sku or v_item.item_code,
@@ -1293,7 +1328,89 @@ def _get_or_create_woo_category_id(cat_name, api):
 			return cat_id
 	except Exception:
 		frappe.log_error(title=f"woo_prime: Category creation/fetch error for {cat_name}", message=frappe.get_traceback())
-	return None
+_ATTR_CACHE = {}
+
+
+def _get_or_create_woo_attribute_id(attr_name, api=None):
+	"""Get WooCommerce Global Attribute ID and mapped WooCommerce attribute name.
+	Checks:
+	1. Woo Settings attribute_mappings table (explicit user mapping)
+	2. Woo Attribute DocType erpnext_item_attribute Link
+	3. Woo Attribute DocType attribute_name or slug
+	4. Direct WooCommerce API lookup
+
+	Returns:
+		tuple: (woo_attr_id: int or None, target_attr_name: str)
+	"""
+	if not attr_name:
+		return (None, attr_name)
+
+	key = attr_name.strip().lower()
+	if key in _ATTR_CACHE:
+		return _ATTR_CACHE[key]
+
+	# 1. Check Woo Settings attribute_mappings table (explicit user mapping)
+	try:
+		settings = frappe.get_single("Woo Settings")
+		if getattr(settings, "attribute_mappings", None):
+			for row in settings.attribute_mappings:
+				if (row.erpnext_attribute or "").strip().lower() == key:
+					woo_attr_id = row.woo_attribute_id or frappe.db.get_value("Woo Attribute", row.woo_attribute, "woo_attribute_id")
+					woo_attr_name = frappe.db.get_value("Woo Attribute", row.woo_attribute, "attribute_name") or row.woo_attribute
+					if woo_attr_id:
+						res = (int(woo_attr_id), woo_attr_name)
+						_ATTR_CACHE[key] = res
+						return res
+	except Exception:
+		pass
+
+	# 2. Check local Woo Attribute DocType
+	if frappe.db.exists("DocType", "Woo Attribute"):
+		matched = frappe.db.get_value("Woo Attribute", {"erpnext_item_attribute": attr_name}, ["woo_attribute_id", "attribute_name"], as_dict=True)
+		if not matched:
+			matched = frappe.db.get_value("Woo Attribute", {"attribute_name": attr_name}, ["woo_attribute_id", "attribute_name"], as_dict=True)
+		if not matched:
+			clean_slug = frappe.scrub(attr_name).replace("_", "-")
+			matched = frappe.db.get_value("Woo Attribute", {"slug": clean_slug}, ["woo_attribute_id", "attribute_name"], as_dict=True)
+
+		if matched and matched.get("woo_attribute_id"):
+			res = (int(matched.woo_attribute_id), matched.attribute_name)
+			_ATTR_CACHE[key] = res
+			return res
+
+	# 3. Query WooCommerce API
+	if api:
+		try:
+			res = api.get("products/attributes")
+			if res.status_code == 200 and isinstance(res.json(), list):
+				for a in res.json():
+					a_name = (a.get("name") or "").strip()
+					a_slug = (a.get("slug") or "").strip().lower()
+					clean_slug = a_slug.replace("pa_", "")
+					aid = int(a.get("id"))
+					entry = (aid, a_name)
+					_ATTR_CACHE[a_name.lower()] = entry
+					_ATTR_CACHE[a_slug] = entry
+					_ATTR_CACHE[clean_slug] = entry
+
+					# Save to Woo Attribute if DocType exists
+					if frappe.db.exists("DocType", "Woo Attribute") and not frappe.db.exists("Woo Attribute", {"woo_attribute_id": aid}):
+						try:
+							wa = frappe.new_doc("Woo Attribute")
+							wa.attribute_name = a.get("name")
+							wa.woo_attribute_id = aid
+							wa.slug = a.get("slug")
+							wa.type = a.get("type", "select")
+							wa.save(ignore_permissions=True)
+						except Exception:
+							pass
+
+				if key in _ATTR_CACHE:
+					return _ATTR_CACHE[key]
+		except Exception:
+			frappe.log_error(title=f"woo_prime: Attribute ID lookup error for {attr_name}", message=frappe.get_traceback())
+
+	return (None, attr_name)
 
 
 def _get_simple_item_attributes(item):
@@ -1304,12 +1421,16 @@ def _get_simple_item_attributes(item):
 	woo_attrs = []
 	for attr in item.attributes:
 		if attr.attribute and attr.attribute_value:
-			woo_attrs.append({
-				"name": attr.attribute,
+			woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr.attribute, None)
+			attr_payload = {
+				"name": target_name or attr.attribute,
 				"visible": True,
 				"variation": False,
 				"options": [attr.attribute_value]
-			})
+			}
+			if woo_attr_id:
+				attr_payload["id"] = int(woo_attr_id)
+			woo_attrs.append(attr_payload)
 	return woo_attrs
 
 
@@ -1378,14 +1499,21 @@ def sync_price_to_woo(woo_item):
 	settings = frappe.get_single("Woo Settings")
 
 	price = _get_item_price(woo_item.item_code, settings.default_price_list)
-	regular_price = flt(woo_item.regular_price) if getattr(woo_item, "regular_price", None) else flt(price)
+	regular_price = flt(price) if price > 0 else (flt(woo_item.regular_price) if getattr(woo_item, "regular_price", None) else 0.0)
 	sale_price = flt(woo_item.sale_price) if getattr(woo_item, "sale_price", None) and flt(woo_item.sale_price) > 0 else None
+
+	if regular_price > 0 and (not woo_item.regular_price or flt(woo_item.regular_price) != regular_price):
+		woo_item.db_set("regular_price", regular_price)
 
 	# Check if item is a Variant of a Template product
 	variant_of = frappe.db.get_value("Item", woo_item.item_code, "variant_of")
 	parent_woo_id = None
 	if variant_of:
-		parent_woo_id = frappe.db.get_value("Woo Item", {"item_code": variant_of}, "woo_product_id")
+		parent_woo_id = (
+			frappe.db.get_value("Woo Item", {"item_code": variant_of}, "woo_product_id")
+			or frappe.db.get_value("Woo Item", {"sku": variant_of}, "woo_product_id")
+			or (frappe.db.exists("Woo Item", variant_of) and frappe.db.get_value("Woo Item", variant_of, "woo_product_id"))
+		)
 
 	if parent_woo_id:
 		api.update_variation_price(parent_woo_id, woo_item.woo_product_id, regular_price, sale_price=sale_price)
@@ -1406,21 +1534,63 @@ def sync_price_to_woo(woo_item):
 
 
 
-def _get_item_price(item_code, price_list):
+def _get_item_price(item_code, price_list=None):
 	"""Get item price from ERPNext price list.
+	For variant items, if no Item Price exists for the variant item_code,
+	falls back to the template item (variant_of)'s Item Price.
+	If still not found, falls back to standard_rate on the Item or template Item.
 
 	Args:
 		item_code: str
-		price_list: str
+		price_list: str (optional)
 
 	Returns:
 		float: price rate
 	"""
+	if not item_code:
+		return 0.0
+
+	if not price_list:
+		settings = frappe.get_single("Woo Settings")
+		price_list = getattr(settings, "default_price_list", None) or "Standard Selling"
+
 	price = frappe.db.get_value(
 		"Item Price",
 		{"item_code": item_code, "price_list": price_list, "selling": 1},
 		"price_list_rate",
 	)
+
+	variant_of = None
+	if not price:
+		# Check if this item is a variant of a template item
+		variant_of = frappe.db.get_value("Item", item_code, "variant_of")
+		if variant_of:
+			price = frappe.db.get_value(
+				"Item Price",
+				{"item_code": variant_of, "price_list": price_list, "selling": 1},
+				"price_list_rate",
+			)
+
+	if not price:
+		# Fallback to any selling price list if default price list had no rate
+		price = frappe.db.get_value(
+			"Item Price",
+			{"item_code": item_code, "selling": 1},
+			"price_list_rate",
+		)
+		if not price and variant_of:
+			price = frappe.db.get_value(
+				"Item Price",
+				{"item_code": variant_of, "selling": 1},
+				"price_list_rate",
+			)
+
+	if not price:
+		# Fallback to standard_rate on Item doctype
+		price = frappe.db.get_value("Item", item_code, "standard_rate")
+		if not price and variant_of:
+			price = frappe.db.get_value("Item", variant_of, "standard_rate")
+
 	return flt(price)
 
 
@@ -1731,28 +1901,48 @@ def on_item_price_update(doc, method):
 
 
 def sync_price_for_item_code(item_code):
-	"""Background worker: Push live updated price for a specific item to WooCommerce."""
+	"""Background worker: Push live updated price for a specific item (and variants) to WooCommerce and Woo Item."""
 	try:
 		settings = frappe.get_single("Woo Settings")
 		if not settings.enabled or not settings.enable_price_sync:
 			return
 
+		target_item_codes = [item_code]
+		# If this item has variants, also include all its variant items
+		variants = frappe.get_all(
+			"Item",
+			filters={"variant_of": item_code, "disabled": 0},
+			pluck="name",
+		)
+		if variants:
+			target_item_codes.extend(variants)
+
 		woo_items = frappe.get_all(
 			"Woo Item",
-			filters={"published": 1, "sync_price": 1, "woo_product_id": [">", 0]},
-			or_filters=[{"item_code": item_code}, {"sku": item_code}],
+			filters={"sync_price": 1},
+			or_filters=[{"item_code": ["in", target_item_codes]}, {"sku": ["in", target_item_codes]}],
 			fields=["name"],
 		)
 
 		for item in woo_items:
 			try:
 				woo_item = frappe.get_doc("Woo Item", item.name)
-				sync_price_to_woo(woo_item)
-				woo_item.db_set("last_synced", now_datetime())
-				woo_item.db_set("sync_status", "Synced")
+				current_price = _get_item_price(woo_item.item_code, settings.default_price_list)
+				if current_price > 0:
+					woo_item.regular_price = flt(current_price)
+
+				if woo_item.published and woo_item.woo_product_id:
+					sync_price_to_woo(woo_item)
+					woo_item.sync_status = "Synced"
+					woo_item.last_synced = now_datetime()
+
+				woo_item.save(ignore_permissions=True)
 			except Exception:
 				frappe.log_error(f"Real-time price sync failed for Woo Item: {item.name}")
-				frappe.get_doc("Woo Item", item.name).db_set("sync_status", "Error")
+				try:
+					frappe.get_doc("Woo Item", item.name).db_set("sync_status", "Error")
+				except Exception:
+					pass
 
 		frappe.db.commit()
 	except Exception as e:

@@ -81,6 +81,35 @@ frappe.ui.form.on("Woo Item", {
 				__('<span class="indicator-pill red">Sync Error - Check Logs</span>')
 			);
 		}
+
+		// Auto-fetch price if empty or 0
+		if (frm.doc.item_code && (!frm.doc.regular_price || flt(frm.doc.regular_price) <= 0)) {
+			frappe.call({
+				method: "woo_prime.woo_prime.doctype.woo_item.woo_item.get_item_price_rate",
+				args: { item_code: frm.doc.item_code },
+				callback: function (r) {
+					if (r && r.message !== undefined && r.message !== null && flt(r.message) > 0) {
+						if (!frm.doc.regular_price || flt(frm.doc.regular_price) <= 0) {
+							frm.set_value("regular_price", flt(r.message));
+						}
+					}
+				},
+			});
+		}
+	},
+
+	item_code(frm) {
+		if (frm.doc.item_code) {
+			frappe.call({
+				method: "woo_prime.woo_prime.doctype.woo_item.woo_item.get_item_price_rate",
+				args: { item_code: frm.doc.item_code },
+				callback: function (r) {
+					if (r && r.message !== undefined && r.message !== null && flt(r.message) > 0) {
+						frm.set_value("regular_price", flt(r.message));
+					}
+				},
+			});
+		}
 	},
 });
 
@@ -218,6 +247,35 @@ frappe.listview_settings["Woo Item"] = {
 						freeze_message: __("Creating ERPNext Items..."),
 						callback: function (r) {
 							listview.refresh();
+						},
+					});
+				}
+			);
+		});
+
+		// 6. Action Item: Update Regular Price from ERPNext
+		listview.page.add_action_item(__("Update Prices from ERPNext"), function () {
+			const selected = listview.get_checked_items();
+			const item_names = selected.length ? selected.map((d) => d.name) : null;
+
+			frappe.confirm(
+				item_names
+					? __("Update Regular Price from ERPNext Item Price for {0} selected item(s)?", [item_names.length])
+					: __("Update Regular Price from ERPNext for all Woo Items with empty price?"),
+				function () {
+					frappe.call({
+						method: "woo_prime.woo_prime.doctype.woo_item.woo_item.update_regular_prices",
+						args: { items: item_names },
+						freeze: true,
+						freeze_message: __("Updating Prices from ERPNext..."),
+						callback: function (r) {
+							if (r && r.message !== undefined) {
+								frappe.show_alert({
+									message: __("Updated prices for {0} item(s)!", [r.message]),
+									indicator: "green",
+								});
+								listview.refresh();
+							}
 						},
 					});
 				}

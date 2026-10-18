@@ -6,7 +6,8 @@
  "engine": "InnoDB",
  "field_order": [
   "woo_shipping_method",
-  "shipping_rule"
+  "shipping_rule",
+  "cost"
  ],
  "fields": [
   {
@@ -24,6 +25,13 @@
    "label": "ERPNext Shipping Rule",
    "options": "Shipping Rule",
    "reqd": 1
+  },
+  {
+   "fieldname": "cost",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Cost / Rate",
+   "read_only": 1
   }
  ],
  "istable": 1,

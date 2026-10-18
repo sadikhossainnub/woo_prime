@@ -1,0 +1,58 @@
+{
+ "actions": [],
+ "creation": "2026-10-18 18:30:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "erpnext_attribute",
+  "woo_attribute",
+  "woo_attribute_id",
+  "woo_attribute_slug"
+ ],
+ "fields": [
+  {
+   "fieldname": "erpnext_attribute",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "ERPNext Item Attribute",
+   "options": "Item Attribute",
+   "reqd": 1
+  },
+  {
+   "fieldname": "woo_attribute",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "WooCommerce Attribute",
+   "options": "Woo Attribute",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "woo_attribute.woo_attribute_id",
+   "fieldname": "woo_attribute_id",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Woo Attribute ID",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "woo_attribute.slug",
+   "fieldname": "woo_attribute_slug",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Woo Attribute Slug",
+   "read_only": 1
+  }
+ ],
+ "istable": 1,
+ "links": [],
+ "modified": "2026-10-18 18:30:00.000000",
+ "modified_by": "Administrator",
+ "module": "Woo Prime",
+ "name": "Woo Attribute Mapping",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "creation",
+ "sort_order": "DESC"
+}
+
