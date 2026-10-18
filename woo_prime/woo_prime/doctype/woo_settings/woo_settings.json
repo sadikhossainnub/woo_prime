@@ -342,6 +342,11 @@
    "label": "Auto-Map Attributes by Name"
   },
   {
+   "fieldname": "push_attributes_btn",
+   "fieldtype": "Button",
+   "label": "Push All Attributes to WooCommerce"
+  },
+  {
    "description": "Explicitly map ERPNext Item Attributes to WooCommerce Global Attributes (ensures WooCommerce Swatches & Variation IDs link perfectly)",
    "fieldname": "attribute_mappings",
    "fieldtype": "Table",

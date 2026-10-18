@@ -9,33 +9,18 @@ frappe.ui.form.on("Item", {
 				__("Publish to WooCommerce"),
 				function () {
 					frappe.confirm(
-						__("Publish <b>{0}</b> to WooCommerce?<br><br>If a linked Woo Item does not exist, one will be auto-created.", [frm.doc.item_name || frm.doc.name]),
+						__("Publish <b>{0}</b> to WooCommerce in the background?<br><br>If a linked Woo Item does not exist, one will be auto-created.", [frm.doc.item_name || frm.doc.name]),
 						function () {
 							frappe.call({
 								method: "woo_prime.woo_prime.doctype.woo_item.woo_item.publish_item_from_item_master",
-								args: { item_code: frm.doc.name },
-								freeze: true,
-								freeze_message: __("Publishing to WooCommerce..."),
+								args: { item_code: frm.doc.name, background: true },
 								callback: function (r) {
-									if (r.message) {
-										let d = r.message;
-										let msg = __("✅ Published to WooCommerce!<br>Product ID: <b>{0}</b>", [d.woo_product_id]);
-										if (d.woo_product_url) {
-											msg += __('<br><a href="{0}" target="_blank">View on WooCommerce ↗</a>', [d.woo_product_url]);
-										}
-										if (d.woo_item_name) {
-											msg += __('<br><br><a href="/app/woo-item/{0}">Open Woo Item →</a>', [d.woo_item_name]);
-										}
-										frappe.msgprint({
-											message: msg,
-											title: __("Published"),
-											indicator: "green",
-										});
+									if (r && r.message) {
+										frappe.show_alert({
+											message: r.message.message || __("Started background publish to WooCommerce..."),
+											indicator: "blue",
+										}, 5);
 									}
-									frm.reload_doc();
-								},
-								error: function () {
-									frm.reload_doc();
 								},
 							});
 						}
@@ -43,6 +28,37 @@ frappe.ui.form.on("Item", {
 				},
 				__("WooCommerce")
 			);
+
+			// Realtime listener for background publish progress
+			if (!frm.woo_publish_listener_attached) {
+				frm.woo_publish_listener_attached = true;
+				frappe.realtime.on("woo_publish_progress", function (data) {
+					if (data.operation === "publish_item" && data.item_code === frm.doc.name) {
+						if (data.status === "completed") {
+							let msg = __("✅ Published to WooCommerce!<br>Product ID: <b>{0}</b>", [data.woo_product_id]);
+							if (data.woo_product_url) {
+								msg += __('<br><a href="{0}" target="_blank">View on WooCommerce ↗</a>', [data.woo_product_url]);
+							}
+							if (data.woo_item_name) {
+								msg += __('<br><br><a href="/app/woo-item/{0}">Open Woo Item →</a>', [data.woo_item_name]);
+							}
+							frappe.msgprint({
+								message: msg,
+								title: __("Published"),
+								indicator: "green",
+							});
+							frm.reload_doc();
+						} else if (data.status === "error") {
+							frappe.msgprint({
+								message: data.message || __("Failed to publish to WooCommerce."),
+								title: __("Publish Failed"),
+								indicator: "red",
+							});
+							frm.reload_doc();
+						}
+					}
+				});
+			}
 
 			// --- Fetch & Link WooCommerce Items button ---
 			frm.add_custom_button(

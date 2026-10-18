@@ -7,10 +7,12 @@ import frappe
 import requests
 from frappe import _
 from frappe.model.document import Document
+from woo_prime.utils import repair_crashed_tables, safe_log_error
 
 
 class WooSettings(Document):
 	def onload(self):
+		repair_crashed_tables()
 		self.webhook_delivery_url = frappe.utils.get_url("/api/method/woo_prime.api.webhook.handle_order")
 
 	def validate(self):
@@ -135,7 +137,7 @@ class WooSettings(Document):
 				indicator="red",
 			)
 		except Exception as e:
-			frappe.log_error(title="woo_prime: test_connection error", message=frappe.get_traceback())
+			safe_log_error(title="woo_prime: test_connection error", message=frappe.get_traceback())
 			frappe.msgprint(
 				f"❌ Connection Failed!<br>Error: {frappe.utils.escape_html(str(e))}",
 				title="Connection Test",
@@ -153,9 +155,9 @@ class WooSettings(Document):
 		return fetch_missing_order(woo_order_id)
 
 	@frappe.whitelist()
-	def fetch_shipping_from_woo(self):
+	def fetch_shipping_from_woo(self, background=True):
 		"""Fetch WooCommerce shipping zones and methods."""
-		return fetch_shipping_from_woo()
+		return fetch_shipping_from_woo(background=background)
 
 
 @frappe.whitelist()
@@ -318,37 +320,98 @@ def auto_map_attributes():
 	return {"mapped_count": mapped_count, "message": msg}
 
 
+def _publish_shipping_progress(user, status, message, **kwargs):
+	"""Publish real-time progress update for shipping fetch."""
+	if not user:
+		return
+	try:
+		frappe.publish_realtime(
+			event="woo_fetch_progress",
+			message={
+				"operation": "fetch_shipping",
+				"status": status,
+				"message": message,
+				"timestamp": frappe.utils.now(),
+				**kwargs,
+			},
+			user=user,
+			after_commit=False,
+		)
+	except Exception as e:
+		frappe.logger("woo_prime").error(f"Failed to publish shipping progress: {e}")
+
+
 @frappe.whitelist()
-def fetch_shipping_from_woo():
-	"""Fetch WooCommerce shipping zones and methods, and map them to ERPNext Shipping Rules."""
+def fetch_shipping_from_woo(background=True):
+	"""Enqueue shipping fetch as background job or run synchronously."""
+	from woo_prime.woo_prime.doctype.woo_category.woo_category import _parse_bool
+
+	background = _parse_bool(background)
+
+	if background:
+		frappe.enqueue(
+			"woo_prime.woo_prime.doctype.woo_settings.woo_settings._fetch_shipping_worker",
+			queue="long",
+			timeout=1800,
+			enqueue_after_commit=True,
+			job_name=f"woo_fetch_shipping_{frappe.session.user}",
+			user=frappe.session.user,
+		)
+
+		msg = _("Shipping fetch started in background. You can monitor progress in real-time.")
+		if frappe.request:
+			frappe.msgprint(msg, title=_("Shipping Sync Queued"), indicator="blue")
+
+		return {"status": "queued", "message": msg}
+	else:
+		return _fetch_shipping_worker(user=frappe.session.user)
+
+
+def _fetch_shipping_worker(user=None):
+	"""Background worker: Fetch WooCommerce shipping zones and methods."""
 	from frappe.utils import flt
 	import re
 
+	repair_crashed_tables()
+
 	api = get_woo_api()
 	settings = frappe.get_single("Woo Settings")
+	operation = "fetch_shipping"
+
+	_publish_shipping_progress(user, "starting", "Initializing shipping fetch...")
 
 	# 1. Fetch shipping zones
 	try:
-		resp = api.get("shipping/zones")
+		_publish_shipping_progress(user, "fetching", "Fetching shipping zones from WooCommerce...")
+		resp = api.get("shipping/zones", timeout=60)
 		if resp.status_code != 200:
-			frappe.throw(_("Failed to fetch shipping zones from WooCommerce (Status {0}): {1}").format(
+			error_msg = _("Failed to fetch shipping zones from WooCommerce (Status {0}): {1}").format(
 				resp.status_code, resp.text[:200]
-			))
+			)
+			_publish_shipping_progress(user, "error", error_msg)
+			frappe.throw(error_msg)
 		zones = resp.json() if isinstance(resp.json(), list) else []
 	except Exception as e:
-		frappe.log_error(title="woo_prime: fetch_shipping_from_woo error", message=frappe.get_traceback())
+		safe_log_error(title="woo_prime: fetch_shipping_from_woo error", message=frappe.get_traceback())
+		_publish_shipping_progress(user, "error", f"❌ Error fetching shipping zones: {str(e)}")
 		frappe.throw(_("Error fetching shipping zones from WooCommerce: {0}").format(str(e)))
 
 	# Include Zone 0: Rest of the World (Locations not covered by other zones)
 	zones.append({"id": 0, "name": "Locations not covered by other zones"})
 
 	fetched_methods = []
-	for zone in zones:
+	for idx, zone in enumerate(zones):
 		zone_id = zone.get("id")
 		zone_name = zone.get("name") or f"Zone {zone_id}"
 
+		_publish_shipping_progress(
+			user, "processing",
+			f"Fetching methods for zone: {zone_name} ({idx + 1}/{len(zones)})...",
+			total_synced=len(fetched_methods),
+		)
+
 		try:
-			m_resp = api.get(f"shipping/zones/{zone_id}/methods")
+			m_resp = api.get(f"shipping/zones/{zone_id}/methods", timeout=45)
 			if m_resp.status_code != 200:
 				continue
 			methods = m_resp.json()
@@ -389,12 +452,12 @@ def fetch_shipping_from_woo():
 					"cost": cost,
 				})
 		except Exception as e:
-			frappe.log_error(title=f"woo_prime: Error fetching methods for zone {zone_id}", message=frappe.get_traceback())
+			safe_log_error(title=f"woo_prime: Error fetching methods for zone {zone_id}", message=frappe.get_traceback())
 
 	# Fallback if no zones or zone methods found: try legacy shipping_methods endpoint
 	if not fetched_methods:
 		try:
-			leg_resp = api.get("shipping_methods")
+			leg_resp = api.get("shipping_methods", timeout=45)
 			if leg_resp.status_code == 200:
 				leg_methods = leg_resp.json()
 				if isinstance(leg_methods, list):
@@ -412,9 +475,8 @@ def fetch_shipping_from_woo():
 
 	if not fetched_methods:
 		msg = _("No shipping methods found on your WooCommerce store.")
-		if frappe.request:
-			frappe.msgprint(msg, title=_("WooCommerce Shipping Sync"), indicator="orange")
-		return {"new_count": 0, "updated_count": 0, "total_found": 0, "message": msg}
+		_publish_shipping_progress(user, "completed", msg, total_synced=0)
+		return {"status": "success", "new_count": 0, "updated_count": 0, "total_found": 0, "message": msg}
 
 	# Existing mappings in Woo Settings
 	existing_mappings = {}
@@ -472,7 +534,7 @@ def fetch_shipping_from_woo():
 				sr.insert(ignore_permissions=True)
 				matched_rule = sr.name
 			except Exception as e:
-				frappe.log_error(title="woo_prime: Auto-create Shipping Rule failed", message=frappe.get_traceback())
+				safe_log_error(title="woo_prime: Auto-create Shipping Rule failed", message=frappe.get_traceback())
 
 		# Fallback to default_shipping_rule
 		if not matched_rule and getattr(settings, "default_shipping_rule", None):
@@ -510,10 +572,16 @@ def fetch_shipping_from_woo():
 		"🔄 Updated: <b>{2}</b>"
 	).format(len(fetched_methods), new_count, updated_count)
 
-	if frappe.request:
-		frappe.msgprint(msg, title=_("Shipping Sync"), indicator="green" if (new_count or updated_count) else "blue")
+	_publish_shipping_progress(
+		user, "completed",
+		f"✅ Shipping sync completed: {len(fetched_methods)} methods found ({new_count} added, {updated_count} updated)!",
+		total_synced=len(fetched_methods),
+		new_count=new_count,
+		updated_count=updated_count,
+	)
 
 	return {
+		"status": "success",
 		"new_count": new_count,
 		"updated_count": updated_count,
 		"total_found": len(fetched_methods),

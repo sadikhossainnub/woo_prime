@@ -25,6 +25,9 @@ frappe.ui.form.on("Woo Settings", {
 		if (frm.fields_dict.auto_map_attributes_btn) {
 			frm.fields_dict.auto_map_attributes_btn.$input.addClass("btn-primary");
 		}
+		if (frm.fields_dict.push_attributes_btn) {
+			frm.fields_dict.push_attributes_btn.$input.addClass("btn-info");
+		}
 		if (frm.fields_dict.fetch_items_btn) {
 			frm.fields_dict.fetch_items_btn.$input.addClass("btn-warning");
 		}
@@ -92,20 +95,20 @@ frappe.ui.form.on("Woo Settings", {
 			__("Fetch WooCommerce Attributes"),
 			function () {
 				frappe.confirm(
-					__("Fetch all product attributes and terms from WooCommerce?"),
+					__("Fetch all product attributes and terms from WooCommerce? This will run in the background."),
 					function () {
+						show_fetch_progress_dialog('fetch_attributes');
 						frappe.call({
 							method: "woo_prime.woo_prime.doctype.woo_attribute.woo_attribute.fetch_attributes_from_woo",
-							freeze: true,
-							freeze_message: __("Fetching attributes from WooCommerce..."),
+							args: { background: true },
 							callback: function (r) {
-								if (r && r.message) {
+								if (r && r.message && r.message.status === 'queued') {
 									frappe.show_alert({
-										message: r.message.message || __("Attributes synced!"),
-										indicator: "green",
-									});
+										message: __('Attribute fetch queued in background'),
+										indicator: 'blue'
+									}, 5);
 								}
-							},
+							}
 						});
 					}
 				);
@@ -118,20 +121,20 @@ frappe.ui.form.on("Woo Settings", {
 			__("Fetch WooCommerce Tags"),
 			function () {
 				frappe.confirm(
-					__("Fetch all product tags from WooCommerce?"),
+					__("Fetch all product tags from WooCommerce? This will run in the background."),
 					function () {
+						show_fetch_progress_dialog('fetch_tags');
 						frappe.call({
 							method: "woo_prime.woo_prime.doctype.woo_tag.woo_tag.fetch_tags_from_woo",
-							freeze: true,
-							freeze_message: __("Fetching tags from WooCommerce..."),
+							args: { background: true },
 							callback: function (r) {
-								if (r && r.message) {
+								if (r && r.message && r.message.status === 'queued') {
 									frappe.show_alert({
-										message: r.message.message || __("Tags synced!"),
-										indicator: "green",
-									});
+										message: __('Tag fetch queued in background'),
+										indicator: 'blue'
+									}, 5);
 								}
-							},
+							}
 						});
 					}
 				);
@@ -144,18 +147,32 @@ frappe.ui.form.on("Woo Settings", {
 			__("Fetch WooCommerce Shipping"),
 			function () {
 				frappe.confirm(
-					__("Fetch all shipping zones and methods from WooCommerce?"),
+					__("Fetch all shipping zones and methods from WooCommerce? This will run in the background."),
 					function () {
+						show_fetch_progress_dialog('fetch_shipping');
 						frappe.call({
 							method: "woo_prime.woo_prime.doctype.woo_settings.woo_settings.fetch_shipping_from_woo",
-							freeze: true,
-							freeze_message: __("Fetching shipping methods from WooCommerce..."),
+							args: { background: true },
 							callback: function (r) {
-								frm.reload_doc();
-							},
+								if (r && r.message && r.message.status === 'queued') {
+									frappe.show_alert({
+										message: __('Shipping fetch queued in background'),
+										indicator: 'blue'
+									}, 5);
+								}
+							}
 						});
 					}
 				);
+			},
+			__("Sync")
+		);
+
+		// Add custom button to push all attributes to WooCommerce
+		frm.add_custom_button(
+			__("Push Attributes to WooCommerce"),
+			function () {
+				frm.events.push_attributes_btn(frm);
 			},
 			__("Sync")
 		);
@@ -362,20 +379,20 @@ frappe.ui.form.on("Woo Settings", {
 		}
 
 		frappe.confirm(
-			__("Fetch all product attributes and terms from WooCommerce?"),
+			__("Fetch all product attributes and terms from WooCommerce? This will run in the background."),
 			function () {
+				show_fetch_progress_dialog('fetch_attributes');
 				frappe.call({
 					method: "woo_prime.woo_prime.doctype.woo_attribute.woo_attribute.fetch_attributes_from_woo",
-					freeze: true,
-					freeze_message: __("Fetching attributes from WooCommerce..."),
+					args: { background: true },
 					callback: function (r) {
-						if (r && r.message) {
+						if (r && r.message && r.message.status === 'queued') {
 							frappe.show_alert({
-								message: r.message.message || __("Attributes synced!"),
-								indicator: "green",
-							});
+								message: __('Attribute fetch queued in background'),
+								indicator: 'blue'
+							}, 5);
 						}
-					},
+					}
 				});
 			}
 		);
@@ -388,20 +405,20 @@ frappe.ui.form.on("Woo Settings", {
 		}
 
 		frappe.confirm(
-			__("Fetch all product tags from WooCommerce?"),
+			__("Fetch all product tags from WooCommerce? This will run in the background."),
 			function () {
+				show_fetch_progress_dialog('fetch_tags');
 				frappe.call({
 					method: "woo_prime.woo_prime.doctype.woo_tag.woo_tag.fetch_tags_from_woo",
-					freeze: true,
-					freeze_message: __("Fetching tags from WooCommerce..."),
+					args: { background: true },
 					callback: function (r) {
-						if (r && r.message) {
+						if (r && r.message && r.message.status === 'queued') {
 							frappe.show_alert({
-								message: r.message.message || __("Tags synced!"),
-								indicator: "green",
-							});
+								message: __('Tag fetch queued in background'),
+								indicator: 'blue'
+							}, 5);
 						}
-					},
+					}
 				});
 			}
 		);
@@ -418,6 +435,32 @@ frappe.ui.form.on("Woo Settings", {
 		});
 	},
 
+	push_attributes_btn(frm) {
+		if (!frm.doc.woo_site_url || !frm.doc.consumer_key) {
+			frappe.msgprint(__("Please set up WooCommerce connection first."));
+			return;
+		}
+
+		frappe.confirm(
+			__("Push all ERPNext Item Attributes and Terms to WooCommerce as Global Attributes? This will run in the background."),
+			function () {
+				show_fetch_progress_dialog('push_attributes');
+				frappe.call({
+					method: "woo_prime.woo_prime.doctype.woo_attribute.woo_attribute.push_all_attributes_to_woo",
+					args: { background: true },
+					callback: function (r) {
+						if (r && r.message && r.message.status === 'queued') {
+							frappe.show_alert({
+								message: __('Attribute push queued in background'),
+								indicator: 'blue'
+							}, 5);
+						}
+					}
+				});
+			}
+		);
+	},
+
 	fetch_shipping_btn(frm) {
 		if (!frm.doc.woo_site_url || !frm.doc.consumer_key) {
 			frappe.msgprint(__("Please set up WooCommerce connection first."));
@@ -425,15 +468,20 @@ frappe.ui.form.on("Woo Settings", {
 		}
 
 		frappe.confirm(
-			__("Fetch all shipping zones and methods from WooCommerce?"),
+			__("Fetch all shipping zones and methods from WooCommerce? This will run in the background."),
 			function () {
+				show_fetch_progress_dialog('fetch_shipping');
 				frappe.call({
 					method: "woo_prime.woo_prime.doctype.woo_settings.woo_settings.fetch_shipping_from_woo",
-					freeze: true,
-					freeze_message: __("Fetching shipping methods from WooCommerce..."),
+					args: { background: true },
 					callback: function (r) {
-						frm.reload_doc();
-					},
+						if (r && r.message && r.message.status === 'queued') {
+							frappe.show_alert({
+								message: __('Shipping fetch queued in background'),
+								indicator: 'blue'
+							}, 5);
+						}
+					}
 				});
 			}
 		);
@@ -519,10 +567,20 @@ function show_fetch_progress_dialog(operation) {
 	if (progress_dialog) {
 		progress_dialog.hide();
 	}
-	
+
+	let title_map = {
+		'fetch_products': __('Fetching Products'),
+		'fetch_categories': __('Fetching Categories'),
+		'fetch_attributes': __('Fetching Attributes & Terms'),
+		'fetch_tags': __('Fetching Tags'),
+		'fetch_shipping': __('Fetching Shipping Zones & Methods'),
+		'push_attributes': __('Pushing Attributes to WooCommerce')
+	};
+	let dialog_title = title_map[operation] || __('Fetching WooCommerce Data');
+
 	// Create progress dialog
 	progress_dialog = new frappe.ui.Dialog({
-		title: operation === 'fetch_products' ? __('Fetching Products') : __('Fetching Categories'),
+		title: dialog_title,
 		indicator: 'blue',
 		size: 'large',
 		fields: [
@@ -540,14 +598,14 @@ function show_fetch_progress_dialog(operation) {
 			}
 		}
 	});
-	
+
 	// Initialize progress HTML
 	let html = `
 		<div class="woo-fetch-progress">
 			<div class="progress" style="height: 30px; margin-bottom: 20px;">
 				<div class="progress-bar progress-bar-striped progress-bar-animated" 
 					role="progressbar" 
-					style="width: 0%;" 
+					style="width: 20%;" 
 					id="woo-progress-bar">
 				</div>
 			</div>
@@ -586,28 +644,36 @@ function show_fetch_progress_dialog(operation) {
 			</div>
 		</div>
 	`;
-	
+
 	progress_dialog.fields_dict.progress_html.$wrapper.html(html);
 	progress_dialog.show();
-	
+
 	// Subscribe to realtime updates
 	progress_subscription = function(data) {
 		if (data.operation !== operation) {
 			return;
 		}
-		
+
 		update_progress_dialog(data);
-		
-		// Auto-close on completion or error after 5 seconds
-		if (data.status === 'completed' || data.status === 'error') {
+
+		if (data.status === 'completed') {
+			if (cur_frm && cur_frm.doctype === 'Woo Settings') {
+				cur_frm.reload_doc();
+			}
 			setTimeout(function() {
 				if (progress_dialog) {
 					progress_dialog.hide();
 				}
-			}, 5000);
+			}, 4000);
+		} else if (data.status === 'error') {
+			setTimeout(function() {
+				if (progress_dialog) {
+					progress_dialog.hide();
+				}
+			}, 6000);
 		}
 	};
-	
+
 	frappe.realtime.on('woo_fetch_progress', progress_subscription);
 }
 
@@ -615,11 +681,11 @@ function update_progress_dialog(data) {
 	if (!progress_dialog) {
 		return;
 	}
-	
+
 	// Update status message
 	let status_icon = 'fa-spinner fa-spin';
 	let status_color = '#555';
-	
+
 	if (data.status === 'completed') {
 		status_icon = 'fa-check-circle';
 		status_color = '#28a745';
@@ -627,18 +693,22 @@ function update_progress_dialog(data) {
 		status_icon = 'fa-exclamation-circle';
 		status_color = '#dc3545';
 	}
-	
+
 	$('#woo-status-message').html(
 		`<i class="fa ${status_icon}" style="color: ${status_color};"></i> ${data.message}`
 	);
-	
-	// Update progress bar (estimate based on page number if not provided)
+
+	// Update progress bar
 	if (data.status === 'completed') {
-		$('#woo-progress-bar').css('width', '100%').removeClass('progress-bar-animated');
+		$('#woo-progress-bar').css('width', '100%').removeClass('progress-bar-animated progress-bar-striped').addClass('bg-success');
 	} else if (data.status === 'error') {
-		$('#woo-progress-bar').removeClass('progress-bar-striped progress-bar-animated').addClass('bg-danger');
+		$('#woo-progress-bar').css('width', '100%').removeClass('progress-bar-striped progress-bar-animated').addClass('bg-danger');
+	} else if (data.status === 'processing') {
+		$('#woo-progress-bar').css('width', '70%');
+	} else if (data.status === 'fetching') {
+		$('#woo-progress-bar').css('width', '45%');
 	}
-	
+
 	// Update stats
 	if (data.operation === 'fetch_products') {
 		$('#woo-stats-row').show();
@@ -646,8 +716,7 @@ function update_progress_dialog(data) {
 		$('#woo-stat-linked').text(data.linked || 0);
 		$('#woo-stat-created').text(data.created || 0);
 		$('#woo-stat-failed').text(data.failed || 0);
-	} else if (data.operation === 'fetch_categories') {
-		// Simplified stats for categories
+	} else {
 		$('#woo-stats-row').hide();
 	}
 }

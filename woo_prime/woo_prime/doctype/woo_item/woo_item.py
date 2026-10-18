@@ -6,6 +6,7 @@ import frappe
 from frappe import _
 from frappe.model.document import Document
 from frappe.utils import now_datetime
+from woo_prime.utils import clean_text
 
 
 class WooItem(Document):
@@ -29,13 +30,39 @@ class WooItem(Document):
 					self.regular_price = flt(price)
 
 	@frappe.whitelist()
-	def publish_to_woocommerce(self):
+	def publish_to_woocommerce(self, background=True):
 		"""Create or update product on WooCommerce."""
+		background = _parse_bool(background)
+
+		if background:
+			frappe.enqueue(
+				"woo_prime.woo_prime.doctype.woo_item.woo_item._publish_single_woo_item_worker",
+				woo_item_name=self.name,
+				user=frappe.session.user,
+				queue="long",
+				timeout=1800,
+				enqueue_after_commit=True,
+				job_name=f"woo_publish_{self.name}",
+			)
+			msg = _("Publishing '{0}' to WooCommerce in the background...").format(self.item_name or self.name)
+			if frappe.request:
+				frappe.msgprint(msg, title=_("Publish Queued"), indicator="blue")
+			return {"status": "queued", "message": msg, "woo_item_name": self.name}
+		else:
+			return self._execute_publish_sync(user=frappe.session.user)
+
+	def _execute_publish_sync(self, user=None):
 		from woo_prime.api.sync import publish_item_to_woo
+		from woo_prime.utils import repair_crashed_tables, safe_log_error
+
+		repair_crashed_tables()
 
 		try:
 			result = publish_item_to_woo(self)
-			self.reload()
+			try:
+				self.reload()
+			except Exception:
+				pass
 			self.woo_product_id = result.get("id")
 			self.published = 1
 			self.woo_product_url = result.get("permalink", "")
@@ -53,13 +80,32 @@ class WooItem(Document):
 				woo_reference_id=str(self.woo_product_id),
 			)
 
-			frappe.msgprint(
-				_("✅ Product published to WooCommerce successfully!<br>Product ID: <b>{0}</b>").format(
-					self.woo_product_id
-				),
-				title=_("Published"),
-				indicator="green",
+			msg = _("✅ Product '{0}' published to WooCommerce successfully!<br>Product ID: <b>{1}</b>").format(
+				self.item_name or self.name, self.woo_product_id
 			)
+
+			_publish_item_progress(
+				user=user,
+				operation="publish_item",
+				status="completed",
+				message=msg,
+				woo_item_name=self.name,
+				item_code=self.item_code,
+				item_name=self.item_name,
+				woo_product_id=self.woo_product_id,
+				woo_product_url=self.woo_product_url,
+			)
+
+			if frappe.request and not frappe.flags.in_test:
+				frappe.msgprint(msg, title=_("Published"), indicator="green")
+
+			return {
+				"status": "success",
+				"woo_product_id": self.woo_product_id,
+				"woo_product_url": self.woo_product_url,
+				"woo_item_name": self.name,
+				"message": msg,
+			}
 		except Exception as e:
 			try:
 				self.reload()
@@ -77,8 +123,23 @@ class WooItem(Document):
 				reference_name=self.name,
 				error_message=str(e),
 			)
+			safe_log_error(title="woo_prime: Publish Item Failed", message=frappe.get_traceback())
 
-			frappe.throw(_("Failed to publish to WooCommerce: {0}").format(str(e)))
+			err_msg = _("❌ Failed to publish '{0}' to WooCommerce: {1}").format(
+				self.item_name or self.name, str(e)
+			)
+
+			_publish_item_progress(
+				user=user,
+				operation="publish_item",
+				status="error",
+				message=err_msg,
+				woo_item_name=self.name,
+				item_code=self.item_code,
+				item_name=self.item_name,
+			)
+
+			raise
 
 	@frappe.whitelist()
 	def sync_stock_now(self):
@@ -155,26 +216,118 @@ def create_sync_log(**kwargs):
 
 
 @frappe.whitelist()
-def bulk_publish(items):
+def bulk_publish(items, background=True):
 	"""Bulk publish multiple Woo Items to WooCommerce."""
 	import json
 
 	if isinstance(items, str):
 		items = json.loads(items)
 
+	background = _parse_bool(background)
+
+	if background:
+		frappe.enqueue(
+			"woo_prime.woo_prime.doctype.woo_item.woo_item._bulk_publish_worker",
+			items=items,
+			user=frappe.session.user,
+			queue="long",
+			timeout=3600,
+			enqueue_after_commit=True,
+			job_name=f"woo_bulk_publish_{frappe.session.user}",
+		)
+		msg = _("Started background publish for {0} item(s). You can monitor progress.").format(len(items))
+		if frappe.request:
+			frappe.msgprint(msg, title=_("Bulk Publish Queued"), indicator="blue")
+		return {"status": "queued", "message": msg, "total": len(items)}
+	else:
+		return _bulk_publish_worker(items=items, user=frappe.session.user)
+
+
+def _publish_single_woo_item_worker(woo_item_name, user=None):
+	"""Background worker: publish a single Woo Item to WooCommerce."""
+	try:
+		if not frappe.db.exists("Woo Item", woo_item_name):
+			return
+		woo_item = frappe.get_doc("Woo Item", woo_item_name)
+		_publish_item_progress(
+			user=user,
+			operation="publish_item",
+			status="processing",
+			message=_("Publishing '{0}' to WooCommerce...").format(woo_item.item_name or woo_item.name),
+			woo_item_name=woo_item.name,
+			item_code=woo_item.item_code,
+			item_name=woo_item.item_name,
+		)
+		woo_item._execute_publish_sync(user=user)
+		frappe.db.commit()
+	except Exception as e:
+		frappe.db.rollback()
+		frappe.logger("woo_prime").error(f"Background publish failed for {woo_item_name}: {e}")
+
+
+def _bulk_publish_worker(items, user=None):
+	"""Background worker: bulk publish multiple Woo Items to WooCommerce."""
+	total = len(items)
 	success_count = 0
 	fail_count = 0
 
-	for item_name in items:
-		try:
-			woo_item = frappe.get_doc("Woo Item", item_name)
-			woo_item.publish_to_woocommerce()
-			success_count += 1
-		except Exception:
-			fail_count += 1
-			frappe.log_error(f"Bulk publish failed for {item_name}")
+	_publish_item_progress(
+		user=user,
+		operation="bulk_publish",
+		status="starting",
+		message=_("Starting bulk publish of {0} item(s)...").format(total),
+		total=total,
+		current=0,
+		success=0,
+		failed=0,
+	)
 
-	return {"success": success_count, "failed": fail_count}
+	for idx, item_name in enumerate(items):
+		try:
+			_publish_item_progress(
+				user=user,
+				operation="bulk_publish",
+				status="processing",
+				message=_("Publishing {0} ({1}/{2})...").format(item_name, idx + 1, total),
+				total=total,
+				current=idx + 1,
+				success=success_count,
+				failed=fail_count,
+			)
+			if frappe.db.exists("Woo Item", item_name):
+				woo_item = frappe.get_doc("Woo Item", item_name)
+				woo_item._execute_publish_sync(user=user)
+				success_count += 1
+				frappe.db.commit()
+			else:
+				fail_count += 1
+		except Exception as e:
+			fail_count += 1
+			frappe.db.rollback()
+			frappe.logger("woo_prime").error(f"Bulk publish error for {item_name}: {e}")
+
+	final_msg = _("✅ Bulk publish completed: {0} succeeded, {1} failed.").format(success_count, fail_count)
+	_publish_item_progress(
+		user=user,
+		operation="bulk_publish",
+		status="completed",
+		message=final_msg,
+		total=total,
+		current=total,
+		success=success_count,
+		failed=fail_count,
+	)
+
+	return {"success": success_count, "failed": fail_count, "message": final_msg}
+
+
+def _publish_item_progress(user=None, **kwargs):
+	"""Publish realtime progress message for item publish operations."""
+	payload = dict(kwargs)
+	if user:
+		frappe.publish_realtime("woo_publish_progress", payload, user=user)
+	else:
+		frappe.publish_realtime("woo_publish_progress", payload)
 
 
 def _parse_bool(value):
@@ -459,7 +612,20 @@ def _process_single_product(prod, settings, default_item_group, auto_create_miss
 	
 	# Save Woo Item (Requirement 8.2)
 	woo_item.save(ignore_permissions=True)
-	
+
+	# Attach WooCommerce tags to ERPNext Item
+	prod_tags = prod.get("tags", [])
+	target_item = woo_item.item_code
+	if prod_tags and target_item:
+		for t in prod_tags:
+			t_name = clean_text(t.get("name"))
+			if t_name:
+				try:
+					from frappe.desk.doctype.tag.tag import add_tag
+					add_tag(t_name, "Item", target_item)
+				except Exception:
+					pass
+
 	return {"linked": linked, "created": created}
 
 
@@ -1118,20 +1284,22 @@ def create_erpnext_items_from_woo(items):
 
 
 @frappe.whitelist()
-def publish_item_from_item_master(item_code):
+def publish_item_from_item_master(item_code, background=True):
 	"""Publish an ERPNext Item to WooCommerce directly from the Item Master form.
 
 	Finds or auto-creates the linked Woo Item, then triggers publish_to_woocommerce.
 
 	Args:
 		item_code: ERPNext Item code
+		background: If True, runs publish in background worker
 
 	Returns:
-		dict with woo_product_id, woo_product_url, woo_item_name
+		dict with status, woo_product_id, woo_product_url, woo_item_name
 	"""
 	if not item_code or not frappe.db.exists("Item", item_code):
 		frappe.throw(_("Item {0} not found.").format(item_code))
 
+	background = _parse_bool(background)
 	item = frappe.get_doc("Item", item_code)
 
 	# Find existing Woo Item linked to this item_code
@@ -1167,15 +1335,34 @@ def publish_item_from_item_master(item_code):
 		woo_item.save(ignore_permissions=True)
 		frappe.db.commit()
 
-	# Now publish
-	woo_item.publish_to_woocommerce()
-	woo_item.reload()
-
-	return {
-		"woo_product_id": woo_item.woo_product_id,
-		"woo_product_url": woo_item.woo_product_url or "",
-		"woo_item_name": woo_item.name,
-	}
+	if background:
+		frappe.enqueue(
+			"woo_prime.woo_prime.doctype.woo_item.woo_item._publish_single_woo_item_worker",
+			woo_item_name=woo_item.name,
+			user=frappe.session.user,
+			queue="long",
+			timeout=1800,
+			enqueue_after_commit=True,
+			job_name=f"woo_publish_{woo_item.name}",
+		)
+		msg = _("Publishing '{0}' to WooCommerce in the background...").format(item.item_name or item_code)
+		if frappe.request:
+			frappe.msgprint(msg, title=_("Publish Queued"), indicator="blue")
+		return {
+			"status": "queued",
+			"woo_item_name": woo_item.name,
+			"item_code": item_code,
+			"message": msg,
+		}
+	else:
+		woo_item._execute_publish_sync(user=frappe.session.user)
+		woo_item.reload()
+		return {
+			"status": "success",
+			"woo_product_id": woo_item.woo_product_id,
+			"woo_product_url": woo_item.woo_product_url or "",
+			"woo_item_name": woo_item.name,
+		}
 
 
 @frappe.whitelist()

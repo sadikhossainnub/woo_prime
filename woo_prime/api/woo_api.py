@@ -67,12 +67,12 @@ class WooAPI:
 		self.user_agent = user_agent.strip() if user_agent and user_agent.strip() else DEFAULT_USER_AGENT
 		self.base_url = f"{self.site_url}/wp-json/{self.API_VERSION}"
 		self.auth = HTTPBasicAuth(consumer_key, consumer_secret)
-		self.timeout = 30
+		self.timeout = 60
 		self.use_rest_route = False
 		self.use_query_auth = False
 		self.session = requests.Session()
 
-	def _request(self, method, endpoint, data=None, params=None):
+	def _request(self, method, endpoint, data=None, params=None, timeout=None):
 		"""Make an authenticated request to WooCommerce API."""
 		headers = {
 			"User-Agent": self.user_agent,
@@ -82,6 +82,7 @@ class WooAPI:
 			headers["Content-Type"] = "application/json"
 
 		logger = frappe.logger("woo_prime", allow_site=True, max_size=1, file_count=50)
+		req_timeout = timeout or self.timeout
 
 		def make_call(use_rest, use_query):
 			req_params = dict(params) if params else {}
@@ -100,7 +101,7 @@ class WooAPI:
 
 			# Log the outgoing request
 			safe_params = {k: v for k, v in req_params.items() if k not in ("consumer_key", "consumer_secret")}
-			logger.info(f"[WooAPI] {method} → {url} | params={safe_params} | rest_route={use_rest} | query_auth={use_query}")
+			logger.info(f"[WooAPI] {method} → {url} | params={safe_params} | rest_route={use_rest} | query_auth={use_query} | timeout={req_timeout}")
 
 			resp = self.session.request(
 				method=method,
@@ -109,7 +110,7 @@ class WooAPI:
 				headers=headers,
 				json=data,
 				params=req_params,
-				timeout=self.timeout,
+				timeout=req_timeout,
 			)
 
 			# Log the response
@@ -172,21 +173,21 @@ class WooAPI:
 		return response
 
 
-	def get(self, endpoint, params=None):
+	def get(self, endpoint, params=None, timeout=None):
 		"""GET request."""
-		return self._request("GET", endpoint, params=params)
+		return self._request("GET", endpoint, params=params, timeout=timeout)
 
-	def post(self, endpoint, data=None):
+	def post(self, endpoint, data=None, timeout=None):
 		"""POST request."""
-		return self._request("POST", endpoint, data=data)
+		return self._request("POST", endpoint, data=data, timeout=timeout)
 
-	def put(self, endpoint, data=None):
+	def put(self, endpoint, data=None, timeout=None):
 		"""PUT request."""
-		return self._request("PUT", endpoint, data=data)
+		return self._request("PUT", endpoint, data=data, timeout=timeout)
 
-	def delete(self, endpoint, params=None):
+	def delete(self, endpoint, params=None, timeout=None):
 		"""DELETE request."""
-		return self._request("DELETE", endpoint, params=params)
+		return self._request("DELETE", endpoint, params=params, timeout=timeout)
 
 	# --- Product Methods ---
 

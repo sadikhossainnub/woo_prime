@@ -19,7 +19,7 @@ class WooSyncLog(Document):
 
 			woo_item = frappe.get_doc("Woo Item", self.reference_name)
 			if self.sync_type == "Item":
-				woo_item.publish_to_woocommerce()
+				woo_item.publish_to_woocommerce(background=False)
 			elif self.sync_type == "Stock":
 				woo_item.sync_stock_now()
 			elif self.sync_type == "Price":

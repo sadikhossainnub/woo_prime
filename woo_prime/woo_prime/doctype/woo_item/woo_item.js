@@ -8,19 +8,62 @@ frappe.ui.form.on("Woo Item", {
 			frm.add_custom_button(
 				__("Publish to WooCommerce"),
 				function () {
-					frappe.call({
-						method: "publish_to_woocommerce",
-						doc: frm.doc,
-						freeze: true,
-						freeze_message: __("Publishing to WooCommerce..."),
-						timeout: 300,
-						callback: function (r) {
-							frm.reload_doc();
-						},
-					});
+					let do_publish = function () {
+						frappe.confirm(
+							__("Publish <b>{0}</b> to WooCommerce in the background?", [frm.doc.item_name || frm.doc.name]),
+							function () {
+								frappe.call({
+									method: "publish_to_woocommerce",
+									doc: frm.doc,
+									args: { background: true },
+									callback: function (r) {
+										if (r && r.message) {
+											frappe.show_alert({
+												message: r.message.message || __("Publishing to WooCommerce in background..."),
+												indicator: "blue"
+											}, 5);
+										}
+									}
+								});
+							}
+						);
+					};
+					if (frm.is_dirty()) {
+						frm.save().then(do_publish);
+					} else {
+						do_publish();
+					}
 				},
 				__("Actions")
 			);
+
+			// Realtime listener for background publish progress
+			if (!frm.publish_listener_attached) {
+				frm.publish_listener_attached = true;
+				frappe.realtime.on("woo_publish_progress", function (data) {
+					if (data.operation === "publish_item" && data.woo_item_name === frm.doc.name) {
+						if (data.status === "completed") {
+							let msg = __("✅ Product published to WooCommerce successfully!<br>Product ID: <b>{0}</b>", [data.woo_product_id]);
+							if (data.woo_product_url) {
+								msg += __('<br><a href="{0}" target="_blank">View on WooCommerce ↗</a>', [data.woo_product_url]);
+							}
+							frappe.msgprint({
+								title: __("Published"),
+								message: msg,
+								indicator: "green",
+							});
+							frm.reload_doc();
+						} else if (data.status === "error") {
+							frappe.msgprint({
+								title: __("Publish Failed"),
+								message: data.message || __("Failed to publish to WooCommerce."),
+								indicator: "red",
+							});
+							frm.reload_doc();
+						}
+					}
+				});
+			}
 
 			// Show sync buttons only if already published
 			if (frm.doc.woo_product_id) {
@@ -160,22 +203,18 @@ frappe.listview_settings["Woo Item"] = {
 			const item_names = selected.map((d) => d.name);
 
 			frappe.confirm(
-				__("Publish {0} item(s) to WooCommerce?", [item_names.length]),
+				__("Publish {0} item(s) to WooCommerce in the background?", [item_names.length]),
 				function () {
+					show_bulk_publish_dialog(listview, item_names.length);
 					frappe.call({
 						method: "woo_prime.woo_prime.doctype.woo_item.woo_item.bulk_publish",
-						args: { items: item_names },
-						freeze: true,
-						freeze_message: __("Publishing items..."),
+						args: { items: item_names, background: true },
 						callback: function (r) {
-							if (r.message) {
-								frappe.msgprint(
-									__(
-										"✅ Published: {0}<br>❌ Failed: {1}",
-										[r.message.success, r.message.failed]
-									)
-								);
-								listview.refresh();
+							if (r && r.message && r.message.status === "queued") {
+								frappe.show_alert({
+									message: r.message.message || __("Bulk publish queued in background..."),
+									indicator: "blue"
+								}, 5);
 							}
 						},
 					});
@@ -283,3 +322,119 @@ frappe.listview_settings["Woo Item"] = {
 		});
 	},
 };
+
+// Bulk Publish progress dialog
+let bulk_publish_dialog = null;
+let bulk_publish_subscription = null;
+
+function show_bulk_publish_dialog(listview, total_count) {
+	if (bulk_publish_dialog) {
+		bulk_publish_dialog.hide();
+	}
+
+	bulk_publish_dialog = new frappe.ui.Dialog({
+		title: __("Publishing Items to WooCommerce"),
+		indicator: "blue",
+		fields: [
+			{
+				fieldname: "progress_html",
+				fieldtype: "HTML",
+			},
+		],
+		primary_action_label: __("Close"),
+		primary_action: function () {
+			bulk_publish_dialog.hide();
+			if (bulk_publish_subscription) {
+				frappe.realtime.off("woo_publish_progress", bulk_publish_subscription);
+				bulk_publish_subscription = null;
+			}
+		},
+	});
+
+	let html = `
+		<div class="woo-publish-progress">
+			<div class="progress" style="height: 25px; margin-bottom: 15px;">
+				<div class="progress-bar progress-bar-striped progress-bar-animated"
+					role="progressbar"
+					style="width: 10%;"
+					id="woo-pub-bar">
+				</div>
+			</div>
+			<p id="woo-pub-msg" style="font-size: 14px; color: #555;">
+				<i class="fa fa-spinner fa-spin"></i> Initializing background publish for ${total_count} items...
+			</p>
+			<div class="row text-center" style="margin-top: 15px;">
+				<div class="col-xs-4">
+					<div class="well well-sm">
+						<h4 id="woo-pub-total">${total_count}</h4>
+						<small class="text-muted">Total</small>
+					</div>
+				</div>
+				<div class="col-xs-4">
+					<div class="well well-sm">
+						<h4 id="woo-pub-success" style="color: #28a745;">0</h4>
+						<small class="text-muted">Published</small>
+					</div>
+				</div>
+				<div class="col-xs-4">
+					<div class="well well-sm">
+						<h4 id="woo-pub-failed" style="color: #dc3545;">0</h4>
+						<small class="text-muted">Failed</small>
+					</div>
+				</div>
+			</div>
+		</div>
+	`;
+
+	bulk_publish_dialog.fields_dict.progress_html.$wrapper.html(html);
+	bulk_publish_dialog.show();
+
+	bulk_publish_subscription = function (data) {
+		if (data.operation !== "bulk_publish") {
+			return;
+		}
+
+		if (data.total) {
+			$("#woo-pub-total").text(data.total);
+		}
+		if (data.success !== undefined) {
+			$("#woo-pub-success").text(data.success);
+		}
+		if (data.failed !== undefined) {
+			$("#woo-pub-failed").text(data.failed);
+		}
+
+		if (data.message) {
+			let icon =
+				data.status === "completed"
+					? "fa-check-circle text-success"
+					: data.status === "error"
+					? "fa-exclamation-circle text-danger"
+					: "fa-spinner fa-spin";
+			$("#woo-pub-msg").html(`<i class="fa ${icon}"></i> ${data.message}`);
+		}
+
+		if (data.total && data.current) {
+			let pct = Math.round((data.current / data.total) * 100);
+			$("#woo-pub-bar").css("width", pct + "%").text(pct + "%");
+		}
+
+		if (data.status === "completed") {
+			$("#woo-pub-bar")
+				.css("width", "100%")
+				.removeClass("progress-bar-animated progress-bar-striped")
+				.addClass("bg-success");
+			if (listview) {
+				listview.refresh();
+			}
+			setTimeout(function () {
+				if (bulk_publish_dialog) {
+					bulk_publish_dialog.hide();
+				}
+			}, 4000);
+		}
+	};
+
+	frappe.realtime.on("woo_publish_progress", bulk_publish_subscription);
+}
+

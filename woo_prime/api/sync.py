@@ -7,6 +7,7 @@ import json
 import frappe
 from frappe import _
 from frappe.utils import now_datetime, flt, cstr, today, add_days
+from woo_prime.utils import safe_log_error
 
 
 def sync_order(order_data):
@@ -820,6 +821,11 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings):
 	if images:
 		product_data["images"] = images
 
+	if getattr(item, "_user_tags", None):
+		tags_list = [{"name": t.strip()} for t in item._user_tags.split(",") if t.strip()]
+		if tags_list:
+			product_data["tags"] = tags_list
+
 	if woo_item.woo_product_id:
 		result = api.update_product(woo_item.woo_product_id, product_data)
 	else:
@@ -890,6 +896,11 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 	images = _get_item_images(item, woo_item, api)
 	if images:
 		product_data["images"] = images
+
+	if getattr(item, "_user_tags", None):
+		tags_list = [{"name": t.strip()} for t in item._user_tags.split(",") if t.strip()]
+		if tags_list:
+			product_data["tags"] = tags_list
 
 	if woo_item.woo_product_id:
 		result = api.update_product(woo_item.woo_product_id, product_data)
@@ -1408,7 +1419,47 @@ def _get_or_create_woo_attribute_id(attr_name, api=None):
 				if key in _ATTR_CACHE:
 					return _ATTR_CACHE[key]
 		except Exception:
-			frappe.log_error(title=f"woo_prime: Attribute ID lookup error for {attr_name}", message=frappe.get_traceback())
+			safe_log_error(title=f"woo_prime: Attribute ID lookup error for {attr_name}", message=frappe.get_traceback())
+
+	# 4. If still not found anywhere, automatically CREATE the Global Attribute on WooCommerce!
+	if api:
+		try:
+			create_payload = {
+				"name": attr_name,
+				"slug": frappe.scrub(attr_name).replace("_", "-"),
+				"type": "select",
+				"order_by": "menu_order",
+				"has_archives": True
+			}
+			create_res = api.post("products/attributes", data=create_payload)
+			if create_res.status_code in (200, 201):
+				created_data = create_res.json()
+				new_id = int(created_data.get("id"))
+				new_name = created_data.get("name") or attr_name
+				new_slug = (created_data.get("slug") or "").strip().lower()
+				clean_slug = new_slug.replace("pa_", "")
+				res = (new_id, new_name)
+				_ATTR_CACHE[key] = res
+				_ATTR_CACHE[new_name.lower()] = res
+				_ATTR_CACHE[new_slug] = res
+				_ATTR_CACHE[clean_slug] = res
+
+				# Auto-save to Woo Attribute DocType
+				if frappe.db.exists("DocType", "Woo Attribute"):
+					try:
+						wa = frappe.new_doc("Woo Attribute")
+						wa.attribute_name = new_name
+						wa.woo_attribute_id = new_id
+						wa.slug = new_slug
+						wa.type = "select"
+						wa.erpnext_item_attribute = attr_name
+						wa.save(ignore_permissions=True)
+					except Exception:
+						pass
+
+				return res
+		except Exception as e:
+			frappe.logger("woo_prime").error(f"Failed to auto-create global attribute '{attr_name}' on WooCommerce: {e}")
 
 	return (None, attr_name)
 
