@@ -832,7 +832,7 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings):
 		existing_id = None
 		if product_data.get("sku"):
 			try:
-				search_resp = api.get("products", params={"sku": product_data.get("sku")})
+				search_resp = api.get("products", params={"sku": product_data.get("sku"), "status": "any"})
 				if search_resp.status_code == 200 and search_resp.json():
 					existing_id = search_resp.json()[0].get("id")
 			except Exception:
@@ -843,6 +843,15 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings):
 			result = api.update_product(existing_id, product_data)
 		else:
 			result = api.create_product(product_data)
+
+	if result and result.get("id"):
+		woo_item.woo_product_id = result.get("id")
+		woo_item.published = 1
+		woo_item.woo_product_url = result.get("permalink", "")
+		woo_item.sync_status = "Synced"
+		woo_item.last_synced = now_datetime()
+		woo_item.flags.in_woo_sync = True
+		woo_item.save(ignore_permissions=True)
 
 	return result
 
@@ -909,12 +918,11 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 		existing_id = None
 		if product_data.get("sku"):
 			try:
-				search_resp = api.get("products", params={"sku": product_data.get("sku")})
+				search_resp = api.get("products", params={"sku": product_data.get("sku"), "status": "any"})
 				if search_resp.status_code == 200 and search_resp.json():
 					existing_id = search_resp.json()[0].get("id")
 			except Exception:
 				frappe.log_error(title="woo_prime: SKU search error in _publish_template_item_to_woo", message=frappe.get_traceback())
-
 
 		if existing_id:
 			woo_item.woo_product_id = existing_id
@@ -925,8 +933,10 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 	parent_woo_id = result.get("id")
 	woo_item.woo_product_id = parent_woo_id
 	woo_item.published = 1
+	woo_item.woo_product_url = result.get("permalink", "")
 	woo_item.sync_status = "Synced"
 	woo_item.last_synced = now_datetime()
+	woo_item.flags.in_woo_sync = True
 	woo_item.save(ignore_permissions=True)
 
 	# --- BATCH VARIATIONS PUBLISH ---
@@ -966,12 +976,33 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 				res_by_id = {}
 				res_by_sku = {}
 
-				for r in batch_res.get("create", []) + batch_res.get("update", []):
+				create_results = batch_res.get("create", [])
+				update_results = batch_res.get("update", [])
+
+				for r in create_results + update_results:
 					if isinstance(r, dict):
 						if r.get("id"):
 							res_by_id[r.get("id")] = r
 						if r.get("sku"):
 							res_by_sku[r.get("sku")] = r
+
+				# Auto-recover variations that returned product_invalid_sku in batch
+				if len(create_results) == len(create_list):
+					for idx, r in enumerate(create_results):
+						if isinstance(r, dict) and r.get("error"):
+							err = r.get("error", {})
+							if err.get("code") == "product_invalid_sku":
+								resource_id = err.get("data", {}).get("resource_id")
+								v_payload = create_list[idx]
+								if resource_id:
+									try:
+										up_res = api._recover_and_update_variation(parent_woo_id, resource_id, v_payload)
+										if up_res and up_res.get("id"):
+											res_by_id[up_res.get("id")] = up_res
+											if up_res.get("sku"):
+												res_by_sku[up_res.get("sku")] = up_res
+									except Exception:
+										frappe.log_error(title="woo_prime: Batch variation SKU recovery failed", message=frappe.get_traceback())
 
 				for meta in meta_list:
 					child_woo_item = meta["child_woo_item"]
@@ -986,8 +1017,10 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 					if r_data:
 						child_woo_item.woo_product_id = r_data.get("id")
 						child_woo_item.published = 1
+						child_woo_item.woo_product_url = r_data.get("permalink", "")
 						child_woo_item.sync_status = "Synced"
 						child_woo_item.last_synced = now_datetime()
+						child_woo_item.flags.in_woo_sync = True
 						child_woo_item.save(ignore_permissions=True)
 			except Exception as e:
 				frappe.log_error(f"Batch variations sync failed for template {item.name}: {e}")
@@ -1115,6 +1148,7 @@ def _prepare_variation_payload(child_woo_item, v_item, api, settings):
 		"manage_stock": True,
 		"stock_quantity": int(stock_qty),
 		"stock_status": "instock" if int(stock_qty) > 0 else "outofstock",
+		"status": "publish",
 		"attributes": var_attributes,
 		"description": html.unescape(child_woo_item.woo_description or v_item.description or ""),
 	}
@@ -1141,11 +1175,14 @@ def _publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings
 	else:
 		res = api.create_product_variation(parent_woo_id, var_data)
 
-	child_woo_item.woo_product_id = res.get("id")
-	child_woo_item.published = 1
-	child_woo_item.sync_status = "Synced"
-	child_woo_item.last_synced = now_datetime()
-	child_woo_item.save(ignore_permissions=True)
+	if res and res.get("id"):
+		child_woo_item.woo_product_id = res.get("id")
+		child_woo_item.published = 1
+		child_woo_item.woo_product_url = res.get("permalink", "")
+		child_woo_item.sync_status = "Synced"
+		child_woo_item.last_synced = now_datetime()
+		child_woo_item.flags.in_woo_sync = True
+		child_woo_item.save(ignore_permissions=True)
 	return res
 
 

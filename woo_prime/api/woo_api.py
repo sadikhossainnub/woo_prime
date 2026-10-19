@@ -189,94 +189,294 @@ class WooAPI:
 		"""DELETE request."""
 		return self._request("DELETE", endpoint, params=params, timeout=timeout)
 
+
 	# --- Product Methods ---
+
+	@staticmethod
+	def _existing_woo_id(err_json):
+		"""Parse resource_id from a product_invalid_sku error body.
+
+		Returns int or None.  Callers use this to skip a create and go straight
+		to an update on the already-existing WooCommerce product/variation.
+		Never reads `unique_sku` – we never change the SKU.
+		"""
+		if not isinstance(err_json, dict):
+			return None
+		if err_json.get("code") != "product_invalid_sku":
+			return None
+		return err_json.get("data", {}).get("resource_id") or None
+
+	@staticmethod
+	def _is_image_error(response):
+		"""Return True when a 400 response is caused by a WooCommerce image-fetch error.
+
+		WooCommerce returns codes like 'woocommerce_product_image_upload_error' or
+		'woocommerce_variation_image_upload_error' when it cannot fetch the image URL
+		(e.g. internal host:port URL not reachable from the WooCommerce server).
+		"""
+		if response.status_code != 400:
+			return False
+		try:
+			return "image" in (response.json().get("code") or "")
+		except Exception:
+			return False
+
+	@staticmethod
+	def _strip_images(data):
+		"""Return a shallow copy of *data* without 'image' or 'images' keys."""
+		return {k: v for k, v in data.items() if k not in ("image", "images")}
 
 	def create_product(self, product_data):
 		"""Create a product on WooCommerce.
 
-		Args:
-			product_data: dict with keys like name, sku, regular_price, description, etc.
-
-		Returns:
-			dict: WooCommerce product response
+		Decision order (no retry loops)
+		──────────────────────────────────
+		1. Pre-flight: if no woo_product_id saved but SKU exists in WooCommerce,
+		   go straight to update (caller already does this via _publish_simple_item_to_woo
+		   SKU lookup; this guard covers direct calls).
+		2. POST → 200/201 → done.
+		3. POST → 400 product_invalid_sku
+		   a. Extract resource_id via _existing_woo_id() (from error body).
+		   b. Fallback: GET products?sku= to find the ID if error body omits it.
+		   c. _recover_and_update_product() – one update attempt, never loops back
+		      into create_product.
+		4. Any other status → frappe.throw.
 		"""
 		response = self.post("products", data=product_data)
 		if response.status_code in (200, 201):
 			return response.json()
-		elif response.status_code == 400:
+
+		if response.status_code == 400:
 			try:
 				err_json = response.json()
-				if err_json.get("code") == "product_invalid_sku":
-					resource_id = err_json.get("data", {}).get("resource_id")
-					if not resource_id and product_data.get("sku"):
-						search_resp = self.get("products", params={"sku": product_data.get("sku")})
-						if search_resp.status_code == 200 and search_resp.json():
-							resource_id = search_resp.json()[0].get("id")
-					if resource_id:
-						return self.update_product(resource_id, product_data)
+				resource_id = self._existing_woo_id(err_json)
+				if not resource_id:
+					sku = product_data.get("sku")
+					if sku:
+						sr = self.get("products", params={"sku": sku, "status": "any"})
+						if sr.status_code == 200 and sr.json():
+							resource_id = sr.json()[0].get("id")
+				if resource_id:
+					return self._recover_and_update_product(resource_id, product_data)
 			except Exception:
-				pass
+				frappe.log_error(title="woo_prime: Auto-link product failed", message=frappe.get_traceback())
+
+		frappe.throw(f"WooCommerce API Error ({response.status_code}): {response.text[:500]}")
+
+	def _recover_and_update_product(self, resource_id, product_data):
+		"""Update an existing WooCommerce product after a duplicate-SKU create failure.
+
+		Single update attempt per call – never calls create_product (no loop risk).
+		If WooCommerce rejects due to image URL, retries once without images.
+		"""
+		payload = dict(product_data)
+		payload["status"] = "publish"
+
+		put_resp = self.put(f"products/{resource_id}", data=payload)
+		if put_resp.status_code == 200:
+			return put_resp.json()
+
+		# Image URL unreachable from WooCommerce server → retry without images
+		if self._is_image_error(put_resp):
+			retry = self.put(f"products/{resource_id}", data=self._strip_images(payload))
+			if retry.status_code == 200:
+				frappe.log_error(
+					title="woo_prime: Product linked to existing Woo product (image skipped)",
+					message=(
+						f"Linked to existing Woo product #{resource_id} "
+						f"(SKU '{product_data.get('sku')}') and updated without image. "
+						f"Image error: {put_resp.json().get('message', '')}"
+					),
+				)
+				return retry.json()
+
+		# resource_id might actually be a variation (parent_id > 0 in Woo response)
+		try:
+			info = self.get(f"products/{resource_id}")
+			if info.status_code == 200:
+				parent_id = info.json().get("parent_id")
+				if parent_id:
+					vr = self.put(f"products/{parent_id}/variations/{resource_id}", data=payload)
+					if vr.status_code == 200:
+						return vr.json()
+					if self._is_image_error(vr):
+						vr2 = self.put(
+							f"products/{parent_id}/variations/{resource_id}",
+							data=self._strip_images(payload),
+						)
+						if vr2.status_code == 200:
+							return vr2.json()
+		except Exception:
+			pass
 
 		frappe.throw(
-			f"WooCommerce API Error ({response.status_code}): {response.text[:500]}"
+			f"Failed to auto-update WooCommerce product #{resource_id} "
+			f"(SKU '{product_data.get('sku')}'): "
+			f"HTTP {put_resp.status_code} – {put_resp.text[:300]}"
 		)
 
-	def update_product(self, product_id, product_data):
+	def update_product(self, product_id, product_data, _retry_create=True):
 		"""Update an existing product on WooCommerce.
 
 		Args:
-			product_id: WooCommerce product ID
-			product_data: dict with fields to update
-
-		Returns:
-			dict: WooCommerce product response
+			product_id:    WooCommerce product ID
+			product_data:  dict of fields to update
+			_retry_create: when True, falls back to create if WooCommerce returns 404
 		"""
 		response = self.put(f"products/{product_id}", data=product_data)
 		if response.status_code == 200:
 			return response.json()
-		elif response.status_code == 404:
-			# Product ID is no longer valid on WooCommerce, fallback to create
+		if response.status_code == 404 and _retry_create:
 			return self.create_product(product_data)
-		else:
-			frappe.throw(
-				f"WooCommerce API Error ({response.status_code}): {response.text[:500]}"
-			)
+		if self._is_image_error(response):
+			# Image URL unreachable – retry without images so other fields still sync
+			retry = self.put(f"products/{product_id}", data=self._strip_images(product_data))
+			if retry.status_code == 200:
+				frappe.log_error(
+					title="woo_prime: Product updated without image",
+					message=f"Product #{product_id} updated without image: {response.json().get('message', '')}",
+				)
+				return retry.json()
+		frappe.throw(f"WooCommerce API Error ({response.status_code}): {response.text[:500]}")
 
 	def create_product_variation(self, parent_id, variation_data):
-		"""Create a product variation on WooCommerce."""
+		"""Create a variation under *parent_id* on WooCommerce.
+
+		Decision order (no retry loops)
+		──────────────────────────────────
+		1. POST → 200/201 → done.
+		2. POST → 400 product_invalid_sku
+		   a. _existing_woo_id() extracts resource_id from error body.
+		   b. Fallback: GET products/{parent_id}/variations?sku=.
+		   c. _recover_and_update_variation() – one attempt, never loops.
+		3. Other 400 / other status → frappe.throw.
+		"""
 		response = self.post(f"products/{parent_id}/variations", data=variation_data)
 		if response.status_code in (200, 201):
 			return response.json()
-		elif response.status_code == 400:
+
+		if response.status_code == 400:
 			try:
 				err_json = response.json()
-				if err_json.get("code") == "product_invalid_sku":
-					resource_id = err_json.get("data", {}).get("resource_id")
-					if not resource_id and variation_data.get("sku"):
-						search_resp = self.get(f"products/{parent_id}/variations", params={"sku": variation_data.get("sku")})
-						if search_resp.status_code == 200 and search_resp.json():
-							resource_id = search_resp.json()[0].get("id")
-					if resource_id:
-						return self.update_product_variation(parent_id, resource_id, variation_data)
+				resource_id = self._existing_woo_id(err_json)
+				if not resource_id:
+					sku = variation_data.get("sku")
+					if sku:
+						sr = self.get(f"products/{parent_id}/variations", params={"sku": sku})
+						if sr.status_code == 200 and sr.json():
+							resource_id = sr.json()[0].get("id")
+				if resource_id:
+					return self._recover_and_update_variation(parent_id, resource_id, variation_data)
 			except Exception:
-				pass
+				frappe.log_error(title="woo_prime: Auto-link variation failed", message=frappe.get_traceback())
+
+		frappe.throw(f"WooCommerce API Error ({response.status_code}): {response.text[:500]}")
+
+	def _recover_and_update_variation(self, parent_id, resource_id, variation_data):
+		"""Update an existing WooCommerce variation after a duplicate-SKU create failure.
+
+		Try order (single attempt per path – no nested create calls):
+		  1. PUT products/{parent_id}/variations/{resource_id}
+		  2. 400 image error on (1) → same URL, strip 'image' key, retry once
+		  3. GET products/{resource_id} to learn the real parent_id in WooCommerce;
+		     retry with correct parent, handle image error there too
+		  4. parent_id == 0 in WooCommerce → it is a simple product → PUT products/{resource_id}
+		"""
+		payload = dict(variation_data)
+		payload["status"] = "publish"
+		sku = variation_data.get("sku", "")
+
+		def _put_var(p_id, r_id, data):
+			return self.put(f"products/{p_id}/variations/{r_id}", data=data)
+
+		# 1. Canonical path
+		put_resp = _put_var(parent_id, resource_id, payload)
+		if put_resp.status_code == 200:
+			return put_resp.json()
+
+		# 2. Image fetch error – retry without image key
+		if self._is_image_error(put_resp):
+			retry = _put_var(parent_id, resource_id, self._strip_images(payload))
+			if retry.status_code == 200:
+				frappe.log_error(
+					title="woo_prime: Variation linked to existing Woo variation (image skipped)",
+					message=(
+						f"Linked variation #{resource_id} (parent {parent_id}, SKU '{sku}') "
+						f"and updated without image. "
+						f"WooCommerce error: {put_resp.json().get('message', '')}"
+					),
+				)
+				return retry.json()
+
+		# 3. Inspect the actual parent stored in WooCommerce
+		res_info = None
+		try:
+			info = self.get(f"products/{resource_id}")
+			if info.status_code == 200:
+				res_info = info.json()
+		except Exception:
+			pass
+
+		if res_info:
+			actual_parent = res_info.get("parent_id") or 0
+
+			if actual_parent and actual_parent != parent_id:
+				# Variation lives under a different parent in WooCommerce
+				alt = _put_var(actual_parent, resource_id, payload)
+				if alt.status_code == 200:
+					return alt.json()
+				if self._is_image_error(alt):
+					alt2 = _put_var(actual_parent, resource_id, self._strip_images(payload))
+					if alt2.status_code == 200:
+						frappe.log_error(
+							title="woo_prime: Variation linked via alt parent (image skipped)",
+							message=f"Variation #{resource_id} (SKU '{sku}') updated under parent {actual_parent} without image.",
+						)
+						return alt2.json()
+
+			if not actual_parent:
+				# Was stored as a simple product in WooCommerce
+				sp = self.put(f"products/{resource_id}", data=payload)
+				if sp.status_code == 200:
+					return sp.json()
+				if self._is_image_error(sp):
+					sp2 = self.put(f"products/{resource_id}", data=self._strip_images(payload))
+					if sp2.status_code == 200:
+						frappe.log_error(
+							title="woo_prime: Simple-product auto-link (image skipped)",
+							message=f"Product #{resource_id} (SKU '{sku}') updated without image.",
+						)
+						return sp2.json()
 
 		frappe.throw(
-			f"WooCommerce API Error ({response.status_code}): {response.text[:500]}"
+			f"Failed to auto-update WooCommerce variation #{resource_id} "
+			f"(SKU '{sku}'): "
+			f"HTTP {put_resp.status_code} – {put_resp.text[:300]}"
 		)
 
-	def update_product_variation(self, parent_id, variation_id, variation_data):
-		"""Update a product variation on WooCommerce."""
+	def update_product_variation(self, parent_id, variation_id, variation_data, _retry_create=True):
+		"""Update a product variation on WooCommerce.
+
+		If the variation no longer exists (404), falls back to create (once).
+		If WooCommerce rejects the image URL, retries once without the image.
+		"""
 		response = self.put(f"products/{parent_id}/variations/{variation_id}", data=variation_data)
 		if response.status_code == 200:
 			return response.json()
-		elif response.status_code == 404:
-			# Variation ID is no longer valid on WooCommerce under parent_id, fallback to create
+		if response.status_code == 404 and _retry_create:
 			return self.create_product_variation(parent_id, variation_data)
-		else:
-			frappe.throw(
-				f"WooCommerce API Error ({response.status_code}): {response.text[:500]}"
+		if self._is_image_error(response):
+			retry = self.put(
+				f"products/{parent_id}/variations/{variation_id}",
+				data=self._strip_images(variation_data),
 			)
+			if retry.status_code == 200:
+				frappe.log_error(
+					title="woo_prime: Variation updated without image",
+					message=f"Variation #{variation_id} updated without image: {response.json().get('message', '')}",
+				)
+				return retry.json()
+		frappe.throw(f"WooCommerce API Error ({response.status_code}): {response.text[:500]}")
 
 	def batch_product_variations(self, parent_id, batch_data):
 		"""Batch create/update product variations on WooCommerce.
