@@ -29,6 +29,30 @@ class WooItem(Document):
 				if price:
 					self.regular_price = flt(price)
 
+	def on_update(self):
+		"""Auto-sync to WooCommerce when Woo Item is updated."""
+		if getattr(self.flags, "in_woo_sync", False) or getattr(frappe.flags, "in_test", False):
+			return
+
+		try:
+			settings = frappe.get_single("Woo Settings")
+			if not settings.enabled or not getattr(settings, "enable_item_sync", 1):
+				return
+
+			# If item is published and has a WooCommerce product ID, auto-sync changes in background
+			if self.published and self.woo_product_id:
+				frappe.enqueue(
+					"woo_prime.woo_prime.doctype.woo_item.woo_item._publish_single_woo_item_worker",
+					woo_item_name=self.name,
+					user=frappe.session.user,
+					queue="long",
+					timeout=1800,
+					enqueue_after_commit=True,
+					job_name=f"woo_auto_sync_{self.name}",
+				)
+		except Exception:
+			pass
+
 	@frappe.whitelist()
 	def publish_to_woocommerce(self, background=True):
 		"""Create or update product on WooCommerce."""
@@ -68,6 +92,7 @@ class WooItem(Document):
 			self.woo_product_url = result.get("permalink", "")
 			self.sync_status = "Synced"
 			self.last_synced = now_datetime()
+			self.flags.in_woo_sync = True
 			self.save(ignore_permissions=True)
 
 			# Log success
@@ -113,6 +138,7 @@ class WooItem(Document):
 				pass
 			self.sync_status = "Error"
 			self.last_synced = now_datetime()
+			self.flags.in_woo_sync = True
 			self.save(ignore_permissions=True)
 
 			create_sync_log(

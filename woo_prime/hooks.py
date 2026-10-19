@@ -150,6 +150,9 @@ doc_events = {
 	"Item Price": {
 		"on_update": "woo_prime.api.sync.on_item_price_update"
 	},
+	"Item": {
+		"on_update": "woo_prime.api.sync.on_item_update"
+	},
 	"Sales Order": {
 		"on_submit": "woo_prime.api.sync.on_sales_order_status_change",
 		"on_cancel": "woo_prime.api.sync.on_sales_order_status_change",
@@ -162,13 +165,9 @@ doc_events = {
 
 scheduler_events = {
 	"all": [
-		"woo_prime.api.sync.auto_sync_orders",
-	],
-	"hourly": [
-		"woo_prime.api.sync.sync_all_stock",
+		"woo_prime.api.sync.dynamic_scheduler_runner",
 	],
 	"daily": [
-		"woo_prime.api.sync.sync_all_prices",
 		"woo_prime.api.sync.reconcile_orders",
 	],
 }

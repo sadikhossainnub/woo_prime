@@ -150,3 +150,73 @@ def verify_webhook_signature(payload):
 			_("Invalid webhook signature — request rejected"),
 			frappe.AuthenticationError,
 		)
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def handle_product():
+	"""Webhook endpoint for WooCommerce product events (product.created, product.updated, product.deleted)."""
+	try:
+		data = frappe.request.get_data(as_text=True)
+		if not data:
+			frappe.throw(_("Empty request body"), frappe.ValidationError)
+
+		wc_topic = frappe.request.headers.get("X-WC-Webhook-Topic", "")
+		if not wc_topic:
+			return {"status": "ok"}
+
+		verify_webhook_signature(data)
+
+		product_data = json.loads(data)
+
+		if wc_topic == "product.deleted":
+			woo_id = product_data.get("id")
+			if woo_id:
+				woo_item_name = frappe.db.get_value("Woo Item", {"woo_product_id": woo_id})
+				if woo_item_name:
+					frappe.db.set_value("Woo Item", woo_item_name, "published", 0)
+			return {"status": "ok", "message": "Product deletion noted"}
+
+		# Log incoming product webhook
+		from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
+		create_log(
+			sync_type="Item",
+			direction="Incoming",
+			status="Queued",
+			woo_reference_id=str(product_data.get("id", "")),
+			request_data=data[:10000],
+		)
+
+		# Enqueue product processing in background
+		frappe.enqueue(
+			"woo_prime.api.webhook.process_webhook_product",
+			queue="default",
+			product_data=product_data,
+			enqueue_after_commit=True,
+		)
+		return {"status": "ok", "message": "Product update queued"}
+	except frappe.ValidationError:
+		raise
+	except Exception as e:
+		frappe.log_error(title="Product Webhook Error", message=frappe.get_traceback())
+		return {"status": "error", "message": str(e)}
+
+
+def process_webhook_product(product_data):
+	"""Process inbound product webhook payload from WooCommerce."""
+	from woo_prime.woo_prime.doctype.woo_item.woo_item import _process_single_product
+	settings = frappe.get_single("Woo Settings")
+	if not settings.enabled:
+		return
+
+	default_item_group = getattr(settings, "default_item_group", None) or "All Item Groups"
+	logger = frappe.logger("woo_prime", allow_site=True, max_size=1, file_count=50)
+
+	_process_single_product(
+		prod=product_data,
+		settings=settings,
+		default_item_group=default_item_group,
+		auto_create_missing=getattr(settings, "auto_create_missing_items", 1),
+		logger=logger,
+	)
+	frappe.db.commit()
+

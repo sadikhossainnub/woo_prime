@@ -3,10 +3,14 @@
 
 frappe.ui.form.on("Woo Settings", {
 	refresh(frm) {
-		// Populate Webhook Delivery URL
+		// Populate Webhook Delivery URLs
 		const webhook_url = frappe.urllib.get_base_url() + "/api/method/woo_prime.api.webhook.handle_order";
 		if (frm.doc.webhook_delivery_url !== webhook_url) {
 			frm.set_value("webhook_delivery_url", webhook_url);
+		}
+		const prod_webhook_url = frappe.urllib.get_base_url() + "/api/method/woo_prime.api.webhook.handle_product";
+		if (frm.doc.product_webhook_delivery_url !== prod_webhook_url) {
+			frm.set_value("product_webhook_delivery_url", prod_webhook_url);
 		}
 
 		// Button styling

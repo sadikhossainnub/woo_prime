@@ -168,10 +168,17 @@
    "fieldtype": "Column Break"
   },
   {
-   "description": "Copy and paste this URL into WooCommerce (Settings \u2192 Advanced \u2192 Webhooks)",
+   "description": "Copy and paste this URL into WooCommerce (Settings \u2192 Advanced \u2192 Webhooks for Order events)",
    "fieldname": "webhook_delivery_url",
    "fieldtype": "Data",
-   "label": "Webhook Delivery URL",
+   "label": "Order Webhook Delivery URL",
+   "read_only": 1
+  },
+  {
+   "description": "Copy and paste this URL into WooCommerce (Settings \u2192 Advanced \u2192 Webhooks for Product created/updated)",
+   "fieldname": "product_webhook_delivery_url",
+   "fieldtype": "Data",
+   "label": "Product Webhook Delivery URL",
    "read_only": 1
   },
   {
@@ -360,6 +367,26 @@
   },
   {
    "default": "1",
+   "fieldname": "enable_item_sync",
+   "fieldtype": "Check",
+   "label": "Enable Item / Product Auto Sync (ERPNext \u2192 WooCommerce)"
+  },
+  {
+   "default": "0",
+   "depends_on": "eval:doc.enable_item_sync==1",
+   "description": "Automatically publish new ERPNext Items to WooCommerce on creation",
+   "fieldname": "auto_publish_new_items",
+   "fieldtype": "Check",
+   "label": "Auto-Publish New Items to WooCommerce"
+  },
+  {
+   "fieldname": "last_item_sync_time",
+   "fieldtype": "Datetime",
+   "label": "Last Item Sync Time",
+   "read_only": 1
+  },
+  {
+   "default": "1",
    "fieldname": "enable_stock_sync",
    "fieldtype": "Check",
    "label": "Enable Stock Sync (ERPNext \u2192 WooCommerce)"
@@ -371,6 +398,12 @@
    "fieldtype": "Select",
    "label": "Stock Sync Schedule",
    "options": "Hourly\nEvery 30 Minutes\nEvery 15 Minutes\nEvery 6 Hours\nDaily"
+  },
+  {
+   "fieldname": "last_stock_sync_time",
+   "fieldtype": "Datetime",
+   "label": "Last Stock Sync Time",
+   "read_only": 1
   },
   {
    "fieldname": "column_break_sync",
@@ -389,6 +422,12 @@
    "fieldtype": "Select",
    "label": "Price Sync Schedule",
    "options": "Daily\nHourly\nEvery 6 Hours"
+  },
+  {
+   "fieldname": "last_price_sync_time",
+   "fieldtype": "Datetime",
+   "label": "Last Price Sync Time",
+   "read_only": 1
   },
   {
    "default": "1",
