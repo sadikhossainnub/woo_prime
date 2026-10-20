@@ -341,6 +341,13 @@
    "label": "Order Total Tolerance"
   },
   {
+   "default": "processing,completed",
+   "description": "Comma-separated WooCommerce order statuses to sync (e.g. processing,completed)",
+   "fieldname": "sync_order_statuses",
+   "fieldtype": "Small Text",
+   "label": "Sync Order Statuses"
+  },
+  {
    "default": "0",
    "fieldname": "order_email_notification",
    "fieldtype": "Check",

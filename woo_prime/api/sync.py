@@ -29,6 +29,22 @@ def sync_order(order_data):
 
 		woo_order_id = order_data.get("id")
 
+		# Check order status against configured sync_order_statuses
+		order_status = (order_data.get("status") or "").strip().lower()
+		allowed_statuses = [
+			s.strip().lower() for s in (getattr(settings, "sync_order_statuses", None) or "processing,completed").split(",") if s.strip()
+		]
+		if order_status and allowed_statuses and order_status not in allowed_statuses:
+			from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
+			create_log(
+				sync_type="Order",
+				direction="Incoming",
+				status="Skipped",
+				woo_reference_id=str(woo_order_id),
+				response_data=json.dumps({"reason": f"Order status '{order_status}' not in sync_order_statuses ({allowed_statuses})"}),
+			)
+			return
+
 		# Double-check idempotency (in case of race condition)
 		if frappe.db.exists("Sales Order", {"woo_order_id": str(woo_order_id)}):
 			return
@@ -264,6 +280,7 @@ def sync_order(order_data):
 				return
 
 			if getattr(settings, "auto_submit_order", 1):
+				so.flags.from_woo = True
 				so.submit()
 		except frappe.DuplicateEntryError:
 			frappe.logger("woo_prime").info(f"Sales Order for WooCommerce Order WC-{woo_order_id} already exists. Skipping duplicate insert.")
@@ -331,8 +348,12 @@ def update_order_from_woo(order_data, existing_so):
 		so = frappe.get_doc("Sales Order", existing_so)
 
 		# Only update status-related fields, don't modify items
-		new_status = order_data.get("status", "")
+		new_status = (order_data.get("status") or "").strip().lower()
 		so.db_set("woo_order_status", new_status)
+
+		if new_status in ("cancelled", "failed", "refunded") and so.docstatus == 1:
+			so.flags.from_woo = True
+			so.cancel()
 
 		from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
 
@@ -2024,7 +2045,7 @@ def reconcile_orders():
 		orders = _get_all_woo_orders(api, params={
 			"after": after_date,
 			"per_page": 100,
-			"status": "processing,completed",
+			"status": getattr(settings, "sync_order_statuses", None) or "processing,completed",
 		})
 
 		if not orders:
@@ -2101,7 +2122,7 @@ def auto_sync_orders(force=False):
 
 		query_params = {
 			"per_page": 100,
-			"status": "processing,completed,on-hold,pending",
+			"status": getattr(settings, "sync_order_statuses", None) or "processing,completed",
 		}
 		if after_dt:
 			query_params["after"] = after_dt
@@ -2280,8 +2301,15 @@ def on_sales_order_status_change(doc, method):
 
 	Pushes the updated order status (e.g. processing, completed, cancelled) to WooCommerce.
 	"""
+	if getattr(doc.flags, "from_woo", False):
+		return
+
 	woo_order_id = getattr(doc, "woo_order_id", None)
 	if not woo_order_id:
+		return
+
+	# Do not overwrite WooCommerce status 'completed'
+	if getattr(doc, "woo_order_status", "") == "completed":
 		return
 
 	try:
