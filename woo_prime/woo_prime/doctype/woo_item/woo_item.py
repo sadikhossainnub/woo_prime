@@ -51,7 +51,8 @@ class WooItem(Document):
 					queue="long",
 					timeout=1800,
 					enqueue_after_commit=True,
-					job_name=f"woo_auto_sync_{self.name}",
+					job_id=f"woo_publish_{self.name}",
+					deduplicate=True,
 				)
 		except Exception:
 			pass
@@ -693,7 +694,8 @@ def _process_single_product(prod, settings, default_item_group, auto_create_miss
 			# Not auto-creating and no match (Requirement 8.4)
 			woo_item.sync_status = "Not Synced"
 	
-	# Save Woo Item (Requirement 8.2)
+	# Save Woo Item (Requirement 8.2) — set flag to prevent on_update re-enqueue
+	woo_item.flags.in_woo_sync = True
 	woo_item.save(ignore_permissions=True)
 
 	# Attach WooCommerce tags to ERPNext Item

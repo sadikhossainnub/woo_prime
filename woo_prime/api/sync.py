@@ -2135,6 +2135,7 @@ def sync_price_for_item_code(item_code):
 					woo_item.sync_status = "Synced"
 					woo_item.last_synced = now_datetime()
 
+				woo_item.flags.in_woo_sync = True
 				woo_item.save(ignore_permissions=True)
 			except Exception:
 				frappe.log_error(f"Real-time price sync failed for Woo Item: {item.name}")
@@ -2216,7 +2217,8 @@ def on_item_update(doc, method):
 						queue="long",
 						timeout=1800,
 						enqueue_after_commit=True,
-						job_name=f"woo_auto_sync_{parent_woo.name}",
+						job_id=f"woo_publish_{parent_woo.name}",
+						deduplicate=True,
 					)
 
 		# 2. Check if a Woo Item exists for this item
@@ -2243,7 +2245,8 @@ def on_item_update(doc, method):
 					queue="long",
 					timeout=1800,
 					enqueue_after_commit=True,
-					job_name=f"woo_auto_sync_{woo_item.name}",
+					job_id=f"woo_publish_{woo_item.name}",
+					deduplicate=True,
 				)
 		elif getattr(settings, "auto_publish_new_items", 0):
 			from woo_prime.woo_prime.doctype.woo_item.woo_item import publish_item_from_item_master

@@ -8,6 +8,7 @@ import base64
 
 import frappe
 from frappe import _
+from frappe.utils import now_datetime
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
@@ -208,6 +209,22 @@ def process_webhook_product(product_data):
 	if not settings.enabled:
 		return
 
+	# Echo suppression: skip if we pushed this product within the last 60 seconds
+	woo_id = product_data.get("id")
+	if woo_id:
+		woo_item_name = frappe.db.get_value("Woo Item", {"woo_product_id": woo_id})
+		if woo_item_name:
+			last_synced = frappe.db.get_value("Woo Item", woo_item_name, "last_synced")
+			if last_synced:
+				from frappe.utils import get_datetime
+				elapsed = (now_datetime() - get_datetime(last_synced)).total_seconds()
+				if elapsed < 60:
+					logger = frappe.logger("woo_prime", allow_site=True, max_size=1, file_count=50)
+					logger.info(
+						f"[Webhook] Skipping product {woo_id} echo (last_synced {elapsed:.1f}s ago)"
+					)
+					return
+
 	default_item_group = getattr(settings, "default_item_group", None) or "All Item Groups"
 	logger = frappe.logger("woo_prime", allow_site=True, max_size=1, file_count=50)
 
@@ -215,7 +232,7 @@ def process_webhook_product(product_data):
 		prod=product_data,
 		settings=settings,
 		default_item_group=default_item_group,
-		auto_create_missing=getattr(settings, "auto_create_missing_items", 1),
+		auto_create_missing=getattr(settings, "auto_create_missing_items", 0),
 		logger=logger,
 	)
 	frappe.db.commit()
