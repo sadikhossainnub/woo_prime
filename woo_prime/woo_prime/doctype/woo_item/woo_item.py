@@ -81,9 +81,7 @@ class WooItem(Document):
 
 	def _execute_publish_sync(self, user=None):
 		from woo_prime.api.sync import publish_item_to_woo
-		from woo_prime.utils import repair_crashed_tables, safe_log_error
-
-		repair_crashed_tables()
+		from woo_prime.utils import safe_log_error
 
 		try:
 			result = publish_item_to_woo(self)

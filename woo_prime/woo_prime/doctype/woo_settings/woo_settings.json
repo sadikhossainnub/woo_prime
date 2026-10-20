@@ -380,6 +380,13 @@
    "label": "Auto-Publish New Items to WooCommerce"
   },
   {
+   "default": "1440",
+   "description": "Minimum minutes between item sync runs (default 1440 = daily)",
+   "fieldname": "item_sync_interval_minutes",
+   "fieldtype": "Int",
+   "label": "Item Sync Interval (minutes)"
+  },
+  {
    "fieldname": "last_item_sync_time",
    "fieldtype": "Datetime",
    "label": "Last Item Sync Time",

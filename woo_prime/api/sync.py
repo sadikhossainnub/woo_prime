@@ -2266,12 +2266,21 @@ def sync_all_items():
 	if not _is_within_sync_window():
 		return
 
+	# Interval gate (default 1440 minutes = 1 day)
+	interval_minutes = int(getattr(settings, "item_sync_interval_minutes", 1440) or 1440)
+	last_sync = getattr(settings, "last_item_sync_time", None)
+	if last_sync:
+		from frappe.utils import get_datetime
+		elapsed_minutes = (now_datetime() - get_datetime(last_sync)).total_seconds() / 60.0
+		if elapsed_minutes < interval_minutes:
+			return
+
 	woo_items = frappe.get_all(
 		"Woo Item",
 		filters={"published": 1, "sync_status": "Synced"},
 		fields=["name"],
 		order_by="last_synced asc, creation asc",
-		limit=200,
+		limit=100,
 	)
 
 	for item in woo_items:
@@ -2282,5 +2291,8 @@ def sync_all_items():
 			frappe.db.commit()
 		except Exception as e:
 			frappe.log_error(f"Scheduled item sync failed for {item.name}: {e}")
+
+	frappe.db.set_value("Woo Settings", "Woo Settings", "last_item_sync_time", now_datetime())
+	frappe.db.commit()
 
 
