@@ -1660,6 +1660,8 @@ def sync_stock_to_woo(woo_item):
 
 	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
 
+	woo_item.db_set("last_pushed_qty", int(stock_qty))
+
 	create_log(
 		sync_type="Stock",
 		direction="Outgoing",
@@ -1743,6 +1745,8 @@ def sync_price_to_woo(woo_item):
 		return
 
 	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
+
+	woo_item.db_set("last_pushed_price", flt(regular_price))
 
 	create_log(
 		sync_type="Price",
@@ -1874,47 +1878,95 @@ PRICE_INTERVAL_MINUTES = {
 
 
 def dynamic_scheduler_runner():
-	"""Master scheduler runner: Dispatches sync jobs dynamically based on Woo Settings.
+	"""Master scheduler runner (kept for backwards compatibility)."""
+	scheduled_order_sync()
+	scheduled_stock_sync()
+	scheduled_price_sync()
+	scheduled_item_sync()
 
-	Runs every minute under Frappe scheduler ('all').
-	Reads live intervals configured in Woo Settings and triggers only when due:
-	- Order Sync: order_sync_interval (minutes, e.g. 5, 10, 15)
-	- Stock Sync: stock_sync_interval (15m, 30m, 1h, 6h, 1d)
-	- Price Sync: price_sync_interval (1h, 6h, 1d)
-	- Item Sync: 1d (or configured window)
-	- Window constraint: auto_sync_start_time / auto_sync_end_time
-	"""
+
+def scheduled_order_sync():
+	"""Scheduled job: checks interval and enqueues order sync."""
 	try:
 		settings = frappe.get_single("Woo Settings")
-		if not settings.enabled:
+		if not settings.enabled or not getattr(settings, "enable_order_sync", 1):
 			return
-
 		from woo_prime.woo_prime.doctype.woo_item.woo_item import _is_within_sync_window
 		if not _is_within_sync_window():
 			return
-
-		# 1. Dynamic Order Sync
-		if getattr(settings, "enable_order_sync", 1):
-			frappe.enqueue("woo_prime.api.sync.auto_sync_orders", queue="default", enqueue_after_commit=True)
-
-		# 2. Dynamic Stock Sync
-		if getattr(settings, "enable_stock_sync", 1):
-			frappe.enqueue("woo_prime.api.sync.sync_all_stock", queue="long", enqueue_after_commit=True)
-
-		# 3. Dynamic Price Sync
-		if getattr(settings, "enable_price_sync", 1):
-			frappe.enqueue("woo_prime.api.sync.sync_all_prices", queue="long", enqueue_after_commit=True)
-
-		# 4. Dynamic Item Sync
-		if getattr(settings, "enable_item_sync", 1):
-			frappe.enqueue("woo_prime.api.sync.sync_all_items", queue="long", enqueue_after_commit=True)
-
+		frappe.enqueue(
+			"woo_prime.api.sync.auto_sync_orders",
+			queue="long",
+			timeout=3000,
+			job_id="woo_scheduled_order_sync",
+			deduplicate=True,
+		)
 	except Exception as e:
-		frappe.log_error(title="Dynamic Scheduler Runner Exception", message=str(e))
+		frappe.log_error(title="Scheduled Order Sync Dispatch Error", message=str(e))
+
+
+def scheduled_stock_sync():
+	"""Scheduled job: checks interval and enqueues stock sync."""
+	try:
+		settings = frappe.get_single("Woo Settings")
+		if not settings.enabled or not getattr(settings, "enable_stock_sync", 1):
+			return
+		from woo_prime.woo_prime.doctype.woo_item.woo_item import _is_within_sync_window
+		if not _is_within_sync_window():
+			return
+		frappe.enqueue(
+			"woo_prime.api.sync.sync_all_stock",
+			queue="long",
+			timeout=3000,
+			job_id="woo_scheduled_stock_sync",
+			deduplicate=True,
+		)
+	except Exception as e:
+		frappe.log_error(title="Scheduled Stock Sync Dispatch Error", message=str(e))
+
+
+def scheduled_price_sync():
+	"""Scheduled job: checks interval and enqueues price sync."""
+	try:
+		settings = frappe.get_single("Woo Settings")
+		if not settings.enabled or not getattr(settings, "enable_price_sync", 1):
+			return
+		from woo_prime.woo_prime.doctype.woo_item.woo_item import _is_within_sync_window
+		if not _is_within_sync_window():
+			return
+		frappe.enqueue(
+			"woo_prime.api.sync.sync_all_prices",
+			queue="long",
+			timeout=3000,
+			job_id="woo_scheduled_price_sync",
+			deduplicate=True,
+		)
+	except Exception as e:
+		frappe.log_error(title="Scheduled Price Sync Dispatch Error", message=str(e))
+
+
+def scheduled_item_sync():
+	"""Scheduled job: checks interval and enqueues item sync."""
+	try:
+		settings = frappe.get_single("Woo Settings")
+		if not settings.enabled or not getattr(settings, "enable_item_sync", 1):
+			return
+		from woo_prime.woo_prime.doctype.woo_item.woo_item import _is_within_sync_window
+		if not _is_within_sync_window():
+			return
+		frappe.enqueue(
+			"woo_prime.api.sync.sync_all_items",
+			queue="long",
+			timeout=3000,
+			job_id="woo_scheduled_item_sync",
+			deduplicate=True,
+		)
+	except Exception as e:
+		frappe.log_error(title="Scheduled Item Sync Dispatch Error", message=str(e))
 
 
 def sync_all_stock(force=False):
-	"""Scheduled task: Push all Woo Item stock to WooCommerce based on stock_sync_interval."""
+	"""Scheduled task: Push all Woo Item stock to WooCommerce based on stock_sync_interval in chunks of 100."""
 	if isinstance(force, str):
 		force = force.lower() in ("true", "1")
 
@@ -1933,31 +1985,77 @@ def sync_all_stock(force=False):
 		if elapsed_minutes < interval_minutes:
 			return
 
+	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
+	api = get_woo_api()
+
 	woo_items = frappe.get_all(
 		"Woo Item",
 		filters={"published": 1, "sync_stock": 1, "woo_product_id": [">", 0]},
-		fields=["name"],
+		fields=["name", "item_code", "woo_product_id", "last_pushed_qty"],
+		order_by="last_synced asc, creation asc",
 	)
 
-	for item in woo_items:
-		try:
-			woo_item = frappe.get_doc("Woo Item", item.name)
-			sync_stock_to_woo(woo_item)
-			woo_item.db_set("last_synced", now_datetime())
-			woo_item.db_set("sync_status", "Synced")
-		except Exception:
-			frappe.log_error(f"Stock sync failed for Woo Item: {item.name}")
-			try:
-				frappe.get_doc("Woo Item", item.name).db_set("sync_status", "Error")
-			except Exception:
-				pass
+	chunk_size = 100
+	for i in range(0, len(woo_items), chunk_size):
+		chunk = woo_items[i : i + chunk_size]
+		batch_updates = []
+		batch_docs = []
 
-	frappe.db.set_value("Woo Settings", "Woo Settings", "last_stock_sync_time", now_datetime())
-	frappe.db.commit()
+		for item_data in chunk:
+			try:
+				qty = _get_stock_qty(item_data.item_code, settings.default_warehouse)
+				last_qty = item_data.get("last_pushed_qty")
+				if last_qty is not None and int(flt(last_qty)) == int(qty):
+					continue
+
+				variant_of = frappe.db.get_value("Item", item_data.item_code, "variant_of")
+				parent_woo_id = None
+				if variant_of:
+					parent_woo_id = frappe.db.get_value("Woo Item", {"item_code": variant_of}, "woo_product_id")
+
+				if parent_woo_id:
+					woo_item = frappe.get_doc("Woo Item", item_data.name)
+					sync_stock_to_woo(woo_item)
+				else:
+					batch_updates.append({
+						"id": int(item_data.woo_product_id),
+						"manage_stock": True,
+						"stock_quantity": int(qty),
+						"stock_status": "instock" if int(qty) > 0 else "outofstock",
+					})
+					batch_docs.append((item_data.name, int(qty)))
+			except Exception:
+				frappe.log_error(f"Stock sync failed for Woo Item: {item_data.name}")
+
+		if batch_updates:
+			try:
+				api.batch_products({"update": batch_updates})
+				for doc_name, pushed_qty in batch_docs:
+					frappe.db.set_value(
+						"Woo Item", doc_name,
+						{
+							"last_pushed_qty": pushed_qty,
+							"last_synced": now_datetime(),
+							"sync_status": "Synced",
+						},
+						update_modified=False,
+					)
+			except Exception as e:
+				frappe.log_error(f"Batch stock sync failed: {e}")
+				for doc_name, _ in batch_docs:
+					try:
+						doc = frappe.get_doc("Woo Item", doc_name)
+						sync_stock_to_woo(doc)
+					except Exception:
+						pass
+
+		# Commit and save checkpoint after each chunk of 100
+		frappe.db.set_value("Woo Settings", "Woo Settings", "last_stock_sync_time", now_datetime())
+		frappe.db.commit()
 
 
 def sync_all_prices(force=False):
-	"""Scheduled task: Push all Woo Item prices to WooCommerce based on price_sync_interval."""
+	"""Scheduled task: Push all Woo Item prices to WooCommerce based on price_sync_interval in chunks of 100."""
 	if isinstance(force, str):
 		force = force.lower() in ("true", "1")
 
@@ -1976,27 +2074,87 @@ def sync_all_prices(force=False):
 		if elapsed_minutes < interval_minutes:
 			return
 
+	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
+	api = get_woo_api()
+
 	woo_items = frappe.get_all(
 		"Woo Item",
 		filters={"published": 1, "sync_price": 1, "woo_product_id": [">", 0]},
-		fields=["name"],
+		fields=["name", "item_code", "woo_product_id", "regular_price", "sale_price", "last_pushed_price"],
+		order_by="last_synced asc, creation asc",
 	)
 
-	for item in woo_items:
-		try:
-			woo_item = frappe.get_doc("Woo Item", item.name)
-			sync_price_to_woo(woo_item)
-			woo_item.db_set("last_synced", now_datetime())
-			woo_item.db_set("sync_status", "Synced")
-		except Exception:
-			frappe.log_error(f"Price sync failed for Woo Item: {item.name}")
-			try:
-				frappe.get_doc("Woo Item", item.name).db_set("sync_status", "Error")
-			except Exception:
-				pass
+	chunk_size = 100
+	for i in range(0, len(woo_items), chunk_size):
+		chunk = woo_items[i : i + chunk_size]
+		batch_updates = []
+		batch_docs = []
 
-	frappe.db.set_value("Woo Settings", "Woo Settings", "last_price_sync_time", now_datetime())
-	frappe.db.commit()
+		for item_data in chunk:
+			try:
+				price = _get_item_price(item_data.item_code, settings.default_price_list)
+				regular_price = flt(price) if price > 0 else (flt(item_data.regular_price) if item_data.get("regular_price") else 0.0)
+				if regular_price <= 0:
+					continue
+
+				last_price = item_data.get("last_pushed_price")
+				if last_price is not None and abs(flt(last_price) - flt(regular_price)) < 0.001:
+					continue
+
+				raw_sale = item_data.get("sale_price")
+				sale_price = flt(raw_sale) if raw_sale and flt(raw_sale) > 0 else None
+
+				variant_of = frappe.db.get_value("Item", item_data.item_code, "variant_of")
+				parent_woo_id = None
+				if variant_of:
+					parent_woo_id = (
+						frappe.db.get_value("Woo Item", {"item_code": variant_of}, "woo_product_id")
+						or frappe.db.get_value("Woo Item", {"sku": variant_of}, "woo_product_id")
+					)
+
+				if parent_woo_id:
+					woo_item = frappe.get_doc("Woo Item", item_data.name)
+					sync_price_to_woo(woo_item)
+				else:
+					p_data = {
+						"id": int(item_data.woo_product_id),
+						"regular_price": str(regular_price),
+					}
+					if sale_price is not None:
+						p_data["sale_price"] = str(sale_price)
+					else:
+						p_data["sale_price"] = ""
+					batch_updates.append(p_data)
+					batch_docs.append((item_data.name, flt(regular_price)))
+			except Exception:
+				frappe.log_error(f"Price sync failed for Woo Item: {item_data.name}")
+
+		if batch_updates:
+			try:
+				api.batch_products({"update": batch_updates})
+				for doc_name, pushed_price in batch_docs:
+					frappe.db.set_value(
+						"Woo Item", doc_name,
+						{
+							"last_pushed_price": pushed_price,
+							"regular_price": pushed_price,
+							"last_synced": now_datetime(),
+							"sync_status": "Synced",
+						},
+						update_modified=False,
+					)
+			except Exception as e:
+				frappe.log_error(f"Batch price sync failed: {e}")
+				for doc_name, _ in batch_docs:
+					try:
+						doc = frappe.get_doc("Woo Item", doc_name)
+						sync_price_to_woo(doc)
+					except Exception:
+						pass
+
+		# Commit and save checkpoint after each chunk of 100
+		frappe.db.set_value("Woo Settings", "Woo Settings", "last_price_sync_time", now_datetime())
+		frappe.db.commit()
 
 
 def _get_all_woo_orders(api, params=None):
@@ -2108,32 +2266,32 @@ def auto_sync_orders(force=False):
 		from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
 		api = get_woo_api()
 
-		# Build query params with lookback filter to avoid full table scan on WooCommerce
+		# Build query params with after=<last_order_sync_time - 1 day>
 		import datetime
 		lookback_days = int(getattr(settings, "reconcile_days", 2) or 2)
-		after_dt = None
-		if last_sync and not force:
-			# Sync orders modified or created since last sync (with 15 min buffer)
-			buffer_dt = get_datetime(last_sync) - datetime.timedelta(minutes=15)
-			after_dt = buffer_dt.strftime("%Y-%m-%dT%H:%M:%S")
+		if last_sync:
+			from frappe.utils import get_datetime
+			last_sync_dt = get_datetime(last_sync)
+			after_dt = (last_sync_dt - datetime.timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
 		else:
-			buffer_dt = datetime.datetime.now() - datetime.timedelta(days=lookback_days)
-			after_dt = buffer_dt.strftime("%Y-%m-%dT00:00:00")
+			after_dt = (datetime.datetime.now() - datetime.timedelta(days=lookback_days)).strftime("%Y-%m-%dT00:00:00")
 
 		query_params = {
 			"per_page": 100,
 			"status": getattr(settings, "sync_order_statuses", None) or "processing,completed",
+			"after": after_dt,
+			"orderby": "date",
+			"order": "asc",
 		}
-		if after_dt:
-			query_params["after"] = after_dt
 
-		# Get recent orders from WooCommerce (handling multi-page pagination)
+		# Get recent orders from WooCommerce (raises on non-200)
 		orders = _get_all_woo_orders(api, params=query_params)
 
+		# Only update last_order_sync_time if the API call succeeded
+		frappe.db.set_value("Woo Settings", "Woo Settings", "last_order_sync_time", frappe.utils.now_datetime())
+		frappe.db.commit()
 
 		if not orders:
-			frappe.db.set_value("Woo Settings", "Woo Settings", "last_order_sync_time", frappe.utils.now_datetime())
-			frappe.db.commit()
 			return {"synced": 0, "message": "No new orders found on WooCommerce"}
 
 		synced_count = 0
@@ -2149,9 +2307,6 @@ def auto_sync_orders(force=False):
 				except Exception as err:
 					frappe.log_error(title=f"Auto Order Sync Error (WC #{woo_order_id})", message=str(err))
 
-		frappe.db.set_value("Woo Settings", "Woo Settings", "last_order_sync_time", frappe.utils.now_datetime())
-		frappe.db.commit()
-
 		msg = f"Synced {synced_count} new orders from WooCommerce"
 		if force:
 			frappe.msgprint(_("✅ Successfully synced <b>{0}</b> orders from WooCommerce!").format(synced_count), indicator="green")
@@ -2163,6 +2318,21 @@ def auto_sync_orders(force=False):
 		if force:
 			frappe.throw(_("Failed to sync orders from WooCommerce: {0}").format(str(e)))
 		return {"synced": 0, "error": str(e)}
+
+
+def prune_sync_logs():
+	"""Daily scheduled job: Prune Woo Sync Log older than log_retention_days (default 30)."""
+	try:
+		settings = frappe.get_single("Woo Settings")
+		retention_days = int(getattr(settings, "log_retention_days", 30) or 30)
+		cutoff = add_days(today(), -retention_days)
+
+		frappe.db.delete("Woo Sync Log", {
+			"creation": ["<", cutoff]
+		})
+		frappe.db.commit()
+	except Exception as e:
+		frappe.log_error(title="Prune Woo Sync Logs Failed", message=str(e))
 
 
 # ═══════════════════════════════════════════════════

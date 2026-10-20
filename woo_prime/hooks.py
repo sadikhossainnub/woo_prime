@@ -164,11 +164,17 @@ doc_events = {
 # ---------------
 
 scheduler_events = {
-	"all": [
-		"woo_prime.api.sync.dynamic_scheduler_runner",
-	],
+	"cron": {
+		"*/5 * * * *": [
+			"woo_prime.api.sync.scheduled_order_sync",
+			"woo_prime.api.sync.scheduled_stock_sync",
+			"woo_prime.api.sync.scheduled_price_sync",
+			"woo_prime.api.sync.scheduled_item_sync",
+		],
+	},
 	"daily": [
 		"woo_prime.api.sync.reconcile_orders",
+		"woo_prime.api.sync.prune_sync_logs",
 	],
 }
 

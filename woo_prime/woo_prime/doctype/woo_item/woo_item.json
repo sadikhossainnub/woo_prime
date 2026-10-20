@@ -167,6 +167,18 @@
    "fieldtype": "Column Break"
   },
   {
+   "fieldname": "last_pushed_qty",
+   "fieldtype": "Float",
+   "label": "Last Pushed Qty",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_pushed_price",
+   "fieldtype": "Float",
+   "label": "Last Pushed Price",
+   "read_only": 1
+  },
+  {
    "fieldname": "last_synced",
    "fieldtype": "Datetime",
    "label": "Last Synced",

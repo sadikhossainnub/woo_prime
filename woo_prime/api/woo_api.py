@@ -478,6 +478,23 @@ class WooAPI:
 				return retry.json()
 		frappe.throw(f"WooCommerce API Error ({response.status_code}): {response.text[:500]}")
 
+	def batch_products(self, batch_data):
+		"""Batch create/update/delete products on WooCommerce.
+
+		Args:
+			batch_data: dict with "create", "update", and/or "delete" lists of product dicts
+
+		Returns:
+			dict: WooCommerce batch response
+		"""
+		response = self.post("products/batch", data=batch_data)
+		if response.status_code in (200, 201):
+			return response.json()
+		else:
+			frappe.throw(
+				f"WooCommerce API Batch Products Error ({response.status_code}): {response.text[:500]}"
+			)
+
 	def batch_product_variations(self, parent_id, batch_data):
 		"""Batch create/update product variations on WooCommerce.
 
@@ -729,7 +746,7 @@ class WooAPI:
 		response = self.get(f"orders/{order_id}")
 		if response.status_code == 200:
 			return response.json()
-		return None
+		frappe.throw(f"WooCommerce API Error ({response.status_code}): {response.text[:500]}")
 
 	def update_order_status(self, order_id, status):
 		"""Update order status on WooCommerce.
@@ -754,7 +771,7 @@ class WooAPI:
 		response = self.get("orders", params=params)
 		if response.status_code == 200:
 			return response.json()
-		return []
+		frappe.throw(f"WooCommerce API Error ({response.status_code}): {response.text[:500]}")
 
 	# --- Customer Methods ---
 
