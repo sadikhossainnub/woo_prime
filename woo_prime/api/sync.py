@@ -23,6 +23,10 @@ def sync_order(order_data):
 		if not settings.enabled:
 			return
 
+		# Run as the configured integration user to avoid guest-context permission failures
+		integration_user = getattr(settings, "integration_user", None) or "Administrator"
+		frappe.set_user(integration_user)
+
 		woo_order_id = order_data.get("id")
 
 		# Double-check idempotency (in case of race condition)
@@ -282,6 +286,10 @@ def update_order_from_woo(order_data, existing_so):
 		existing_so: str — existing Sales Order name
 	"""
 	try:
+		settings = frappe.get_single("Woo Settings")
+		integration_user = getattr(settings, "integration_user", None) or "Administrator"
+		frappe.set_user(integration_user)
+
 		so = frappe.get_doc("Sales Order", existing_so)
 
 		# Only update status-related fields, don't modify items
@@ -1750,18 +1758,40 @@ def _get_item_price(item_code, price_list=None):
 
 
 def _get_stock_qty(item_code, warehouse):
-	"""Get current stock quantity from ERPNext.
+	"""Get current stock quantity from ERPNext Bin (actual_qty - reserved_qty), floored at 0.
+
+	Uses Bin directly to avoid permission checks that fail in guest/webhook context.
 
 	Args:
 		item_code: str
 		warehouse: str
 
 	Returns:
-		float: actual stock quantity
+		int: available stock quantity (>= 0)
 	"""
-	from erpnext.stock.utils import get_latest_stock_qty
+	if not item_code:
+		return 0
 
-	return flt(get_latest_stock_qty(item_code, warehouse))
+	if warehouse:
+		result = frappe.db.get_value(
+			"Bin",
+			{"item_code": item_code, "warehouse": warehouse},
+			["actual_qty", "reserved_qty"],
+			as_dict=True,
+		)
+		if result:
+			qty = flt(result.actual_qty) - flt(result.reserved_qty)
+			return max(0, int(qty))
+		return 0
+	else:
+		# Sum across all warehouses
+		rows = frappe.db.get_all(
+			"Bin",
+			filters={"item_code": item_code},
+			fields=["actual_qty", "reserved_qty"],
+		)
+		total = sum(flt(r.actual_qty) - flt(r.reserved_qty) for r in rows)
+		return max(0, int(total))
 
 
 # ═══════════════════════════════════════════════════

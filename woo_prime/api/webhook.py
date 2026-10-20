@@ -50,6 +50,10 @@ def handle_order():
 		if not woo_order_id:
 			frappe.throw(_("No order ID found in webhook data"), frappe.ValidationError)
 
+		# Get settings for dedicated integration user in background workers
+		settings = frappe.get_single("Woo Settings")
+		integration_user = getattr(settings, "integration_user", None) or "Administrator"
+
 		# Idempotency check — skip if Sales Order already exists for this WooCommerce order
 		existing_so = frappe.db.get_value(
 			"Sales Order",
@@ -63,6 +67,7 @@ def handle_order():
 				frappe.enqueue(
 					"woo_prime.api.sync.update_order_from_woo",
 					queue="default",
+					user=integration_user,
 					order_data=order_data,
 					existing_so=existing_so,
 				)
@@ -90,6 +95,7 @@ def handle_order():
 		frappe.enqueue(
 			"woo_prime.api.sync.sync_order",
 			queue="default",
+			user=integration_user,
 			order_data=order_data,
 			enqueue_after_commit=True,
 		)
@@ -188,9 +194,13 @@ def handle_product():
 		)
 
 		# Enqueue product processing in background
+		settings = frappe.get_single("Woo Settings")
+		integration_user = getattr(settings, "integration_user", None) or "Administrator"
+
 		frappe.enqueue(
 			"woo_prime.api.webhook.process_webhook_product",
 			queue="default",
+			user=integration_user,
 			product_data=product_data,
 			enqueue_after_commit=True,
 		)
@@ -208,6 +218,9 @@ def process_webhook_product(product_data):
 	settings = frappe.get_single("Woo Settings")
 	if not settings.enabled:
 		return
+
+	integration_user = getattr(settings, "integration_user", None) or "Administrator"
+	frappe.set_user(integration_user)
 
 	# Echo suppression: skip if we pushed this product within the last 60 seconds
 	woo_id = product_data.get("id")

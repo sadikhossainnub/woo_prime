@@ -197,6 +197,14 @@
    "label": "Download WordPress Plugin (.zip)"
   },
   {
+   "default": "Administrator",
+   "description": "User context for background webhook workers (sync_order, process_webhook_product, update_order_from_woo)",
+   "fieldname": "integration_user",
+   "fieldtype": "Link",
+   "label": "Integration User",
+   "options": "User"
+  },
+  {
    "fieldname": "defaults_section",
    "fieldtype": "Section Break",
    "label": "Default Values"

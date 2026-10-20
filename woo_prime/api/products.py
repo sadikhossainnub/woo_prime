@@ -64,12 +64,9 @@ def get_items_for_sync(start=0, limit=100, item_group=None, search=None, item_co
 
 			stock_qty = 0
 			if warehouse:
-				try:
-					from erpnext.stock.utils import get_latest_stock_qty
-					stock_qty = flt(get_latest_stock_qty(item.item_code, warehouse))
-				except Exception:
-					frappe.log_error(f"woo_prime: get_latest_stock_qty error for {item.item_code}", frappe.get_traceback())
-					stock_qty = 0
+				stock_qty = flt(frappe.db.get_value("Bin", {"item_code": item.item_code, "warehouse": warehouse}, "actual_qty") or 0)
+			else:
+				stock_qty = flt(frappe.db.get_value("Bin", {"item_code": item.item_code}, "actual_qty") or 0)
 
 			image_url = None
 			if item.image:
