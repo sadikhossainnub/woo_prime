@@ -60,6 +60,7 @@ class WooItem(Document):
 	@frappe.whitelist()
 	def publish_to_woocommerce(self, background=True):
 		"""Create or update product on WooCommerce."""
+		frappe.only_for(["System Manager", "Woo Manager"])
 		background = _parse_bool(background)
 
 		if background:
@@ -173,11 +174,13 @@ class WooItem(Document):
 	@frappe.whitelist()
 	def sync_item_now(self):
 		"""Manually re-sync this item (details, stock, price) to WooCommerce."""
+		frappe.only_for(["System Manager", "Woo Manager"])
 		return self._execute_publish_sync(user=frappe.session.user)
 
 	@frappe.whitelist()
 	def sync_stock_now(self):
 		"""Push current stock qty to WooCommerce."""
+		frappe.only_for(["System Manager", "Woo Manager"])
 		from woo_prime.api.sync import sync_stock_to_woo
 
 		if not self.woo_product_id:
@@ -233,6 +236,7 @@ class WooItem(Document):
 	@frappe.whitelist()
 	def sync_price_now(self):
 		"""Push price to WooCommerce."""
+		frappe.only_for(["System Manager", "Woo Manager"])
 		from woo_prime.api.sync import sync_price_to_woo
 
 		if not self.woo_product_id:
@@ -300,6 +304,7 @@ def create_sync_log(**kwargs):
 @frappe.whitelist()
 def bulk_publish(items, background=True):
 	"""Bulk publish multiple Woo Items to WooCommerce."""
+	frappe.only_for(["System Manager", "Woo Manager"])
 	import json
 
 	if isinstance(items, str):
@@ -727,6 +732,7 @@ def fetch_items_from_woocommerce(auto_create_missing=False, batch_size=10, skip_
 	Returns:
 		dict: Status and message if background=True, or fetched/linked/created counts if background=False
 	"""
+	frappe.only_for(["System Manager", "Woo Manager"])
 	import json as _json
 	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
 	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
@@ -1257,6 +1263,7 @@ def fetch_items_from_woocommerce_background(
 @frappe.whitelist()
 def auto_link_unlinked_items():
 	"""Scan all Woo Items without item_code and automatically link them to ERPNext Items with matching SKU."""
+	frappe.only_for(["System Manager", "Woo Manager"])
 	unlinked = frappe.get_all("Woo Item", filters={"item_code": ["in", ["", None]]}, fields=["name", "sku"])
 	linked_count = 0
 
@@ -1289,6 +1296,7 @@ def auto_link_unlinked_items():
 @frappe.whitelist()
 def bulk_link_to_erpnext_item(items, target_item_code=None):
 	"""Bulk link selected Woo Items to an ERPNext Item or match automatically by SKU."""
+	frappe.only_for(["System Manager", "Woo Manager"])
 	import json
 
 	if isinstance(items, str):
@@ -1319,6 +1327,7 @@ def bulk_link_to_erpnext_item(items, target_item_code=None):
 @frappe.whitelist()
 def create_erpnext_items_from_woo(items):
 	"""Bulk auto-create ERPNext Item records for Woo Items that don't have matching ERPNext items."""
+	frappe.only_for(["System Manager", "Woo Manager"])
 	import json
 
 	if isinstance(items, str):
@@ -1379,6 +1388,7 @@ def publish_item_from_item_master(item_code, background=True):
 	Returns:
 		dict with status, woo_product_id, woo_product_url, woo_item_name
 	"""
+	frappe.only_for(["System Manager", "Woo Manager"])
 	if not item_code or not frappe.db.exists("Item", item_code):
 		frappe.throw(_("Item {0} not found.").format(item_code))
 
@@ -1451,6 +1461,7 @@ def publish_item_from_item_master(item_code, background=True):
 @frappe.whitelist()
 def get_item_price_rate(item_code):
 	"""Get current ERPNext item price rate for an Item (with fallback for variant items)."""
+	frappe.only_for(["System Manager", "Woo Manager"])
 	if not item_code:
 		return 0.0
 	settings = frappe.get_single("Woo Settings")
@@ -1462,6 +1473,7 @@ def get_item_price_rate(item_code):
 @frappe.whitelist()
 def update_regular_prices(items=None):
 	"""Bulk update regular_price from ERPNext Item Price for specified items or all Woo Items with empty price."""
+	frappe.only_for(["System Manager", "Woo Manager"])
 	import json
 	if isinstance(items, str):
 		items = json.loads(items)

@@ -130,6 +130,7 @@ def _save_single_tag(tag):
 @frappe.whitelist()
 def fetch_tags_from_woo(background=True):
 	"""Enqueue tag fetch as background job or run synchronously."""
+	frappe.only_for(["System Manager", "Woo Manager"])
 	from woo_prime.woo_prime.doctype.woo_category.woo_category import _parse_bool
 
 	background = _parse_bool(background)

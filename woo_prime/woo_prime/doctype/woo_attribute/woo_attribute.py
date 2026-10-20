@@ -39,6 +39,7 @@ def _publish_progress(user, operation, status, message, **kwargs):
 @frappe.whitelist()
 def fetch_attributes_from_woo(background=True):
 	"""Enqueue attribute fetch as background job or run synchronously."""
+	frappe.only_for(["System Manager", "Woo Manager"])
 	from woo_prime.woo_prime.doctype.woo_category.woo_category import _parse_bool
 
 	background = _parse_bool(background)
@@ -232,6 +233,7 @@ def ensure_woo_attribute_tables():
 @frappe.whitelist()
 def push_attribute_to_woo(attribute_name):
 	"""Push a single ERPNext Item Attribute and its values to WooCommerce as a Global Attribute."""
+	frappe.only_for(["System Manager", "Woo Manager"])
 	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
 
 	repair_crashed_tables()
@@ -367,6 +369,7 @@ def push_attribute_to_woo(attribute_name):
 @frappe.whitelist()
 def push_all_attributes_to_woo(background=True):
 	"""Push all ERPNext Item Attributes to WooCommerce."""
+	frappe.only_for(["System Manager", "Woo Manager"])
 	from woo_prime.woo_prime.doctype.woo_category.woo_category import _parse_bool
 
 	background = _parse_bool(background)

@@ -5,9 +5,19 @@ import frappe
 
 
 def after_install():
-	"""Run after app installation to set up custom fields."""
+	"""Run after app installation to set up custom fields and roles."""
+	create_roles()
 	create_custom_fields()
 	frappe.db.commit()
+
+
+def create_roles():
+	"""Create custom roles if missing."""
+	if not frappe.db.exists("Role", "Woo Manager"):
+		role = frappe.new_doc("Role")
+		role.role_name = "Woo Manager"
+		role.desk_access = 1
+		role.insert(ignore_permissions=True)
 
 
 def _field_exists_on_doctype(doctype, fieldname):

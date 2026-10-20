@@ -2023,6 +2023,7 @@ def auto_sync_orders(force=False):
 	- Fetches WooCommerce orders, converts them to Sales Orders in ERPNext.
 	- Can also be triggered manually (force=True).
 	"""
+	frappe.only_for(["System Manager", "Woo Manager"])
 	if isinstance(force, str):
 		force = force.lower() in ("true", "1")
 

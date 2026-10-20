@@ -187,6 +187,7 @@ def _publish_progress_category(user, current_page, total_synced, status, message
 @frappe.whitelist()
 def push_category_to_woo(doc_name):
 	"""Push a single Woo Category to WooCommerce (create or update)."""
+	frappe.only_for(["System Manager", "Woo Manager"])
 	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
 
 	doc = frappe.get_doc("Woo Category", doc_name)
@@ -271,6 +272,7 @@ def sync_categories_from_woo(background=True):
 	
 	Requirements: 2.1, 2.2, 2.3, 2.4, 2.5
 	"""
+	frappe.only_for(["System Manager", "Woo Manager"])
 	# Parse background parameter (supports string values)
 	background = _parse_bool(background)
 	
@@ -602,6 +604,7 @@ def sync_categories_from_woo_background(user=None):
 @frappe.whitelist()
 def get_children(doctype, parent=None, is_root=False, **filters):
 	"""Return child categories for tree view."""
+	frappe.only_for(["System Manager", "Woo Manager"])
 	if is_root or is_root == "true":
 		# Get root categories (no parent)
 		cond_filters = [
@@ -630,6 +633,7 @@ def get_children(doctype, parent=None, is_root=False, **filters):
 @frappe.whitelist()
 def add_node():
 	"""Add a new category node from tree view and push it to WooCommerce."""
+	frappe.only_for(["System Manager", "Woo Manager"])
 	args = frappe.form_dict
 	category_name = args.get("category_name")
 	parent = args.get("parent")

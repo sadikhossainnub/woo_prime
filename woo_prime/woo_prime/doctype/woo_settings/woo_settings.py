@@ -31,6 +31,7 @@ class WooSettings(Document):
 	@frappe.whitelist()
 	def test_connection(self):
 		"""Test WooCommerce API connection."""
+		frappe.only_for(["System Manager", "Woo Manager"])
 		import json
 		from urllib.parse import urlparse
 		try:
@@ -146,28 +147,33 @@ class WooSettings(Document):
 	@frappe.whitelist()
 	def run_full_sync(self):
 		"""Run full end-to-end sync."""
+		frappe.only_for(["System Manager", "Woo Manager"])
 		return run_full_sync()
 
 	@frappe.whitelist()
 	def fetch_missing_order(self, woo_order_id=None):
 		"""Fetch a specific order from WooCommerce by ID."""
+		frappe.only_for(["System Manager", "Woo Manager"])
 		return fetch_missing_order(woo_order_id)
 
 	@frappe.whitelist()
 	def fetch_shipping_from_woo(self, background=True):
 		"""Fetch WooCommerce shipping zones and methods."""
+		frappe.only_for(["System Manager", "Woo Manager"])
 		return fetch_shipping_from_woo(background=background)
 
 
 @frappe.whitelist()
 def generate_api_shared_secret():
 	"""Generate a random 40-character API shared secret."""
+	frappe.only_for(["System Manager", "Woo Manager"])
 	return frappe.generate_hash(length=40)
 
 
 @frappe.whitelist()
 def download_wordpress_plugin():
 	"""Download the Woo Prime Connector WordPress plugin zip file."""
+	frappe.only_for(["System Manager", "Woo Manager"])
 	plugin_path = frappe.get_app_path("woo_prime", "wordpress_plugin", "woo-prime-connector.zip")
 
 	if not os.path.exists(plugin_path):
@@ -203,6 +209,7 @@ def get_woo_api():
 @frappe.whitelist()
 def run_full_sync():
 	"""Run full end-to-end sync: Sync Categories -> Fetch Products & Auto Link -> Sync Stock & Price."""
+	frappe.only_for(["System Manager", "Woo Manager"])
 	from woo_prime.woo_prime.doctype.woo_category.woo_category import sync_categories_from_woo
 	from woo_prime.woo_prime.doctype.woo_item.woo_item import fetch_items_from_woocommerce
 	from woo_prime.api.sync import sync_all_stock, sync_all_prices
@@ -231,10 +238,14 @@ def run_full_sync():
 @frappe.whitelist()
 def fetch_missing_order(woo_order_id):
 	"""Fetch a specific order from WooCommerce by ID and sync it as a Sales Order in ERPNext."""
+	frappe.only_for(["System Manager", "Woo Manager"])
 	if not woo_order_id:
 		frappe.throw(_("Please provide a WooCommerce Order ID."))
 
 	woo_order_id = str(woo_order_id).strip()
+	if not woo_order_id.isdigit():
+		frappe.throw(_("WooCommerce Order ID must contain digits only."))
+
 	api = get_woo_api()
 
 	response = api.get(f"orders/{woo_order_id}")
@@ -267,6 +278,7 @@ def fetch_missing_order(woo_order_id):
 @frappe.whitelist()
 def auto_map_attributes():
 	"""Auto-match and populate ERPNext Item Attributes to WooCommerce Global Attributes in Woo Settings."""
+	frappe.only_for(["System Manager", "Woo Manager"])
 	settings = frappe.get_single("Woo Settings")
 	existing_erp_attrs = {row.erpnext_attribute for row in (settings.attribute_mappings or [])}
 
@@ -343,6 +355,7 @@ def _publish_shipping_progress(user, status, message, **kwargs):
 @frappe.whitelist()
 def fetch_shipping_from_woo(background=True):
 	"""Enqueue shipping fetch as background job or run synchronously."""
+	frappe.only_for(["System Manager", "Woo Manager"])
 	from woo_prime.woo_prime.doctype.woo_category.woo_category import _parse_bool
 
 	background = _parse_bool(background)
