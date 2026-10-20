@@ -1567,10 +1567,29 @@ def sync_stock_to_woo(woo_item):
 	if variant_of:
 		parent_woo_id = frappe.db.get_value("Woo Item", {"item_code": variant_of}, "woo_product_id")
 
-	if parent_woo_id:
-		api.update_variation_stock(parent_woo_id, woo_item.woo_product_id, stock_qty)
-	else:
-		api.update_stock(woo_item.woo_product_id, stock_qty)
+	try:
+		if parent_woo_id:
+			api.update_variation_stock(parent_woo_id, woo_item.woo_product_id, stock_qty)
+		else:
+			api.update_stock(woo_item.woo_product_id, stock_qty)
+	except frappe.ValidationError as e:
+		# 404 — product gone from WooCommerce
+		err_msg = str(e)
+		if "404" in err_msg or "not found" in err_msg.lower():
+			woo_item.db_set("published", 0)
+		woo_item.db_set("sync_status", "Error")
+		from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
+		create_log(
+			sync_type="Stock",
+			direction="Outgoing",
+			status="Failed",
+			reference_doctype="Woo Item",
+			reference_name=woo_item.name,
+			woo_reference_id=str(woo_item.woo_product_id),
+			error_message=err_msg,
+		)
+		frappe.logger("woo_prime").error(f"[sync_stock_to_woo] 404/error for {woo_item.name}: {err_msg}")
+		return
 
 	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
 
@@ -1598,10 +1617,22 @@ def sync_price_to_woo(woo_item):
 
 	price = _get_item_price(woo_item.item_code, settings.default_price_list)
 	regular_price = flt(price) if price > 0 else (flt(woo_item.regular_price) if getattr(woo_item, "regular_price", None) else 0.0)
-	sale_price = flt(woo_item.sale_price) if getattr(woo_item, "sale_price", None) and flt(woo_item.sale_price) > 0 else None
+
+	# Guard: never send price 0 when Woo Item has no regular_price configured
+	if regular_price <= 0:
+		if not (getattr(woo_item, "regular_price", None) and flt(woo_item.regular_price) > 0):
+			frappe.logger("woo_prime").warning(
+				f"[sync_price_to_woo] Skipping {woo_item.name} — resolved price is 0"
+			)
+			return
 
 	if regular_price > 0 and (not woo_item.regular_price or flt(woo_item.regular_price) != regular_price):
 		woo_item.db_set("regular_price", regular_price)
+
+	# Determine sale_price: clear when empty/0, else send the value
+	raw_sale = getattr(woo_item, "sale_price", None)
+	sale_price = flt(raw_sale) if raw_sale else 0.0
+	clear_sale = sale_price <= 0  # True → send sale_price="" to WooCommerce
 
 	# Check if item is a Variant of a Template product
 	variant_of = frappe.db.get_value("Item", woo_item.item_code, "variant_of")
@@ -1613,10 +1644,36 @@ def sync_price_to_woo(woo_item):
 			or (frappe.db.exists("Woo Item", variant_of) and frappe.db.get_value("Woo Item", variant_of, "woo_product_id"))
 		)
 
-	if parent_woo_id:
-		api.update_variation_price(parent_woo_id, woo_item.woo_product_id, regular_price, sale_price=sale_price)
-	else:
-		api.update_price(woo_item.woo_product_id, regular_price, sale_price=sale_price)
+	try:
+		if parent_woo_id:
+			api.update_variation_price(
+				parent_woo_id, woo_item.woo_product_id, regular_price,
+				sale_price=flt(sale_price) if not clear_sale else None,
+				clear_sale=clear_sale,
+			)
+		else:
+			api.update_price(
+				woo_item.woo_product_id, regular_price,
+				sale_price=flt(sale_price) if not clear_sale else None,
+				clear_sale=clear_sale,
+			)
+	except frappe.ValidationError as e:
+		err_msg = str(e)
+		if "404" in err_msg or "not found" in err_msg.lower():
+			woo_item.db_set("published", 0)
+		woo_item.db_set("sync_status", "Error")
+		from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
+		create_log(
+			sync_type="Price",
+			direction="Outgoing",
+			status="Failed",
+			reference_doctype="Woo Item",
+			reference_name=woo_item.name,
+			woo_reference_id=str(woo_item.woo_product_id),
+			error_message=err_msg,
+		)
+		frappe.logger("woo_prime").error(f"[sync_price_to_woo] 404/error for {woo_item.name}: {err_msg}")
+		return
 
 	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
 

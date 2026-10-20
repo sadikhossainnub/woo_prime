@@ -611,13 +611,24 @@ class WooAPI:
 
 		Returns:
 			dict: WooCommerce product response
+
+		Raises:
+			frappe.ValidationError: on 404 (product not found in WooCommerce)
 		"""
 		data = {
 			"manage_stock": manage_stock,
 			"stock_quantity": int(stock_quantity),
 			"stock_status": "instock" if int(stock_quantity) > 0 else "outofstock",
 		}
-		return self.update_product(product_id, data)
+		response = self.put(f"products/{product_id}", data=data)
+		if response.status_code == 200:
+			return response.json()
+		if response.status_code == 404:
+			frappe.throw(
+				f"WooCommerce product #{product_id} not found (404) — mark as unpublished",
+				frappe.ValidationError,
+			)
+		frappe.throw(f"WooCommerce API Error ({response.status_code}): {response.text[:500]}")
 
 	def update_variation_stock(self, parent_id, variation_id, stock_quantity, manage_stock=True):
 		"""Update stock quantity for a product variation.
@@ -630,31 +641,56 @@ class WooAPI:
 
 		Returns:
 			dict: WooCommerce variation response
+
+		Raises:
+			frappe.ValidationError: on 404 (variation not found in WooCommerce)
 		"""
 		data = {
 			"manage_stock": manage_stock,
 			"stock_quantity": int(stock_quantity),
 			"stock_status": "instock" if int(stock_quantity) > 0 else "outofstock",
 		}
-		return self.update_product_variation(parent_id, variation_id, data)
+		response = self.put(f"products/{parent_id}/variations/{variation_id}", data=data)
+		if response.status_code == 200:
+			return response.json()
+		if response.status_code == 404:
+			frappe.throw(
+				f"WooCommerce variation #{variation_id} (parent #{parent_id}) not found (404) — mark as unpublished",
+				frappe.ValidationError,
+			)
+		frappe.throw(f"WooCommerce API Error ({response.status_code}): {response.text[:500]}")
 
-	def update_price(self, product_id, regular_price, sale_price=None):
+	def update_price(self, product_id, regular_price, sale_price=None, clear_sale=False):
 		"""Update price for a product.
 
 		Args:
 			product_id: WooCommerce product ID
 			regular_price: Regular price
 			sale_price: Optional sale price
+			clear_sale: When True, explicitly send sale_price="" to clear any existing sale price
 
 		Returns:
 			dict: WooCommerce product response
+
+		Raises:
+			frappe.ValidationError: on 404 (product not found in WooCommerce)
 		"""
 		data = {"regular_price": str(regular_price)}
 		if sale_price is not None:
 			data["sale_price"] = str(sale_price)
-		return self.update_product(product_id, data)
+		elif clear_sale:
+			data["sale_price"] = ""
+		response = self.put(f"products/{product_id}", data=data)
+		if response.status_code == 200:
+			return response.json()
+		if response.status_code == 404:
+			frappe.throw(
+				f"WooCommerce product #{product_id} not found (404) — mark as unpublished",
+				frappe.ValidationError,
+			)
+		frappe.throw(f"WooCommerce API Error ({response.status_code}): {response.text[:500]}")
 
-	def update_variation_price(self, parent_id, variation_id, regular_price, sale_price=None):
+	def update_variation_price(self, parent_id, variation_id, regular_price, sale_price=None, clear_sale=False):
 		"""Update price for a product variation.
 
 		Args:
@@ -662,14 +698,28 @@ class WooAPI:
 			variation_id: WooCommerce variation ID
 			regular_price: Regular price
 			sale_price: Optional sale price
+			clear_sale: When True, explicitly send sale_price="" to clear any existing sale price
 
 		Returns:
 			dict: WooCommerce variation response
+
+		Raises:
+			frappe.ValidationError: on 404 (variation not found in WooCommerce)
 		"""
 		data = {"regular_price": str(regular_price)}
 		if sale_price is not None:
 			data["sale_price"] = str(sale_price)
-		return self.update_product_variation(parent_id, variation_id, data)
+		elif clear_sale:
+			data["sale_price"] = ""
+		response = self.put(f"products/{parent_id}/variations/{variation_id}", data=data)
+		if response.status_code == 200:
+			return response.json()
+		if response.status_code == 404:
+			frappe.throw(
+				f"WooCommerce variation #{variation_id} (parent #{parent_id}) not found (404) — mark as unpublished",
+				frappe.ValidationError,
+			)
+		frappe.throw(f"WooCommerce API Error ({response.status_code}): {response.text[:500]}")
 
 	# --- Order Methods ---
 
