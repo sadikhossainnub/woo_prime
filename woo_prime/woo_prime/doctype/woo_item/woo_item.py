@@ -481,50 +481,81 @@ def _parse_int(value, default=10):
 
 
 
-def _is_within_sync_window():
+def _is_within_sync_window(now_val=None, start_val=None, end_val=None):
 	"""Check if current time is within the configured auto sync window.
-	
+
+	Args:
+		now_val: Optional override for now (datetime.time, timedelta, or str)
+		start_val: Optional override for start (str, timedelta, or time)
+		end_val: Optional override for end (str, timedelta, or time)
+
 	Returns:
 		bool: True if within sync window or schedule is disabled, False otherwise
-	
+
 	Note:
 		- If enable_auto_sync_schedule is False, always returns True (no restriction)
 		- If times are not configured, always returns True
-		- Silently returns False if outside window (no user notification)
-		- Logs at INFO level when outside window for debugging
+		- Uses frappe.utils.get_time() for start/end and now_datetime().time() for now
 	"""
-	settings = frappe.get_single("Woo Settings")
-	
-	# If schedule is not enabled, allow sync anytime
-	if not getattr(settings, "enable_auto_sync_schedule", 0):
-		return True
-	
-	start_time = getattr(settings, "auto_sync_start_time", None)
-	end_time = getattr(settings, "auto_sync_end_time", None)
-	
-	# If times not configured, allow sync anytime
+	from datetime import datetime, timedelta, time as dt_time
+	from frappe.utils import get_time, now_datetime
+
+	def _normalize_time(val):
+		if val is None:
+			return None
+		if isinstance(val, dt_time):
+			return val
+		if isinstance(val, timedelta):
+			return (datetime.min + val).time()
+		try:
+			t = get_time(val)
+		except Exception:
+			try:
+				return datetime.strptime(str(val), "%H:%M:%S").time()
+			except Exception:
+				return None
+		if isinstance(t, timedelta):
+			t = (datetime.min + t).time()
+		elif hasattr(t, "time") and callable(t.time):
+			t = t.time()
+		return t
+
+	if start_val is not None and end_val is not None:
+		start_time = _normalize_time(start_val)
+		end_time = _normalize_time(end_val)
+	else:
+		settings = frappe.get_single("Woo Settings")
+
+		# If schedule is not enabled, allow sync anytime
+		if not getattr(settings, "enable_auto_sync_schedule", 0):
+			return True
+
+		raw_start = getattr(settings, "auto_sync_start_time", None)
+		raw_end = getattr(settings, "auto_sync_end_time", None)
+
+		# If times not configured, allow sync anytime
+		if not raw_start or not raw_end:
+			return True
+
+		start_time = _normalize_time(raw_start)
+		end_time = _normalize_time(raw_end)
+
 	if not start_time or not end_time:
 		return True
-	
-	from datetime import datetime, time as dt_time
-	
-	# Get current time
-	now = datetime.now().time()
-	
-	# Parse time strings if they're strings
-	if isinstance(start_time, str):
-		start_time = datetime.strptime(start_time, "%H:%M:%S").time()
-	if isinstance(end_time, str):
-		end_time = datetime.strptime(end_time, "%H:%M:%S").time()
-	
+
+	if now_val is not None:
+		now = _normalize_time(now_val)
+	else:
+		now = now_datetime().time()
+
 	# Handle overnight windows (e.g., 22:00 to 06:00)
 	if start_time <= end_time:
-		# Normal case: start < end (e.g., 02:00 to 06:00)
+		# Normal case: start <= end (e.g., 02:00 to 06:00)
 		within_window = start_time <= now <= end_time
 	else:
 		# Overnight case: start > end (e.g., 22:00 to 06:00)
 		within_window = now >= start_time or now <= end_time
-	
+
 	if not within_window:
 		logger = frappe.logger("woo_prime", allow_site=True, max_size=1, file_count=50)
 		logger.info(
@@ -532,7 +563,7 @@ def _is_within_sync_window():
 			f"window: {start_time.strftime('%H:%M:%S')} - {end_time.strftime('%H:%M:%S')}). "
 			f"Skipping auto sync."
 		)
-	
+
 	return within_window
 
 def _publish_progress(user, operation, current_page, total_fetched, linked, created, skipped, failed, status, message):
