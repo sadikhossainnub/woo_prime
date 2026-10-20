@@ -41,7 +41,13 @@ def sync_order(order_data):
 		delivery_date = add_days(transaction_date, 7)
 
 		# 2. Map line items
-		items = _map_order_items(order_data, settings, delivery_date=delivery_date)
+		items, unmapped_lines = _map_order_items(order_data, settings, delivery_date=delivery_date)
+
+		if unmapped_lines:
+			unmapped_desc = ", ".join(f"{u.get('name') or u.get('sku') or u.get('id')}" for u in unmapped_lines)
+			err_msg = f"Cannot create Sales Order: {len(unmapped_lines)} unmapped WooCommerce line item(s): {unmapped_desc}"
+			_log_error(woo_order_id, order_data, err_msg)
+			return
 
 		if not items:
 			_log_error(woo_order_id, order_data, "No valid items found in order")
@@ -51,7 +57,7 @@ def sync_order(order_data):
 		so = frappe.new_doc("Sales Order")
 		so.customer = customer_name
 		so.order_type = "Shopping Cart"
-		if settings.sales_type:
+		if getattr(settings, "sales_type", None) and frappe.get_meta("Sales Order").has_field("sales_type"):
 			so.sales_type = settings.sales_type
 		so.company = settings.default_company
 		so.transaction_date = transaction_date
@@ -72,6 +78,7 @@ def sync_order(order_data):
 		coupon_lines = order_data.get("coupon_lines", [])
 		discount_total = flt(order_data.get("discount_total", 0))
 
+		loyalty_discount = 0
 		if coupon_lines:
 			coupons_applied = [c.get("code") for c in coupon_lines if c.get("code")]
 			so.po_no = f"WC-{woo_order_id} (Coupons: {', '.join(coupons_applied)})"
@@ -81,12 +88,26 @@ def sync_order(order_data):
 				code = str(coupon.get("code", "")).lower()
 				discount = flt(coupon.get("discount", 0))
 				if "loyalty" in code or "point" in code:
-					so.loyalty_amount = discount
+					loyalty_discount += discount
+					so.loyalty_amount = loyalty_discount
 
-		if discount_total > 0 and not so.loyalty_amount:
-			# Apply overall additional discount if not handled via line item prices
-			so.discount_amount = discount_total
-			so.apply_discount_on = "Grand Total"
+		# If loyalty_amount handling does not reduce grand_total, treat loyalty coupon discount as normal discount_amount
+		has_active_loyalty = bool(
+			getattr(so, "loyalty_amount", 0)
+			and getattr(so, "loyalty_program", None)
+			and getattr(so, "loyalty_redemption_account", None)
+		)
+
+		if not has_active_loyalty and loyalty_discount > 0 and discount_total == 0:
+			discount_total = loyalty_discount
+
+		if discount_total > 0:
+			if has_active_loyalty:
+				so.discount_amount = max(0, discount_total - flt(so.loyalty_amount))
+			else:
+				so.discount_amount = discount_total
+				so.loyalty_amount = 0
+			so.apply_discount_on = "Net Total"
 
 		# Custom fields for WooCommerce tracking
 		so.woo_order_id = str(woo_order_id)
@@ -106,58 +127,61 @@ def sync_order(order_data):
 		shipping_lines = order_data.get("shipping_lines", [])
 		shipping_title = shipping_lines[0].get("method_title", "Shipping") if shipping_lines else "Shipping Charges"
 
-		# Resolve ERPNext Shipping Rule from WooCommerce Zone/Method Title or Mappings
+		# Resolve ERPNext Shipping Rule from WooCommerce Zone/Method Title or Mappings (only when shipping_total > 0)
 		matched_rule = None
-		if shipping_lines and hasattr(settings, "shipping_rule_mappings") and settings.shipping_rule_mappings:
-			s_line = shipping_lines[0]
-			method_title = (s_line.get("method_title") or "").strip().lower()
-			method_id = (s_line.get("method_id") or "").strip().lower()
-
-			for mapping in settings.shipping_rule_mappings:
-				target_method = (mapping.woo_shipping_method or "").strip().lower()
-				if target_method and (
-					target_method == method_title
-					or target_method == method_id
-					or target_method in method_title
-					or (method_title and method_title in target_method)
-				):
-					matched_rule = mapping.shipping_rule
-					break
-
-		if not matched_rule and shipping_title and frappe.db.exists("Shipping Rule", shipping_title):
-			matched_rule = shipping_title
-
-		if not matched_rule and getattr(settings, "default_shipping_rule", None):
-			matched_rule = settings.default_shipping_rule
-
-		if matched_rule:
-			so.shipping_rule = matched_rule
-
-		# Add taxes from template if configured
-		if settings.tax_template:
-			so.taxes_and_charges = settings.tax_template
-			so.set_taxes()
-
-		# Add shipping charges
-		shipping_sync_mode = getattr(settings, "shipping_sync_type", "Line Item")
-
 		if shipping_total > 0:
-			if shipping_sync_mode == "Taxes and Charges Table" or getattr(settings, "shipping_charge_account", None):
-				account_head = getattr(settings, "shipping_charge_account", None)
-				if not account_head and settings.default_company:
-					account_head = frappe.db.get_value(
-						"Account",
-						{"company": settings.default_company, "account_name": ["like", "%Shipping%"], "is_group": 0},
-						"name"
-					)
+			if shipping_lines and hasattr(settings, "shipping_rule_mappings") and settings.shipping_rule_mappings:
+				s_line = shipping_lines[0]
+				method_title = (s_line.get("method_title") or "").strip().lower()
+				method_id = (s_line.get("method_id") or "").strip().lower()
 
-				if account_head:
-					so.append("taxes", {
-						"charge_type": "Actual",
-						"account_head": account_head,
-						"description": f"Shipping Charges ({shipping_title})",
-						"tax_amount": shipping_total,
-					})
+				for mapping in settings.shipping_rule_mappings:
+					target_method = (mapping.woo_shipping_method or "").strip().lower()
+					if target_method and (
+						target_method == method_title
+						or target_method == method_id
+						or target_method in method_title
+						or (method_title and method_title in target_method)
+					):
+						matched_rule = mapping.shipping_rule
+						break
+
+			if not matched_rule and shipping_title and frappe.db.exists("Shipping Rule", shipping_title):
+				matched_rule = shipping_title
+
+			if not matched_rule and getattr(settings, "default_shipping_rule", None):
+				matched_rule = settings.default_shipping_rule
+
+			if matched_rule:
+				so.shipping_rule = matched_rule
+			else:
+				# Add shipping charges via Taxes or Line item only if shipping_rule is not matched
+				shipping_sync_mode = getattr(settings, "shipping_sync_type", "Line Item")
+				if shipping_sync_mode == "Taxes and Charges Table" or getattr(settings, "shipping_charge_account", None):
+					account_head = getattr(settings, "shipping_charge_account", None)
+					if not account_head and settings.default_company:
+						account_head = frappe.db.get_value(
+							"Account",
+							{"company": settings.default_company, "account_name": ["like", "%Shipping%"], "is_group": 0},
+							"name"
+						)
+
+					if account_head:
+						so.append("taxes", {
+							"charge_type": "Actual",
+							"account_head": account_head,
+							"description": f"Shipping Charges ({shipping_title})",
+							"tax_amount": shipping_total,
+						})
+					elif settings.shipping_item:
+						so.append("items", {
+							"item_code": settings.shipping_item,
+							"item_name": f"Shipping - {shipping_title}",
+							"qty": 1,
+							"rate": shipping_total,
+							"delivery_date": so.delivery_date,
+							"warehouse": settings.default_warehouse,
+						})
 				elif settings.shipping_item:
 					so.append("items", {
 						"item_code": settings.shipping_item,
@@ -167,15 +191,11 @@ def sync_order(order_data):
 						"delivery_date": so.delivery_date,
 						"warehouse": settings.default_warehouse,
 					})
-			elif settings.shipping_item:
-				so.append("items", {
-					"item_code": settings.shipping_item,
-					"item_name": f"Shipping - {shipping_title}",
-					"qty": 1,
-					"rate": shipping_total,
-					"delivery_date": so.delivery_date,
-					"warehouse": settings.default_warehouse,
-				})
+
+		# Add taxes from template if configured
+		if settings.tax_template:
+			so.taxes_and_charges = settings.tax_template
+			so.set_taxes()
 
 		# Fee lines handling (surcharges, COD fees, packaging charges)
 		fee_lines = order_data.get("fee_lines", [])
@@ -220,11 +240,29 @@ def sync_order(order_data):
 		except Exception:
 			pass
 
-		# Save and submit (respect auto_submit_order setting with DuplicateEntryError protection)
+		# Compare so.grand_total with WooCommerce order total
+		woo_total = flt(order_data.get("total", 0))
+		tolerance = flt(getattr(settings, "order_total_tolerance", 1.0) or 1.0)
+		diff = abs(flt(so.grand_total) - woo_total)
+		is_mismatch = diff > tolerance
+
+		# Save Sales Order
 		try:
 			so.flags.ignore_permissions = True
 			so.flags.ignore_mandatory = True
 			so.save()
+
+			if is_mismatch:
+				mismatch_msg = (
+					f"Total mismatch for WooCommerce Order WC-{woo_order_id}: "
+					f"ERPNext Grand Total is {so.grand_total}, but WooCommerce Order Total is {woo_total} "
+					f"(diff: {diff:.2f} > tolerance: {tolerance:.2f}). Saved as Draft."
+				)
+				so.add_comment("Comment", text=mismatch_msg)
+				_log_error(woo_order_id, order_data, mismatch_msg)
+				frappe.db.commit()
+				return
+
 			if getattr(settings, "auto_submit_order", 1):
 				so.submit()
 		except frappe.DuplicateEntryError:
@@ -645,8 +683,8 @@ def _create_contact(customer_name, first_name, last_name, email, phone):
 def _map_order_items(order_data, settings, delivery_date=None):
 	"""Map WooCommerce line items to ERPNext Sales Order items.
 
-	Looks up each item by SKU in the Woo Item doctype.
-	If SKU not found in Woo Item, tries to find ERPNext Item directly by item_code = SKU.
+	Looks up each item by woo_product_id, SKU, or item_code.
+	Item rate uses pre-discount rate (subtotal / quantity).
 
 	Args:
 		order_data: dict — WooCommerce order payload
@@ -654,16 +692,21 @@ def _map_order_items(order_data, settings, delivery_date=None):
 		delivery_date: str — Delivery date for items
 
 	Returns:
-		list: List of dicts for Sales Order items table
+		tuple: (items: list or None, unmapped: list)
 	"""
 	items = []
+	unmapped = []
 	line_items = order_data.get("line_items", [])
 	item_delivery_date = delivery_date or _parse_date(order_data.get("date_created", today()))
 
 	for line in line_items:
 		sku = (line.get("sku") or "").strip()
 		qty = flt(line.get("quantity", 1))
-		rate = flt(line.get("price", 0))
+		
+		# Pre-discount line rate = line.subtotal / quantity
+		subtotal = flt(line.get("subtotal")) if line.get("subtotal") is not None else (flt(line.get("price", 0)) * qty)
+		rate = (subtotal / qty) if qty > 0 else flt(line.get("price", 0))
+
 		item_name_wc = line.get("name", "")
 		prod_id_wc = line.get("variation_id") or line.get("product_id")
 
@@ -689,20 +732,13 @@ def _map_order_items(order_data, settings, delivery_date=None):
 			if frappe.db.exists("Item", sku):
 				item_code = sku
 
-		# 4. Fallback: try to find by item_name (both exact and html.unescaped)
-		if not item_code and item_name_wc:
-			clean_name = html.unescape(item_name_wc)
-			item_code = (
-				frappe.db.get_value("Item", {"item_name": clean_name}, "name")
-				or frappe.db.get_value("Item", {"item_name": item_name_wc}, "name")
-			)
-
 		if not item_code:
-			frappe.log_error(
-				title=f"WooCommerce Item Not Found - SKU: {sku}",
-				message=f"Could not find ERPNext item for WooCommerce line item.\n"
-				f"SKU: {sku}\nName: {item_name_wc}\nProduct ID: {prod_id_wc}\nOrder ID: {order_data.get('id')}",
-			)
+			unmapped.append({
+				"id": prod_id_wc,
+				"sku": sku,
+				"name": item_name_wc,
+				"quantity": qty,
+			})
 			continue
 
 		items.append({
@@ -713,7 +749,9 @@ def _map_order_items(order_data, settings, delivery_date=None):
 			"warehouse": settings.default_warehouse,
 		})
 
-	return items
+	if unmapped:
+		return None, unmapped
+	return items, []
 
 
 def _parse_date(date_str):

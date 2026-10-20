@@ -334,6 +334,13 @@
    "label": "Auto Submit Sales Order"
   },
   {
+   "default": "1.0",
+   "description": "Allowed discrepancy between ERPNext Grand Total and WooCommerce Total",
+   "fieldname": "order_total_tolerance",
+   "fieldtype": "Float",
+   "label": "Order Total Tolerance"
+  },
+  {
    "default": "0",
    "fieldname": "order_email_notification",
    "fieldtype": "Check",
