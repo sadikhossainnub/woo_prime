@@ -40,16 +40,27 @@ class WooSyncLog(Document):
 					sync_order(order_data)
 					self.db_set("status", "Success")
 					self.db_set("error_message", None)
+					frappe.db.commit()
 					frappe.msgprint(frappe._("✅ Order sync retried successfully!"), indicator="green")
 					return True
 				except Exception as e:
+					self.db_set("status", "Failed")
+					self.db_set("error_message", str(e))
+					frappe.db.commit()
 					frappe.throw(frappe._("Order retry failed: {0}").format(str(e)))
 			elif self.woo_reference_id:
-				from woo_prime.woo_prime.doctype.woo_settings.woo_settings import fetch_missing_order
-				fetch_missing_order(self.woo_reference_id)
-				self.db_set("status", "Success")
-				self.db_set("error_message", None)
-				return True
+				try:
+					from woo_prime.woo_prime.doctype.woo_settings.woo_settings import fetch_missing_order
+					fetch_missing_order(self.woo_reference_id)
+					self.db_set("status", "Success")
+					self.db_set("error_message", None)
+					frappe.db.commit()
+					return True
+				except Exception as e:
+					self.db_set("status", "Failed")
+					self.db_set("error_message", str(e))
+					frappe.db.commit()
+					frappe.throw(frappe._("Order retry failed: {0}").format(str(e)))
 
 		frappe.throw(frappe._("Unable to automatically retry this type of log entry."))
 
@@ -70,18 +81,39 @@ def create_log(sync_type, direction, status, reference_doctype=None, reference_n
 		error_message: Short error description
 	"""
 	try:
+		ref_id_str = str(woo_reference_id) if woo_reference_id else None
+
+		# Do not create a new "Failed" log row if one for the same woo_reference_id already exists; update it.
+		if status == "Failed" and ref_id_str:
+			existing_log_name = frappe.db.get_value(
+				"Woo Sync Log",
+				{"sync_type": sync_type, "woo_reference_id": ref_id_str, "status": "Failed"},
+				"name",
+			)
+			if existing_log_name:
+				log = frappe.get_doc("Woo Sync Log", existing_log_name)
+				log.direction = direction
+				log.reference_doctype = reference_doctype or log.reference_doctype
+				log.reference_name = reference_name or log.reference_name
+				if request_data:
+					log.request_data = request_data
+				if response_data:
+					log.response_data = response_data
+				log.error_message = error_message
+				log.save(ignore_permissions=True)
+				return log.name
+
 		log = frappe.new_doc("Woo Sync Log")
 		log.sync_type = sync_type
 		log.direction = direction
 		log.status = status
 		log.reference_doctype = reference_doctype
 		log.reference_name = reference_name
-		log.woo_reference_id = str(woo_reference_id) if woo_reference_id else None
+		log.woo_reference_id = ref_id_str
 		log.request_data = request_data
 		log.response_data = response_data
 		log.error_message = error_message
 		log.insert(ignore_permissions=True)
-		frappe.db.commit()
 		return log.name
 	except Exception:
 		frappe.log_error("Woo Sync Log Creation Failed")

@@ -49,6 +49,10 @@ def sync_order(order_data):
 		if frappe.db.exists("Sales Order", {"woo_order_id": str(woo_order_id)}):
 			return
 
+		# Savepoint to ensure failures leave no orphan customer/address/contact
+		savepoint_name = "woo_order"
+		frappe.db.savepoint(savepoint_name)
+
 		# 1. Find or create customer and addresses
 		customer_name, billing_address, shipping_address = _get_or_create_customer(order_data, settings)
 
@@ -60,14 +64,19 @@ def sync_order(order_data):
 		items, unmapped_lines = _map_order_items(order_data, settings, delivery_date=delivery_date)
 
 		if unmapped_lines:
+			frappe.db.rollback(save_point=savepoint_name)
 			unmapped_desc = ", ".join(f"{u.get('name') or u.get('sku') or u.get('id')}" for u in unmapped_lines)
 			err_msg = f"Cannot create Sales Order: {len(unmapped_lines)} unmapped WooCommerce line item(s): {unmapped_desc}"
 			_log_error(woo_order_id, order_data, err_msg)
-			return
+			frappe.db.commit()
+			frappe.throw(err_msg)
 
 		if not items:
-			_log_error(woo_order_id, order_data, "No valid items found in order")
-			return
+			frappe.db.rollback(save_point=savepoint_name)
+			err_msg = "No valid items found in order"
+			_log_error(woo_order_id, order_data, err_msg)
+			frappe.db.commit()
+			frappe.throw(err_msg)
 
 		# 3. Create Sales Order
 		so = frappe.new_doc("Sales Order")
@@ -325,12 +334,14 @@ def sync_order(order_data):
 		frappe.db.commit()
 
 	except Exception as e:
-		frappe.db.rollback()
+		frappe.db.rollback(save_point="woo_order")
 		frappe.log_error(
 			title=f"WooCommerce Order Sync Failed - {order_data.get('id', 'Unknown')}",
 			message=frappe.get_traceback(),
 		)
 		_log_error(order_data.get("id"), order_data, str(e))
+		frappe.db.commit()
+		raise
 
 
 def update_order_from_woo(order_data, existing_so):

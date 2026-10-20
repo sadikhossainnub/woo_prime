@@ -105,7 +105,7 @@ def handle_order():
 			"message": f"Order {woo_order_id} queued for processing",
 		}
 
-	except frappe.ValidationError:
+	except (frappe.ValidationError, frappe.AuthenticationError):
 		raise
 	except Exception as e:
 		frappe.log_error(
@@ -124,12 +124,10 @@ def verify_webhook_signature(payload):
 	"""
 	settings = frappe.get_single("Woo Settings")
 	webhook_secret = settings.get_password("webhook_secret")
+	logger = frappe.logger("woo_prime", allow_site=True, max_size=1, file_count=50)
 
 	if not webhook_secret or not webhook_secret.strip():
-		frappe.log_error(
-			title="WooCommerce Webhook Signature Error",
-			message="Webhook secret not configured in Woo Settings",
-		)
+		logger.warning("[Webhook] Signature verification failed: webhook_secret not configured")
 		frappe.throw(
 			_("Webhook secret not configured in Woo Settings"),
 			frappe.AuthenticationError,
@@ -138,6 +136,7 @@ def verify_webhook_signature(payload):
 	signature = frappe.request.headers.get("X-WC-Webhook-Signature", "")
 
 	if not signature:
+		logger.warning("[Webhook] Signature verification failed: missing X-WC-Webhook-Signature header")
 		frappe.throw(
 			_("Missing webhook signature header"),
 			frappe.AuthenticationError,
@@ -153,6 +152,7 @@ def verify_webhook_signature(payload):
 	).decode("utf-8")
 
 	if not hmac.compare_digest(computed_hash, signature):
+		logger.warning("[Webhook] Signature verification failed: signature mismatch")
 		frappe.throw(
 			_("Invalid webhook signature — request rejected"),
 			frappe.AuthenticationError,
@@ -205,7 +205,7 @@ def handle_product():
 			enqueue_after_commit=True,
 		)
 		return {"status": "ok", "message": "Product update queued"}
-	except frappe.ValidationError:
+	except (frappe.ValidationError, frappe.AuthenticationError):
 		raise
 	except Exception as e:
 		frappe.log_error(title="Product Webhook Error", message=frappe.get_traceback())
