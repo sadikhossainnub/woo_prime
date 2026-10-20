@@ -68,6 +68,23 @@ frappe.ui.form.on("Woo Item", {
 			// Show sync buttons only if already published
 			if (frm.doc.woo_product_id) {
 				frm.add_custom_button(
+					__("Sync Item Now"),
+					function () {
+						frappe.call({
+							method: "sync_item_now",
+							doc: frm.doc,
+							freeze: true,
+							freeze_message: __("Syncing Item to WooCommerce..."),
+							timeout: 300,
+							callback: function (r) {
+								frm.reload_doc();
+							},
+						});
+					},
+					__("Actions")
+				);
+
+				frm.add_custom_button(
 					__("Sync Stock"),
 					function () {
 						frappe.call({
@@ -192,18 +209,18 @@ frappe.listview_settings["Woo Item"] = {
 			});
 		});
 
-		// 3. Action Item: Bulk Publish
-		listview.page.add_action_item(__("Bulk Publish to WooCommerce"), function () {
+		// 3. Action Item: Bulk Publish / Sync to WooCommerce
+		listview.page.add_action_item(__("Bulk Sync / Publish to WooCommerce"), function () {
 			const selected = listview.get_checked_items();
 			if (!selected.length) {
-				frappe.msgprint(__("Please select items to publish."));
+				frappe.msgprint(__("Please select items to sync / publish."));
 				return;
 			}
 
 			const item_names = selected.map((d) => d.name);
 
 			frappe.confirm(
-				__("Publish {0} item(s) to WooCommerce in the background?", [item_names.length]),
+				__("Sync / Publish {0} item(s) to WooCommerce in the background?", [item_names.length]),
 				function () {
 					show_bulk_publish_dialog(listview, item_names.length);
 					frappe.call({
@@ -212,7 +229,7 @@ frappe.listview_settings["Woo Item"] = {
 						callback: function (r) {
 							if (r && r.message && r.message.status === "queued") {
 								frappe.show_alert({
-									message: r.message.message || __("Bulk publish queued in background..."),
+									message: r.message.message || __("Bulk sync queued in background..."),
 									indicator: "blue"
 								}, 5);
 							}

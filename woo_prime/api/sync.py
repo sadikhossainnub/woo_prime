@@ -210,6 +210,12 @@ def sync_order(order_data):
 		if customer_note:
 			so.add_comment("Comment", text=f"Customer Note (WooCommerce): {customer_note}")
 
+		# Recalculate taxes and totals to ensure line items, shipping and fee additions are accurately computed
+		try:
+			so.calculate_taxes_and_totals()
+		except Exception:
+			pass
+
 		# Save and submit (respect auto_submit_order setting with DuplicateEntryError protection)
 		try:
 			so.flags.ignore_permissions = True
@@ -847,7 +853,8 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings):
 	if result and result.get("id"):
 		woo_item.woo_product_id = result.get("id")
 		woo_item.published = 1
-		woo_item.woo_product_url = result.get("permalink", "")
+		permalink = result.get("permalink", "")
+		woo_item.woo_product_url = html.unescape(permalink) if permalink else ""
 		woo_item.sync_status = "Synced"
 		woo_item.last_synced = now_datetime()
 		woo_item.flags.in_woo_sync = True
@@ -933,7 +940,8 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 	parent_woo_id = result.get("id")
 	woo_item.woo_product_id = parent_woo_id
 	woo_item.published = 1
-	woo_item.woo_product_url = result.get("permalink", "")
+	permalink = result.get("permalink", "")
+	woo_item.woo_product_url = html.unescape(permalink) if permalink else ""
 	woo_item.sync_status = "Synced"
 	woo_item.last_synced = now_datetime()
 	woo_item.flags.in_woo_sync = True
@@ -1017,7 +1025,8 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 					if r_data:
 						child_woo_item.woo_product_id = r_data.get("id")
 						child_woo_item.published = 1
-						child_woo_item.woo_product_url = r_data.get("permalink", "")
+						v_permalink = r_data.get("permalink", "")
+						child_woo_item.woo_product_url = html.unescape(v_permalink) if v_permalink else ""
 						child_woo_item.sync_status = "Synced"
 						child_woo_item.last_synced = now_datetime()
 						child_woo_item.flags.in_woo_sync = True
@@ -1178,7 +1187,8 @@ def _publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings
 	if res and res.get("id"):
 		child_woo_item.woo_product_id = res.get("id")
 		child_woo_item.published = 1
-		child_woo_item.woo_product_url = res.get("permalink", "")
+		permalink = res.get("permalink", "")
+		child_woo_item.woo_product_url = html.unescape(permalink) if permalink else ""
 		child_woo_item.sync_status = "Synced"
 		child_woo_item.last_synced = now_datetime()
 		child_woo_item.flags.in_woo_sync = True
@@ -1739,19 +1749,19 @@ def dynamic_scheduler_runner():
 
 		# 1. Dynamic Order Sync
 		if getattr(settings, "enable_order_sync", 1):
-			auto_sync_orders()
+			frappe.enqueue("woo_prime.api.sync.auto_sync_orders", queue="default", enqueue_after_commit=True)
 
 		# 2. Dynamic Stock Sync
 		if getattr(settings, "enable_stock_sync", 1):
-			sync_all_stock()
+			frappe.enqueue("woo_prime.api.sync.sync_all_stock", queue="long", enqueue_after_commit=True)
 
 		# 3. Dynamic Price Sync
 		if getattr(settings, "enable_price_sync", 1):
-			sync_all_prices()
+			frappe.enqueue("woo_prime.api.sync.sync_all_prices", queue="long", enqueue_after_commit=True)
 
 		# 4. Dynamic Item Sync
 		if getattr(settings, "enable_item_sync", 1):
-			sync_all_items()
+			frappe.enqueue("woo_prime.api.sync.sync_all_items", queue="long", enqueue_after_commit=True)
 
 	except Exception as e:
 		frappe.log_error(title="Dynamic Scheduler Runner Exception", message=str(e))
@@ -1951,11 +1961,27 @@ def auto_sync_orders(force=False):
 		from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
 		api = get_woo_api()
 
-		# Get recent orders from WooCommerce (handling multi-page pagination)
-		orders = _get_all_woo_orders(api, params={
+		# Build query params with lookback filter to avoid full table scan on WooCommerce
+		import datetime
+		lookback_days = int(getattr(settings, "reconcile_days", 2) or 2)
+		after_dt = None
+		if last_sync and not force:
+			# Sync orders modified or created since last sync (with 15 min buffer)
+			buffer_dt = get_datetime(last_sync) - datetime.timedelta(minutes=15)
+			after_dt = buffer_dt.strftime("%Y-%m-%dT%H:%M:%S")
+		else:
+			buffer_dt = datetime.datetime.now() - datetime.timedelta(days=lookback_days)
+			after_dt = buffer_dt.strftime("%Y-%m-%dT00:00:00")
+
+		query_params = {
 			"per_page": 100,
 			"status": "processing,completed,on-hold,pending",
-		})
+		}
+		if after_dt:
+			query_params["after"] = after_dt
+
+		# Get recent orders from WooCommerce (handling multi-page pagination)
+		orders = _get_all_woo_orders(api, params=query_params)
 
 
 		if not orders:
@@ -2241,7 +2267,8 @@ def sync_all_items():
 		"Woo Item",
 		filters={"published": 1, "sync_status": "Synced"},
 		fields=["name"],
-		limit=100,
+		order_by="last_synced asc, creation asc",
+		limit=200,
 	)
 
 	for item in woo_items:

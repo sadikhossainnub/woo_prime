@@ -27,14 +27,14 @@ def handle_order():
 		if not data:
 			frappe.throw(_("Empty request body"), frappe.ValidationError)
 
+		# Verify HMAC signature first for all incoming webhook requests
+		verify_webhook_signature(data)
+
 		# Check if this is a WooCommerce webhook ping (test delivery)
 		wc_topic = frappe.request.headers.get("X-WC-Webhook-Topic", "")
 		if not wc_topic:
-			# Could be a ping/test
+			# Ping/test delivery
 			return {"status": "ok"}
-
-		# Verify HMAC signature
-		verify_webhook_signature(data)
 
 
 		# Parse the order data
@@ -160,11 +160,11 @@ def handle_product():
 		if not data:
 			frappe.throw(_("Empty request body"), frappe.ValidationError)
 
+		verify_webhook_signature(data)
+
 		wc_topic = frappe.request.headers.get("X-WC-Webhook-Topic", "")
 		if not wc_topic:
 			return {"status": "ok"}
-
-		verify_webhook_signature(data)
 
 		product_data = json.loads(data)
 

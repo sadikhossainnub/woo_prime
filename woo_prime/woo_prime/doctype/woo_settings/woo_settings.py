@@ -29,7 +29,6 @@ class WooSettings(Document):
 
 
 	@frappe.whitelist()
-	@frappe.whitelist()
 	def test_connection(self):
 		"""Test WooCommerce API connection."""
 		import json

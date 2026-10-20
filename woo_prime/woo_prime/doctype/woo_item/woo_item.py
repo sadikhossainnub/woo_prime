@@ -29,6 +29,9 @@ class WooItem(Document):
 				if price:
 					self.regular_price = flt(price)
 
+		if self.woo_product_url:
+			self.woo_product_url = html.unescape(str(self.woo_product_url)).strip()
+
 	def on_update(self):
 		"""Auto-sync to WooCommerce when Woo Item is updated."""
 		if getattr(self.flags, "in_woo_sync", False) or getattr(frappe.flags, "in_test", False):
@@ -89,7 +92,8 @@ class WooItem(Document):
 				pass
 			self.woo_product_id = result.get("id")
 			self.published = 1
-			self.woo_product_url = result.get("permalink", "")
+			permalink = result.get("permalink", "")
+			self.woo_product_url = html.unescape(permalink) if permalink else ""
 			self.sync_status = "Synced"
 			self.last_synced = now_datetime()
 			self.flags.in_woo_sync = True
@@ -168,6 +172,11 @@ class WooItem(Document):
 			raise
 
 	@frappe.whitelist()
+	def sync_item_now(self):
+		"""Manually re-sync this item (details, stock, price) to WooCommerce."""
+		return self._execute_publish_sync(user=frappe.session.user)
+
+	@frappe.whitelist()
 	def sync_stock_now(self):
 		"""Push current stock qty to WooCommerce."""
 		from woo_prime.api.sync import sync_stock_to_woo
@@ -176,6 +185,30 @@ class WooItem(Document):
 			frappe.throw(_("This item has not been published to WooCommerce yet."))
 
 		try:
+			# If this is a template item, sync stock for all its variants
+			has_variants = frappe.db.get_value("Item", self.item_code, "has_variants")
+			if has_variants:
+				variant_names = frappe.get_all("Item", filters={"variant_of": self.item_code, "disabled": 0}, pluck="name")
+				count = 0
+				for v_name in variant_names:
+					v_woo_name = frappe.db.get_value("Woo Item", {"item_code": v_name})
+					if v_woo_name:
+						v_woo_doc = frappe.get_doc("Woo Item", v_woo_name)
+						if v_woo_doc.woo_product_id:
+							sync_stock_to_woo(v_woo_doc)
+							v_woo_doc.db_set("last_synced", now_datetime())
+							v_woo_doc.db_set("sync_status", "Synced")
+							count += 1
+				self.last_synced = now_datetime()
+				self.sync_status = "Synced"
+				self.save()
+				frappe.msgprint(
+					_("✅ Stock synced to WooCommerce successfully for template and {0} variant(s)!").format(count),
+					title=_("Stock Synced"),
+					indicator="green",
+				)
+				return
+
 			sync_stock_to_woo(self)
 			self.last_synced = now_datetime()
 			self.sync_status = "Synced"
@@ -207,6 +240,30 @@ class WooItem(Document):
 			frappe.throw(_("This item has not been published to WooCommerce yet."))
 
 		try:
+			# If this is a template item, sync prices for all its variants
+			has_variants = frappe.db.get_value("Item", self.item_code, "has_variants")
+			if has_variants:
+				variant_names = frappe.get_all("Item", filters={"variant_of": self.item_code, "disabled": 0}, pluck="name")
+				count = 0
+				for v_name in variant_names:
+					v_woo_name = frappe.db.get_value("Woo Item", {"item_code": v_name})
+					if v_woo_name:
+						v_woo_doc = frappe.get_doc("Woo Item", v_woo_name)
+						if v_woo_doc.woo_product_id:
+							sync_price_to_woo(v_woo_doc)
+							v_woo_doc.db_set("last_synced", now_datetime())
+							v_woo_doc.db_set("sync_status", "Synced")
+							count += 1
+				self.last_synced = now_datetime()
+				self.sync_status = "Synced"
+				self.save()
+				frappe.msgprint(
+					_("✅ Price synced to WooCommerce successfully for template and {0} variant(s)!").format(count),
+					title=_("Price Synced"),
+					indicator="green",
+				)
+				return
+
 			sync_price_to_woo(self)
 			self.last_synced = now_datetime()
 			self.sync_status = "Synced"
@@ -584,7 +641,7 @@ def _process_single_product(prod, settings, default_item_group, auto_create_miss
 	
 	# Set Woo Item fields (Requirements 8.1, 8.2, 8.6)
 	woo_item.woo_product_id = woo_id
-	woo_item.woo_product_url = permalink
+	woo_item.woo_product_url = html.unescape(permalink) if permalink else ""
 	woo_item.woo_description = description
 	woo_item.woo_short_description = short_description
 	woo_item.published = 1
@@ -802,7 +859,7 @@ def fetch_items_from_woocommerce(auto_create_missing=False, batch_size=10, skip_
 				woo_item.sku = sku
 
 			woo_item.woo_product_id = woo_id
-			woo_item.woo_product_url = permalink
+			woo_item.woo_product_url = html.unescape(permalink) if permalink else ""
 			woo_item.woo_description = description
 			woo_item.woo_short_description = short_description
 			woo_item.published = 1
