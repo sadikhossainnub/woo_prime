@@ -16,6 +16,16 @@ def get_items_for_sync(start=0, limit=100, item_group=None, search=None, item_co
 	"""Endpoint for WordPress plugin to fetch items live from ERPNext for selective sync."""
 	verify_api_secret()
 	try:
+		# Validate and cap pagination params
+		try:
+			start = max(0, int(start))
+		except (ValueError, TypeError):
+			start = 0
+		try:
+			limit = min(200, max(1, int(limit)))
+		except (ValueError, TypeError):
+			limit = 100
+
 		settings = frappe.get_single("Woo Settings")
 
 		filters = {
@@ -48,25 +58,51 @@ def get_items_for_sync(start=0, limit=100, item_group=None, search=None, item_co
 			filters=filters,
 			or_filters=or_filters,
 			fields=["name", "item_code", "item_name", "description", "item_group", "image", "standard_rate"],
-			start=int(start),
-			page_length=int(limit),
+			start=start,
+			page_length=limit,
 			order_by="creation desc",
 		)
 
-		result = []
 		price_list = getattr(settings, "default_price_list", None) or "Standard Selling"
 		warehouse = getattr(settings, "default_warehouse", None)
 
-		from woo_prime.api.sync import _get_item_price
+		# Batch price lookup: fetch all item prices in one query
+		item_code_list = [item.item_code for item in items]
+		price_map = {}
+		if item_code_list:
+			price_filters = {"item_code": ["in", item_code_list], "selling": 1}
+			if price_list:
+				price_filters["price_list"] = price_list
+			price_rows = frappe.db.get_all(
+				"Item Price",
+				filters=price_filters,
+				fields=["item_code", "price_list_rate"],
+			)
+			for p in price_rows:
+				# Keep highest price if multiple rows (or first found)
+				if p.item_code not in price_map:
+					price_map[p.item_code] = flt(p.price_list_rate)
 
-		for item in items:
-			price = _get_item_price(item.item_code, price_list)
-
-			stock_qty = 0
+		# Batch stock lookup via Bin
+		stock_map = {}
+		if item_code_list:
+			bin_filters = {"item_code": ["in", item_code_list]}
 			if warehouse:
-				stock_qty = flt(frappe.db.get_value("Bin", {"item_code": item.item_code, "warehouse": warehouse}, "actual_qty") or 0)
-			else:
-				stock_qty = flt(frappe.db.get_value("Bin", {"item_code": item.item_code}, "actual_qty") or 0)
+				bin_filters["warehouse"] = warehouse
+			bin_rows = frappe.db.get_all(
+				"Bin",
+				filters=bin_filters,
+				fields=["item_code", "actual_qty", "reserved_qty"],
+			)
+			for b in bin_rows:
+				ic = b.item_code
+				qty = flt(b.actual_qty) - flt(b.reserved_qty)
+				stock_map[ic] = stock_map.get(ic, 0.0) + qty
+
+		result = []
+		for item in items:
+			price = price_map.get(item.item_code) or flt(item.standard_rate) or 0.0
+			stock_qty = max(0.0, stock_map.get(item.item_code, 0.0))
 
 			image_url = None
 			if item.image:
@@ -96,4 +132,3 @@ def get_items_for_sync(start=0, limit=100, item_group=None, search=None, item_co
 	except Exception as e:
 		frappe.log_error("Get Items API Error", frappe.get_traceback())
 		return {"status": "error", "message": str(e)}
-

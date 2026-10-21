@@ -68,9 +68,25 @@ class WooAPI:
 		self.base_url = f"{self.site_url}/wp-json/{self.API_VERSION}"
 		self.auth = HTTPBasicAuth(consumer_key, consumer_secret)
 		self.timeout = 60
-		self.use_rest_route = False
-		self.use_query_auth = False
+
+		# Try to load cached routing flags for this site
+		_cache_key = f"woo_api_route_{self.site_url}"
+		_cached = frappe.cache().get_value(_cache_key) or {}
+		self.use_rest_route = _cached.get("use_rest_route", False)
+		self.use_query_auth = _cached.get("use_query_auth", False)
+
 		self.session = requests.Session()
+
+	def _persist_route_flags(self):
+		"""Persist current use_query_auth / use_rest_route to site cache."""
+		try:
+			_cache_key = f"woo_api_route_{self.site_url}"
+			frappe.cache().set_value(_cache_key, {
+				"use_rest_route": self.use_rest_route,
+				"use_query_auth": self.use_query_auth,
+			}, expires_in_sec=3600)
+		except Exception:
+			pass
 
 	def _request(self, method, endpoint, data=None, params=None, timeout=None):
 		"""Make an authenticated request to WooCommerce API."""
@@ -87,6 +103,12 @@ class WooAPI:
 		def make_call(use_rest, use_query):
 			req_params = dict(params) if params else {}
 			if use_query:
+				# Require https for query-auth (credentials in URL params)
+				if not self.site_url.startswith("https://"):
+					frappe.throw(
+						_("Query-auth fallback requires HTTPS. Site URL '{0}' is not HTTPS.").format(self.site_url),
+						title=_("WooCommerce Security Error"),
+					)
 				req_params["consumer_key"] = self.consumer_key
 				req_params["consumer_secret"] = self.consumer_secret
 				auth = None
@@ -118,9 +140,32 @@ class WooAPI:
 
 			return resp
 
+		def make_call_with_retry(use_rest, use_query):
+			"""Retry on transient errors: 429, 502, 503, 504 with exponential backoff."""
+			import time
+			delays = [1, 2, 4]
+			last_resp = None
+			for attempt, delay in enumerate(delays + [None]):
+				try:
+					last_resp = make_call(use_rest, use_query)
+					if last_resp.status_code not in (429, 502, 503, 504):
+						return last_resp
+					if delay is None:
+						break
+					logger.warning(
+						f"[WooAPI] HTTP {last_resp.status_code} on attempt {attempt + 1}, "
+						f"retrying in {delay}s…"
+					)
+					time.sleep(delay)
+				except requests.exceptions.RequestException:
+					if delay is None:
+						raise
+					time.sleep(delay)
+			return last_resp
+
 		# Initial request with exception handling
 		try:
-			response = make_call(self.use_rest_route, self.use_query_auth)
+			response = make_call_with_retry(self.use_rest_route, self.use_query_auth)
 		except requests.exceptions.RequestException as req_err:
 			logger.error(f"[WooAPI] Connection error to {self.site_url}: {req_err}")
 			frappe.throw(
@@ -135,15 +180,17 @@ class WooAPI:
 				return response
 			if is_woocommerce_json_error(response):
 				try:
-					fallback_response = make_call(self.use_rest_route, True)
+					fallback_response = make_call_with_retry(self.use_rest_route, True)
 					if fallback_response.status_code not in (401, 403):
 						self.use_query_auth = True
+						self._persist_route_flags()
 						return fallback_response
 					elif fallback_response.status_code == 404 and not self.use_rest_route:
-						fallback_response2 = make_call(True, True)
+						fallback_response2 = make_call_with_retry(True, True)
 						if fallback_response2.status_code not in (401, 403, 404):
 							self.use_query_auth = True
 							self.use_rest_route = True
+							self._persist_route_flags()
 							return fallback_response2
 				except Exception:
 					frappe.log_error(title="woo_prime: Query Auth Fallback Error", message=frappe.get_traceback())
@@ -153,19 +200,22 @@ class WooAPI:
 			if is_cloudflare_response(response):
 				return response
 			try:
-				fallback_response = make_call(True, self.use_query_auth)
+				fallback_response = make_call_with_retry(True, self.use_query_auth)
 				if fallback_response.status_code in (401, 403) and not self.use_query_auth:
 					if is_woocommerce_json_error(fallback_response):
-						fallback_response2 = make_call(True, True)
+						fallback_response2 = make_call_with_retry(True, True)
 						if fallback_response2.status_code not in (401, 403, 404) and is_valid_json(fallback_response2):
 							self.use_query_auth = True
 							self.use_rest_route = True
+							self._persist_route_flags()
 							return fallback_response2
 				elif fallback_response.status_code == 200 and is_valid_json(fallback_response):
 					self.use_rest_route = True
+					self._persist_route_flags()
 					return fallback_response
 				elif fallback_response.status_code != 404 and is_valid_json(fallback_response):
 					self.use_rest_route = True
+					self._persist_route_flags()
 					return fallback_response
 			except Exception:
 				frappe.log_error(title="woo_prime: REST Route Fallback Error", message=frappe.get_traceback())
@@ -264,13 +314,22 @@ class WooAPI:
 		frappe.throw(f"WooCommerce API Error ({response.status_code}): {response.text[:500]}")
 
 	def _recover_and_update_product(self, resource_id, product_data):
-		"""Update an existing WooCommerce product after a duplicate-SKU create failure.
+		"""Link to an existing WooCommerce product found by SKU (on duplicate-SKU failure).
 
+		Only links the woo_product_id — does NOT overwrite name, description, or force status.
 		Single update attempt per call – never calls create_product (no loop risk).
 		If WooCommerce rejects due to image URL, retries once without images.
 		"""
-		payload = dict(product_data)
-		payload["status"] = "publish"
+		# Only send the linking payload — preserve existing product name/description/status
+		payload = {
+			"sku": product_data.get("sku"),
+		}
+		# Carry over fields that are safe to update without overwriting existing data
+		for safe_key in ("regular_price", "sale_price", "stock_quantity", "manage_stock",
+		                 "stock_status", "images", "categories", "tags", "attributes",
+		                 "meta_data", "external_url"):
+			if safe_key in product_data:
+				payload[safe_key] = product_data[safe_key]
 
 		put_resp = self.put(f"products/{resource_id}", data=payload)
 		if put_resp.status_code == 200:
@@ -525,23 +584,53 @@ class WooAPI:
 		"""
 		import os
 		import mimetypes
+		import re
 
 		if not file_path or file_path.startswith("http://") or file_path.startswith("https://"):
 			return None
 
 		clean_url = file_path.lstrip("/")
-		if clean_url.startswith("files/"):
-			abs_path = frappe.get_site_path("public", clean_url)
-		elif clean_url.startswith("private/files/"):
+		is_private = clean_url.startswith("private/files/")
+
+		if is_private:
+			# Check allow_private_images setting before proceeding
+			try:
+				settings = frappe.get_single("Woo Settings")
+				if not getattr(settings, "allow_private_images", 0):
+					frappe.logger("woo_prime").warning(
+						f"upload_media: skipping private file {file_path} (allow_private_images disabled)"
+					)
+					return None
+			except Exception:
+				return None
 			abs_path = frappe.get_site_path(clean_url)
+		elif clean_url.startswith("files/"):
+			abs_path = frappe.get_site_path("public", clean_url)
 		else:
 			abs_path = frappe.get_site_path("public", "files", clean_url)
+
+		# Security: resolve symlinks and ensure path stays within allowed dirs
+		try:
+			abs_path = os.path.realpath(abs_path)
+			site_path = os.path.realpath(frappe.get_site_path())
+			public_files = os.path.join(site_path, "public", "files")
+			private_files = os.path.join(site_path, "private", "files")
+			if not (abs_path.startswith(public_files) or abs_path.startswith(private_files)):
+				frappe.logger("woo_prime").warning(
+					f"upload_media: path escape attempt blocked: {abs_path}"
+				)
+				return None
+		except Exception:
+			return None
 
 		if not os.path.exists(abs_path):
 			return None
 
 		if not filename:
-			filename = os.path.basename(abs_path)
+			raw_name = os.path.basename(abs_path)
+			# Sanitize filename: allow only safe characters
+			filename = re.sub(r"[^\w.\-]", "_", raw_name)
+			filename = filename.lstrip(".")
 
 		mime_type, _ = mimetypes.guess_type(abs_path)
 		if not mime_type:
