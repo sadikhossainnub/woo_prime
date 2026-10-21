@@ -2402,7 +2402,8 @@ def on_bin_update(doc, method):
 			"woo_prime.api.sync.sync_stock_for_item_code",
 			item_code=doc.item_code,
 			enqueue_after_commit=True,
-			at_front=True,
+			job_id=f"woo_stock_{doc.item_code}",
+			deduplicate=True,
 		)
 	except Exception as e:
 		frappe.log_error(title="Real-Time Bin Hook Exception", message=str(e))
@@ -2454,7 +2455,8 @@ def on_item_price_update(doc, method):
 			"woo_prime.api.sync.sync_price_for_item_code",
 			item_code=doc.item_code,
 			enqueue_after_commit=True,
-			at_front=True,
+			job_id=f"woo_price_{doc.item_code}",
+			deduplicate=True,
 		)
 	except Exception as e:
 		frappe.log_error(title="Real-Time Price Hook Exception", message=str(e))
