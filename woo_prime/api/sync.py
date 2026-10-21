@@ -46,8 +46,9 @@ def sync_order(order_data):
 			return
 
 		# Double-check idempotency (in case of race condition)
-		if frappe.db.exists("Sales Order", {"woo_order_id": str(woo_order_id)}):
-			return
+		existing_so = frappe.db.get_value("Sales Order", {"woo_order_id": str(woo_order_id)}, "name")
+		if existing_so:
+			return existing_so
 
 		# Savepoint to ensure failures leave no orphan customer/address/contact
 		savepoint_name = "woo_order"
@@ -332,6 +333,7 @@ def sync_order(order_data):
 		)
 
 		frappe.db.commit()
+		return so.name
 
 	except Exception as e:
 		frappe.db.rollback(save_point="woo_order")
@@ -1687,7 +1689,9 @@ def sync_stock_to_woo(woo_item):
 		# 404 — product gone from WooCommerce
 		err_msg = str(e)
 		if "404" in err_msg or "not found" in err_msg.lower():
+			woo_item.published = 0
 			woo_item.db_set("published", 0)
+		woo_item.sync_status = "Error"
 		woo_item.db_set("sync_status", "Error")
 		from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
 		create_log(
@@ -1773,7 +1777,9 @@ def sync_price_to_woo(woo_item):
 	except frappe.ValidationError as e:
 		err_msg = str(e)
 		if "404" in err_msg or "not found" in err_msg.lower():
+			woo_item.published = 0
 			woo_item.db_set("published", 0)
+		woo_item.sync_status = "Error"
 		woo_item.db_set("sync_status", "Error")
 		from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
 		create_log(

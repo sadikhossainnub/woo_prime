@@ -4,8 +4,13 @@
 # import frappe
 import unittest
 
+try:
+	from frappe.tests.utils import FrappeTestCase
+except ImportError:
+	FrappeTestCase = unittest.TestCase
 
-class UnitTestWooSettings(unittest.TestCase):
+
+class UnitTestWooSettings(FrappeTestCase):
 	"""Integration tests for WooSettings and WooAPI helper functions."""
 
 	def test_default_user_agent(self):
@@ -64,7 +69,8 @@ class UnitTestWooSettings(unittest.TestCase):
 				self.assertEqual(rate, 450.0)
 
 	def test_get_or_create_woo_attribute_id(self):
-		from unittest.mock import MagicMock
+		import frappe
+		from unittest.mock import MagicMock, patch
 		from woo_prime.api.sync import _get_or_create_woo_attribute_id, _ATTR_CACHE
 
 		_ATTR_CACHE.clear()
@@ -77,14 +83,16 @@ class UnitTestWooSettings(unittest.TestCase):
 		]
 		mock_api.get.return_value = mock_resp
 
-		attr_id, attr_name = _get_or_create_woo_attribute_id("Size", mock_api)
-		self.assertEqual(attr_id, 5)
-		self.assertEqual(attr_name, "Size")
+		with patch.object(frappe.db, "exists", return_value=False), \
+			 patch.object(frappe.db, "get_value", return_value=None):
+			attr_id, attr_name = _get_or_create_woo_attribute_id("Size", mock_api)
+			self.assertEqual(attr_id, 5)
+			self.assertEqual(attr_name, "Size")
 
-		# Second lookup should use cache
-		attr_id_cached, name_cached = _get_or_create_woo_attribute_id("size", mock_api)
-		self.assertEqual(attr_id_cached, 5)
-		self.assertEqual(name_cached, "Size")
+			# Second lookup should use cache
+			attr_id_cached, name_cached = _get_or_create_woo_attribute_id("size", mock_api)
+			self.assertEqual(attr_id_cached, 5)
+			self.assertEqual(name_cached, "Size")
 
 	def test_calculate_cart_price_rate_rule(self):
 		import frappe
@@ -137,6 +145,212 @@ class UnitTestWooSettings(unittest.TestCase):
 			self.assertEqual(passed_rule_args.get("ignore_pricing_rule"), 0)
 			self.assertIn("customer_group", passed_rule_args)
 			self.assertIn("territory", passed_rule_args)
+
+	def test_sync_order_status_filtering(self):
+		import frappe
+		from unittest.mock import patch, MagicMock
+		from woo_prime.api.sync import sync_order
+
+		with patch.object(frappe, "get_single") as mock_settings, \
+			 patch("woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log.create_log") as mock_log:
+			mock_settings.return_value.enabled = 1
+			mock_settings.return_value.sync_order_statuses = "processing,completed"
+			mock_settings.return_value.integration_user = "Administrator"
+
+			order_data = {"id": 99991, "status": "pending", "total": "100.00"}
+			result = sync_order(order_data)
+			self.assertIsNone(result)
+			self.assertTrue(mock_log.called)
+			call_kwargs = mock_log.call_args.kwargs
+			self.assertEqual(call_kwargs.get("status"), "Skipped")
+			self.assertEqual(call_kwargs.get("woo_reference_id"), "99991")
+
+	def test_sync_order_duplicate_idempotency(self):
+		import frappe
+		from unittest.mock import patch
+		from woo_prime.api.sync import sync_order
+
+		with patch.object(frappe, "get_single") as mock_settings, \
+			 patch.object(frappe.db, "get_value", return_value="SO-EXISTING-001"):
+			mock_settings.return_value.enabled = 1
+			mock_settings.return_value.sync_order_statuses = "processing,completed"
+			mock_settings.return_value.integration_user = "Administrator"
+
+			order_data = {"id": 12345, "status": "processing", "total": "50.00"}
+			result = sync_order(order_data)
+			self.assertEqual(result, "SO-EXISTING-001")
+
+	def test_sync_order_unmapped_item_handling(self):
+		import frappe
+		from unittest.mock import patch
+		from woo_prime.api.sync import sync_order
+
+		with patch.object(frappe, "get_single") as mock_settings, \
+			 patch.object(frappe.db, "get_value", return_value=None), \
+			 patch.object(frappe.db, "exists", return_value=False), \
+			 patch("woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log.create_log") as mock_log:
+			mock_settings.return_value.enabled = 1
+			mock_settings.return_value.sync_order_statuses = "processing,completed"
+			mock_settings.return_value.integration_user = "Administrator"
+
+			order_data = {
+				"id": 99992,
+				"status": "processing",
+				"total": "100.00",
+				"line_items": [{"id": 1, "product_id": 888, "name": "Unknown Product", "quantity": 1, "subtotal": "100.00"}],
+			}
+			with self.assertRaises(Exception):
+				sync_order(order_data)
+			failed_calls = [c for c in mock_log.call_args_list if c.kwargs.get("status") == "Failed"]
+			self.assertTrue(len(failed_calls) > 0)
+
+	def test_sync_order_totals_with_coupon_shipping_fee(self):
+		import frappe
+		from unittest.mock import patch, MagicMock
+		from woo_prime.api.sync import sync_order
+
+		mock_so = MagicMock()
+		mock_so.name = "SO-2026-99993"
+		mock_so.grand_total = 205.0
+		mock_so.items = []
+		mock_so.taxes = []
+		mock_so.loyalty_amount = 0
+		mock_so.loyalty_program = None
+		mock_so.loyalty_redemption_account = None
+
+		def mock_get_value(doctype, filters, fieldname=None, as_dict=False):
+			if doctype == "Sales Order" and isinstance(filters, dict) and "woo_order_id" in filters:
+				return None
+			if doctype == "Item" and filters == "ITEM001":
+				return "ITEM001"
+			if doctype == "Woo Item" and isinstance(filters, dict) and filters.get("woo_product_id") == 101:
+				return "ITEM001"
+			if doctype == "Customer":
+				return "Test Customer"
+			return None
+
+		def mock_exists(doctype, filters=None):
+			if doctype == "Sales Order":
+				return False
+			return True
+
+		with patch.object(frappe, "get_single") as mock_settings, \
+			 patch.object(frappe.db, "get_value", side_effect=mock_get_value), \
+			 patch.object(frappe.db, "exists", side_effect=mock_exists), \
+			 patch.object(frappe.db, "savepoint"), \
+			 patch.object(frappe, "new_doc", return_value=mock_so), \
+			 patch.object(frappe, "get_meta") as mock_meta, \
+			 patch("woo_prime.api.sync._get_or_create_customer", return_value=("Test Customer", "Bill-1", "Ship-1")), \
+			 patch("woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log.create_log"):
+
+			mock_meta.return_value.has_field.return_value = True
+			mock_settings.return_value.enabled = 1
+			mock_settings.return_value.sync_order_statuses = "processing,completed"
+			mock_settings.return_value.order_total_tolerance = 1.0
+			mock_settings.return_value.default_company = "Test Co"
+			mock_settings.return_value.default_warehouse = "Stores - TC"
+			mock_settings.return_value.integration_user = "Administrator"
+			mock_settings.return_value.auto_submit_orders = 0
+
+			order_data = {
+				"id": 99993,
+				"status": "processing",
+				"total": "205.00",
+				"discount_total": "20.00",
+				"shipping_total": "15.00",
+				"billing": {"first_name": "John", "last_name": "Doe", "email": "john@example.com"},
+				"shipping": {"first_name": "John", "last_name": "Doe"},
+				"line_items": [
+					{"id": 1, "product_id": 101, "sku": "ITEM001", "name": "Test Item", "quantity": 2, "subtotal": "200.00", "price": "100.00"}
+				],
+				"shipping_lines": [
+					{"method_id": "flat_rate", "method_title": "Standard Shipping", "total": "15.00"}
+				],
+				"fee_lines": [
+					{"name": "Handling Fee", "total": "10.00"}
+				],
+				"coupon_lines": [
+					{"code": "PROMO20", "discount": "20.00"}
+				],
+			}
+
+			result = sync_order(order_data)
+			self.assertEqual(result, mock_so.name)
+			self.assertEqual(mock_so.discount_amount, 20.0)
+			self.assertEqual(mock_so.apply_discount_on, "Net Total")
+
+	def test_price_guard_zero(self):
+		import frappe
+		from unittest.mock import patch, MagicMock
+		from woo_prime.api.sync import sync_price_to_woo
+
+		mock_woo_item = MagicMock()
+		mock_woo_item.name = "WI-001"
+		mock_woo_item.item_code = "ITEM-ZERO"
+		mock_woo_item.regular_price = 0
+		mock_woo_item.published = 1
+		mock_woo_item.woo_product_id = 555
+		mock_woo_item.sync_price = 1
+
+		with patch.object(frappe, "get_single") as mock_settings, \
+			 patch("woo_prime.api.sync._get_item_price", return_value=0), \
+			 patch("woo_prime.woo_prime.doctype.woo_settings.woo_settings.get_woo_api") as mock_get_api:
+			mock_settings.return_value.enabled = 1
+			mock_settings.return_value.enable_price_sync = 1
+
+			sync_price_to_woo(mock_woo_item)
+			mock_get_api.return_value.update_price.assert_not_called()
+
+	def test_woo_api_404_handling(self):
+		import frappe
+		from unittest.mock import patch, MagicMock
+		from woo_prime.api.woo_api import WooAPI
+		from woo_prime.api.sync import sync_stock_to_woo
+
+		api = WooAPI("https://example.com", "ck_test", "cs_test")
+		mock_resp = MagicMock()
+		mock_resp.status_code = 404
+		mock_resp.text = '{"code": "woocommerce_rest_product_invalid_id", "message": "Invalid ID."}'
+
+		with patch.object(api, "put", return_value=mock_resp), \
+			 patch.object(api, "create_product") as mock_create:
+			with self.assertRaises(frappe.ValidationError):
+				api.update_stock(99999, 10)
+			# Must NEVER call create_product on 404 for stock update
+			mock_create.assert_not_called()
+
+		mock_woo_item = MagicMock()
+		mock_woo_item.name = "WI-404"
+		mock_woo_item.item_code = "ITEM-404"
+		mock_woo_item.published = 1
+		mock_woo_item.woo_product_id = 99999
+		mock_woo_item.sync_stock = 1
+
+		mock_api_inst = MagicMock()
+		mock_api_inst.update_stock.side_effect = frappe.ValidationError("Product #99999 not found on WooCommerce (404)")
+
+		with patch.object(frappe, "get_single") as mock_settings, \
+			 patch.object(frappe.db, "get_value", return_value=None), \
+			 patch("woo_prime.api.sync._get_stock_qty", return_value=5), \
+			 patch("woo_prime.woo_prime.doctype.woo_settings.woo_settings.get_woo_api", return_value=mock_api_inst):
+
+			sync_stock_to_woo(mock_woo_item)
+			self.assertEqual(mock_woo_item.published, 0)
+			self.assertEqual(mock_woo_item.sync_status, "Error")
+
+	def test_webhook_signature_401(self):
+		import frappe
+		from unittest.mock import patch, MagicMock
+		from woo_prime.api.webhook import verify_webhook_signature
+
+		mock_req = MagicMock()
+		mock_req.headers = {"X-WC-Webhook-Signature": "invalid_signature"}
+		with patch.object(frappe, "get_single") as mock_settings, \
+			 patch.object(frappe, "request", mock_req):
+			mock_settings.return_value.get_password.return_value = "secret123"
+
+			with self.assertRaises(frappe.AuthenticationError):
+				verify_webhook_signature('{"id": 1}')
 
 
 

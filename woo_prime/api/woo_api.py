@@ -70,8 +70,13 @@ class WooAPI:
 		self.timeout = 60
 
 		# Try to load cached routing flags for this site
-		_cache_key = f"woo_api_route_{self.site_url}"
-		_cached = frappe.cache().get_value(_cache_key) or {}
+		_cached = {}
+		try:
+			_cache_key = f"woo_api_route_{self.site_url}"
+			if hasattr(frappe, "cache") and callable(frappe.cache):
+				_cached = frappe.cache().get_value(_cache_key) or {}
+		except Exception:
+			_cached = {}
 		self.use_rest_route = _cached.get("use_rest_route", False)
 		self.use_query_auth = _cached.get("use_query_auth", False)
 
