@@ -352,6 +352,28 @@ class UnitTestWooSettings(FrappeTestCase):
 			with self.assertRaises(frappe.AuthenticationError):
 				verify_webhook_signature('{"id": 1}')
 
+	def test_woo_sync_log_request_response_data_formatting(self):
+		import frappe
+		from unittest.mock import patch, MagicMock
+		from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
+
+		mock_log_doc = MagicMock()
+		with patch.object(frappe, "new_doc", return_value=mock_log_doc), \
+			 patch.object(frappe.db, "get_value", return_value=None):
+
+			create_log(
+				sync_type="Stock",
+				direction="Outgoing",
+				status="Success",
+				reference_doctype="Woo Item",
+				reference_name="WI-001",
+				woo_reference_id="101",
+				request_data={"item_code": "ITEM001", "stock_quantity": 10},
+				response_data={"stock_quantity": 10},
+			)
+			self.assertIn('"item_code": "ITEM001"', mock_log_doc.request_data)
+			self.assertIn('"stock_quantity": 10', mock_log_doc.response_data)
+
 
 
 

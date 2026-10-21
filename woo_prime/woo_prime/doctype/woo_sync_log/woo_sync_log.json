@@ -78,8 +78,7 @@
   {
    "fieldname": "data_section",
    "fieldtype": "Section Break",
-   "label": "Request / Response Data",
-   "collapsible": 1
+   "label": "Request / Response Data"
   },
   {
    "fieldname": "request_data",
@@ -98,11 +97,10 @@
    "options": "JSON"
   },
   {
+   "depends_on": "eval:doc.status=='Failed'",
    "fieldname": "error_section",
    "fieldtype": "Section Break",
-   "label": "Error",
-   "collapsible": 1,
-   "depends_on": "eval:doc.status=='Failed'"
+   "label": "Error"
   },
   {
    "fieldname": "error_message",

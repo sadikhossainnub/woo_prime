@@ -329,7 +329,8 @@ def sync_order(order_data):
 			reference_doctype="Sales Order",
 			reference_name=so.name,
 			woo_reference_id=str(woo_order_id),
-			response_data=json.dumps({"sales_order": so.name, "customer": customer_name}),
+			request_data=order_data,
+			response_data={"sales_order": so.name, "customer": customer_name, "grand_total": so.grand_total},
 		)
 
 		frappe.db.commit()
@@ -377,7 +378,8 @@ def update_order_from_woo(order_data, existing_so):
 			reference_doctype="Sales Order",
 			reference_name=existing_so,
 			woo_reference_id=str(order_data.get("id")),
-			response_data=json.dumps({"action": "status_update", "new_status": new_status}),
+			request_data=order_data,
+			response_data={"action": "status_update", "new_status": new_status, "sales_order": existing_so},
 		)
 	except Exception as e:
 		frappe.log_error(
@@ -534,6 +536,8 @@ def _get_or_create_customer(order_data, settings):
 		reference_doctype="Customer",
 		reference_name=customer_name,
 		woo_reference_id=str(order_data.get("customer_id", "")),
+		request_data=billing,
+		response_data={"customer_name": customer_name, "billing_address": billing_addr, "shipping_address": shipping_addr},
 	)
 
 	return customer_name, billing_addr, shipping_addr
@@ -869,7 +873,8 @@ def _log_error(woo_order_id, order_data, error_message):
 		direction="Incoming",
 		status="Failed",
 		woo_reference_id=str(woo_order_id) if woo_order_id else "",
-		request_data=json.dumps(order_data)[:10000] if order_data else "",
+		request_data=order_data,
+		response_data={"error": error_message},
 		error_message=error_message,
 	)
 
@@ -1701,6 +1706,8 @@ def sync_stock_to_woo(woo_item):
 			reference_doctype="Woo Item",
 			reference_name=woo_item.name,
 			woo_reference_id=str(woo_item.woo_product_id),
+			request_data={"item_code": woo_item.item_code, "stock_quantity": stock_qty, "warehouse": settings.default_warehouse},
+			response_data={"error": err_msg},
 			error_message=err_msg,
 		)
 		frappe.logger("woo_prime").error(f"[sync_stock_to_woo] 404/error for {woo_item.name}: {err_msg}")
@@ -1717,7 +1724,8 @@ def sync_stock_to_woo(woo_item):
 		reference_doctype="Woo Item",
 		reference_name=woo_item.name,
 		woo_reference_id=str(woo_item.woo_product_id),
-		response_data=json.dumps({"stock_quantity": stock_qty}),
+		request_data={"item_code": woo_item.item_code, "stock_quantity": stock_qty, "warehouse": settings.default_warehouse},
+		response_data={"stock_quantity": stock_qty, "status": "Success"},
 	)
 
 
@@ -1789,6 +1797,8 @@ def sync_price_to_woo(woo_item):
 			reference_doctype="Woo Item",
 			reference_name=woo_item.name,
 			woo_reference_id=str(woo_item.woo_product_id),
+			request_data={"item_code": woo_item.item_code, "regular_price": regular_price, "sale_price": sale_price if not clear_sale else ""},
+			response_data={"error": err_msg},
 			error_message=err_msg,
 		)
 		frappe.logger("woo_prime").error(f"[sync_price_to_woo] 404/error for {woo_item.name}: {err_msg}")
@@ -1805,7 +1815,8 @@ def sync_price_to_woo(woo_item):
 		reference_doctype="Woo Item",
 		reference_name=woo_item.name,
 		woo_reference_id=str(woo_item.woo_product_id),
-		response_data=json.dumps({"regular_price": regular_price, "sale_price": sale_price}),
+		request_data={"item_code": woo_item.item_code, "regular_price": regular_price, "sale_price": sale_price if not clear_sale else ""},
+		response_data={"regular_price": regular_price, "sale_price": sale_price if not clear_sale else "", "status": "Success"},
 	)
 
 

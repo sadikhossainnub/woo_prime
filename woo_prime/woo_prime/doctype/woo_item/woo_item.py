@@ -107,6 +107,8 @@ class WooItem(Document):
 				reference_doctype="Woo Item",
 				reference_name=self.name,
 				woo_reference_id=str(self.woo_product_id),
+				request_data={"item_code": self.item_code, "sku": self.sku, "item_name": self.item_name},
+				response_data=result if isinstance(result, dict) else {"woo_product_id": self.woo_product_id, "url": self.woo_product_url},
 			)
 
 			msg = _("✅ Product '{0}' published to WooCommerce successfully!<br>Product ID: <b>{1}</b>").format(
@@ -151,6 +153,9 @@ class WooItem(Document):
 				status="Failed",
 				reference_doctype="Woo Item",
 				reference_name=self.name,
+				woo_reference_id=str(self.woo_product_id or ""),
+				request_data={"item_code": self.item_code, "sku": self.sku, "item_name": self.item_name},
+				response_data={"error": str(e)},
 				error_message=str(e),
 			)
 			safe_log_error(title="woo_prime: Publish Item Failed", message=frappe.get_traceback())
@@ -292,13 +297,8 @@ class WooItem(Document):
 
 def create_sync_log(**kwargs):
 	"""Helper to create a Woo Sync Log entry."""
-	try:
-		log = frappe.new_doc("Woo Sync Log")
-		log.update(kwargs)
-		log.insert(ignore_permissions=True)
-		frappe.db.commit()
-	except Exception:
-		frappe.log_error("Woo Sync Log Creation Failed")
+	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
+	return create_log(**kwargs)
 
 
 @frappe.whitelist()

@@ -19,6 +19,14 @@ frappe.ui.form.on("Woo Sync Log", {
 				}
 			).addClass("btn-danger");
 		}
+
+		// Ensure Request / Response Data section is expanded and visible
+		if (frm.fields_dict.data_section) {
+			frm.fields_dict.data_section.collapse(false);
+		}
+		if (frm.fields_dict.error_section && frm.doc.status === "Failed") {
+			frm.fields_dict.error_section.collapse(false);
+		}
 	},
 });
 

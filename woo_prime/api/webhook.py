@@ -88,7 +88,8 @@ def handle_order():
 			direction="Incoming",
 			status="Queued",
 			woo_reference_id=str(woo_order_id),
-			request_data=data[:10000],  # Limit stored data size
+			request_data=order_data or data[:10000],
+			response_data={"status": "Queued", "message": f"Order {woo_order_id} queued for processing"},
 		)
 
 		# Enqueue order sync in background for non-blocking response
@@ -190,7 +191,8 @@ def handle_product():
 			direction="Incoming",
 			status="Queued",
 			woo_reference_id=str(product_data.get("id", "")),
-			request_data=data[:10000],
+			request_data=product_data or data[:10000],
+			response_data={"status": "Queued", "message": "Product update queued"},
 		)
 
 		# Enqueue product processing in background

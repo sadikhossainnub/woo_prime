@@ -14,3 +14,4 @@ def execute():
 
 	frappe.reload_doctype("Woo Settings")
 	frappe.reload_doctype("Woo Item")
+	frappe.reload_doctype("Woo Sync Log")
