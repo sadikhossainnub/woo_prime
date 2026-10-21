@@ -385,21 +385,21 @@ def update_order_from_woo(order_data, existing_so):
 
 
 def _normalize_phone(phone):
-	"""Extract digits from phone string and return trailing 10 digits for fuzzy match."""
+	"""Extract digits from phone string; returns full digit string (10+ digits for exact match)."""
 	if not phone:
 		return ""
 	digits = "".join(c for c in str(phone) if c.isdigit())
-	return digits[-10:] if len(digits) >= 10 else digits
+	return digits
 
 
 def _get_or_create_customer(order_data, settings):
 	"""Find existing customer or create new one from WooCommerce billing data.
 
 	Matching priority:
-	1. Match by email
-	2. Match by phone / mobile (including normalized phone matching)
-	3. Match by linked Contact
-	4. Match by Customer Name
+	1. Match by email (exact, on Customer.email_id)
+	2. Match by normalized phone (full digits, 10+, exact match — no LIKE)
+	3. Match by linked Contact (via Contact Email or Contact Phone child tables)
+	4. Name-only fallback only if BOTH email and phone are empty
 	5. Auto-create new Customer if not found
 
 	Args:
@@ -422,27 +422,25 @@ def _get_or_create_customer(order_data, settings):
 
 	customer_name = None
 
-	# 1. Try to find existing customer by email
+	# 1. Try to find existing customer by email (exact match)
 	if email:
 		existing = frappe.db.get_value("Customer", {"email_id": email}, "name")
 		if existing:
 			customer_name = existing
 
-	# 2. Try to find by phone / mobile
+	# 2. Try to find by normalized phone (exact full-digit match, no LIKE)
 	if not customer_name and phone:
 		clean_phone = _normalize_phone(phone)
-		existing = (
-			frappe.db.get_value("Customer", {"mobile_no": phone}, "name")
-			or (frappe.db.get_value("Customer", {"mobile_no": ["like", f"%{clean_phone}%"]}, "name") if clean_phone else None)
-			or frappe.db.get_value("Customer", {"primary_address": ["like", f"%{phone}%"]}, "name")
-		)
-		if existing:
-			customer_name = existing
+		if clean_phone and len(clean_phone) >= 10:
+			# Exact match on mobile_no (raw) first, then normalized digits
+			existing = frappe.db.get_value("Customer", {"mobile_no": phone}, "name")
+			if not existing and clean_phone != phone:
+				existing = frappe.db.get_value("Customer", {"mobile_no": clean_phone}, "name")
+			if existing:
+				customer_name = existing
 
-
-	# 3. Try to find by Contact record
+	# 3. Try to find by Contact record (Contact Email or Contact Phone → Dynamic Link)
 	if not customer_name and (email or phone):
-		# Find Contact by email or phone, then get linked Customer
 		contact_name = None
 
 		if email:
@@ -454,7 +452,7 @@ def _get_or_create_customer(order_data, settings):
 			)
 
 		if not contact_name and phone:
-			# Check Contact Phone child table
+			# Check Contact Phone child table — exact phone match
 			contact_name = frappe.db.get_value(
 				"Contact Phone",
 				{"phone": phone, "parenttype": "Contact"},
@@ -470,9 +468,9 @@ def _get_or_create_customer(order_data, settings):
 			if linked_customer:
 				customer_name = linked_customer
 
-	# 4. Try to find by customer_name directly
+	# 4. Name-only fallback ONLY when both email and phone are empty
 	target_title = company_name or full_name
-	if not customer_name and target_title:
+	if not customer_name and not email and not phone and target_title:
 		if frappe.db.exists("Customer", target_title):
 			customer_name = target_title
 
@@ -542,6 +540,9 @@ def _get_or_create_customer(order_data, settings):
 def _get_or_create_address(customer_name, billing, shipping):
 	"""Create or find billing and shipping addresses for a customer.
 
+	Reuses an existing Address only if address_line1 AND city both match.
+	Otherwise creates a new Address to avoid stale data.
+
 	Args:
 		customer_name: str — ERPNext customer name
 		billing: dict — WooCommerce billing address data
@@ -553,18 +554,44 @@ def _get_or_create_address(customer_name, billing, shipping):
 	billing_addr_name = None
 	shipping_addr_name = None
 
-	# 1. Billing address
-	if billing.get("address_1"):
-		addr_line1 = billing.get("address_1", "")
-		existing_billing = frappe.db.get_value(
+	def _find_existing_address(customer_name, address_line1, city, address_type):
+		"""Find an existing address linked to the customer matching address_line1 and city."""
+		if not address_line1 and not city:
+			return None
+		# Get all addresses linked to this customer
+		linked_parents = frappe.db.get_all(
 			"Dynamic Link",
-			{
+			filters={
 				"link_doctype": "Customer",
 				"link_name": customer_name,
 				"parenttype": "Address",
 			},
-			"parent",
+			pluck="parent",
 		)
+		if not linked_parents:
+			return None
+		# Find among them one that matches address_line1 + city
+		for addr_name in linked_parents:
+			addr_vals = frappe.db.get_value(
+				"Address",
+				addr_name,
+				["address_line1", "city", "address_type"],
+				as_dict=True,
+			)
+			if not addr_vals or not isinstance(addr_vals, dict):
+				continue
+			if (
+				(addr_vals.get("address_line1") or "").strip() == (address_line1 or "").strip()
+				and (addr_vals.get("city") or "").strip() == (city or "").strip()
+			):
+				return addr_name
+		return None
+
+	# 1. Billing address
+	if billing.get("address_1"):
+		addr_line1 = billing.get("address_1", "")
+		city = billing.get("city", "")
+		existing_billing = _find_existing_address(customer_name, addr_line1, city, "Billing")
 		if existing_billing:
 			billing_addr_name = existing_billing
 		else:
@@ -573,7 +600,7 @@ def _get_or_create_address(customer_name, billing, shipping):
 			addr.address_type = "Billing"
 			addr.address_line1 = addr_line1
 			addr.address_line2 = billing.get("address_2", "")
-			addr.city = billing.get("city", "")
+			addr.city = city
 			addr.state = billing.get("state", "")
 			addr.pincode = billing.get("postcode", "")
 			addr.country = _get_country(billing.get("country", ""))
@@ -591,7 +618,7 @@ def _get_or_create_address(customer_name, billing, shipping):
 			except Exception:
 				frappe.log_error("Billing Address creation failed for customer: " + customer_name)
 
-	# 2. Shipping address (if provided and different or separate)
+	# 2. Shipping address (if provided and different from billing)
 	has_shipping_data = shipping and (shipping.get("address_1") or shipping.get("city"))
 	is_different = (
 		has_shipping_data
@@ -602,28 +629,34 @@ def _get_or_create_address(customer_name, billing, shipping):
 	)
 
 	if is_different:
-		addr = frappe.new_doc("Address")
-		addr.address_title = f"{customer_name} - Shipping"
-		addr.address_type = "Shipping"
-		addr.address_line1 = shipping.get("address_1", "")
-		addr.address_line2 = shipping.get("address_2", "")
-		addr.city = shipping.get("city", "")
-		addr.state = shipping.get("state", "")
-		addr.pincode = shipping.get("postcode", "")
-		addr.country = _get_country(shipping.get("country", ""))
-		addr.append("links", {
-			"link_doctype": "Customer",
-			"link_name": customer_name,
-		})
-		addr.flags.ignore_permissions = True
-		addr.flags.ignore_mandatory = True
-		try:
-			addr.insert()
-			shipping_addr_name = addr.name
-		except Exception:
-			frappe.log_error("Shipping Address creation failed for customer: " + customer_name)
+		ship_line1 = shipping.get("address_1", "")
+		ship_city = shipping.get("city", "")
+		existing_shipping = _find_existing_address(customer_name, ship_line1, ship_city, "Shipping")
+		if existing_shipping:
+			shipping_addr_name = existing_shipping
+		else:
+			addr = frappe.new_doc("Address")
+			addr.address_title = f"{customer_name} - Shipping"
+			addr.address_type = "Shipping"
+			addr.address_line1 = ship_line1
+			addr.address_line2 = shipping.get("address_2", "")
+			addr.city = ship_city
+			addr.state = shipping.get("state", "")
+			addr.pincode = shipping.get("postcode", "")
+			addr.country = _get_country(shipping.get("country", ""))
+			addr.append("links", {
+				"link_doctype": "Customer",
+				"link_name": customer_name,
+			})
+			addr.flags.ignore_permissions = True
+			addr.flags.ignore_mandatory = True
+			try:
+				addr.insert()
+				shipping_addr_name = addr.name
+			except Exception:
+				frappe.log_error("Shipping Address creation failed for customer: " + customer_name)
 	else:
-		# If shipping address is same as billing, set shipping_addr_name to billing_addr_name
+		# Shipping same as billing — reuse billing address
 		shipping_addr_name = billing_addr_name
 
 	return billing_addr_name, shipping_addr_name
