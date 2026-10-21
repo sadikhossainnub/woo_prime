@@ -690,12 +690,17 @@ def _process_single_product(prod, settings, default_item_group, auto_create_miss
 		woo_item.sale_price = sale_p
 	
 	# Auto-link to ERPNext Item (Requirements 8.3, 8.4)
-	# Priority: item_code match, then name match, then item_name match
+	# Priority: woo_product_id → item_code/SKU match → exact name match → item_name (only if unique)
 	matched_item = (
 		frappe.db.get_value("Item", {"item_code": sku}, "name")
 		or frappe.db.get_value("Item", {"name": sku}, "name")
-		or frappe.db.get_value("Item", {"item_name": name}, "name")
 	)
+
+	# item_name match only if exactly one Item matches (to avoid false positives)
+	if not matched_item and name:
+		name_matches = frappe.db.get_all("Item", {"item_name": name}, pluck="name", limit=2)
+		if len(name_matches) == 1:
+			matched_item = name_matches[0]
 	
 	linked = False
 	created = False
