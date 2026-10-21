@@ -86,5 +86,58 @@ class UnitTestWooSettings(unittest.TestCase):
 		self.assertEqual(attr_id_cached, 5)
 		self.assertEqual(name_cached, "Size")
 
+	def test_calculate_cart_price_rate_rule(self):
+		import frappe
+		import json
+		from unittest.mock import patch, MagicMock
+		from woo_prime.api.price import calculate_cart_price
+
+		passed_rule_args = {}
+
+		def mock_get_pricing_rule(rule_args):
+			nonlocal passed_rule_args
+			passed_rule_args = rule_args
+			return {
+				"pricing_rule": "Special Promo Rate",
+				"rate": 75.0,
+				"pricing_rule_for": "Rate",
+			}
+
+		with patch("woo_prime.api.price.verify_api_secret"), \
+			 patch.object(frappe.db, "exists", return_value=True), \
+			 patch.object(frappe.db, "get_value", return_value="USD"), \
+			 patch.object(frappe.db, "get_single_value", return_value="All Territories"), \
+			 patch.object(frappe, "get_single") as mock_settings:
+
+			mock_settings.return_value.default_price_list = "Standard Selling"
+			mock_settings.return_value.default_company = "Test Co"
+
+			cart_data = json.dumps([{"item_code": "TEST-ITEM-1", "qty": 2, "rate": 100.0}])
+
+			with patch("erpnext.accounts.doctype.pricing_rule.pricing_rule.get_pricing_rule_for_item", side_effect=mock_get_pricing_rule):
+				res = calculate_cart_price(cart_data=cart_data)
+
+			self.assertEqual(res["status"], "success")
+			self.assertEqual(len(res["items"]), 1)
+			item = res["items"][0]
+			self.assertEqual(item["original_rate"], 100.0)
+			self.assertEqual(item["final_rate"], 75.0)
+			self.assertEqual(item["discount_per_unit"], 25.0)
+			self.assertEqual(item["total_discount"], 50.0)
+			self.assertEqual(item["pricing_rule"], "Special Promo Rate")
+
+			# Verify rule_args keys
+			self.assertEqual(passed_rule_args.get("doctype"), "Sales Order")
+			self.assertEqual(passed_rule_args.get("parenttype"), "Sales Order")
+			self.assertIsNone(passed_rule_args.get("parent"))
+			self.assertIsNone(passed_rule_args.get("name"))
+			self.assertEqual(passed_rule_args.get("conversion_rate"), 1.0)
+			self.assertEqual(passed_rule_args.get("plc_conversion_rate"), 1.0)
+			self.assertEqual(passed_rule_args.get("transaction_type"), "selling")
+			self.assertEqual(passed_rule_args.get("ignore_pricing_rule"), 0)
+			self.assertIn("customer_group", passed_rule_args)
+			self.assertIn("territory", passed_rule_args)
+
+
 
 

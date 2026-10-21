@@ -37,12 +37,37 @@ def calculate_cart_price(cart_data=None, customer_email=None, price_list=None):
 		settings = frappe.get_single("Woo Settings")
 		price_list = price_list or settings.default_price_list
 
-		# Find customer name if email provided
+		# Find customer details if email provided
 		customer_name = None
+		customer_group = None
+		territory = None
 		if customer_email:
-			customer_name = frappe.db.get_value("Customer", {"email_id": customer_email}, "name")
+			customer_data = frappe.db.get_value(
+				"Customer",
+				{"email_id": customer_email},
+				["name", "customer_group", "territory"],
+				as_dict=True,
+			)
+			if isinstance(customer_data, dict):
+				customer_name = customer_data.get("name")
+				customer_group = customer_data.get("customer_group")
+				territory = customer_data.get("territory")
+			elif customer_data:
+				customer_name = str(customer_data)
+
+		if not customer_group:
+			customer_group = frappe.db.get_single_value("Selling Settings", "customer_group") or "All Customer Groups"
+		if not territory:
+			territory = frappe.db.get_single_value("Selling Settings", "territory") or "All Territories"
 
 		company = settings.default_company
+		currency = None
+		if price_list:
+			currency = frappe.db.get_value("Price List", price_list, "currency")
+		if not currency and company:
+			currency = frappe.db.get_value("Company", company, "default_currency")
+		if not currency:
+			currency = getattr(settings, "currency", None) or "BDT"
 
 		evaluated_items = []
 		total_discount = 0.0
@@ -78,17 +103,35 @@ def calculate_cart_price(cart_data=None, customer_email=None, price_list=None):
 				from woo_prime.api.sync import _get_item_price
 				rate = _get_item_price(item_code, price_list)
 
+			item_details = frappe.db.get_value("Item", item_code, ["item_group", "brand"], as_dict=True)
+			if not isinstance(item_details, dict):
+				item_details = {}
+			item_group = item_details.get("item_group")
+			brand = item_details.get("brand")
+
 			# Call ERPNext pricing rule engine
-			rule_args = {
+			rule_args = frappe._dict({
+				"doctype": "Sales Order",
+				"parenttype": "Sales Order",
+				"parent": None,
+				"name": None,
 				"item_code": item_code,
+				"item_group": item_group,
+				"brand": brand,
 				"qty": qty,
 				"rate": rate,
 				"price_list": price_list,
+				"currency": currency,
+				"conversion_rate": 1.0,
+				"plc_conversion_rate": 1.0,
+				"transaction_type": "selling",
+				"ignore_pricing_rule": 0,
 				"customer": customer_name,
+				"customer_group": customer_group,
+				"territory": territory,
 				"company": company,
 				"transaction_date": today(),
-				"doctype": "Sales Order",
-			}
+			})
 
 			try:
 				from erpnext.accounts.doctype.pricing_rule.pricing_rule import (
@@ -100,18 +143,32 @@ def calculate_cart_price(cart_data=None, customer_email=None, price_list=None):
 				frappe.log_error(f"woo_prime: get_pricing_rule_for_item error for {item_code}", frappe.get_traceback())
 				pricing_rule_result = {}
 
+			pricing_rule_name = pricing_rule_result.get("pricing_rule")
 			discount_percentage = flt(pricing_rule_result.get("discount_percentage", 0))
 			discount_amount = flt(pricing_rule_result.get("discount_amount", 0))
-			pricing_rule_name = pricing_rule_result.get("pricing_rule")
+			rule_rate = pricing_rule_result.get("rate")
 
-			if discount_percentage > 0:
+			# Handle "Rate" type rules (rate in result overrides rate)
+			if rule_rate is not None and (pricing_rule_result.get("pricing_rule_for") == "Rate" or (not discount_percentage and not discount_amount)):
+				final_rate = flt(rule_rate)
+				discount_amount = max(0.0, rate - final_rate)
+			elif discount_percentage > 0:
 				discount_amount = (rate * discount_percentage) / 100.0
+				final_rate = max(0.0, rate - discount_amount)
+			elif discount_amount > 0:
+				final_rate = max(0.0, rate - discount_amount)
+			elif rule_rate is not None and pricing_rule_name:
+				final_rate = flt(rule_rate)
+				discount_amount = max(0.0, rate - final_rate)
+			else:
+				final_rate = rate
+				discount_amount = 0.0
 
-			final_rate = max(0, rate - discount_amount)
+			final_rate = max(0.0, final_rate)
 			item_total_discount = discount_amount * qty
 			total_discount += item_total_discount
 
-			evaluated_items.append({
+			evaluated_item = {
 				"sku": sku,
 				"item_code": item_code,
 				"qty": qty,
@@ -120,7 +177,11 @@ def calculate_cart_price(cart_data=None, customer_email=None, price_list=None):
 				"discount_per_unit": discount_amount,
 				"total_discount": item_total_discount,
 				"pricing_rule": pricing_rule_name,
-			})
+			}
+			if pricing_rule_result.get("free_item_data"):
+				evaluated_item["free_item_data"] = pricing_rule_result.get("free_item_data")
+
+			evaluated_items.append(evaluated_item)
 
 		return {
 			"status": "success",
