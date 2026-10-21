@@ -41,30 +41,42 @@ def get_customer_loyalty_points(customer_email=None, phone=None, customer_name=N
 				"redeemable_amount": 0.0,
 			}
 
-		# Get Loyalty Point Balance using ERPNext built-in utility
+		# Get Loyalty Point balance and conversion factor via get_loyalty_program_details_with_points
 		loyalty_points = 0
-		try:
-			from erpnext.accounts.doctype.loyalty_point_entry.loyalty_point_entry import (
-				get_loyalty_point_balance,
-			)
-
-			loyalty_points = get_loyalty_point_balance(customer_name)
-		except Exception:
-			frappe.log_error(f"woo_prime: get_loyalty_point_balance error for {customer_name}", frappe.get_traceback())
-
-		# Find loyalty program details & conversion factor
-		loyalty_program = frappe.db.get_value("Customer", customer_name, "loyalty_program")
 		conversion_factor = 1.0
-
-		if loyalty_program:
-			conversion_factor = (
-				frappe.db.get_value(
-					"Loyalty Program",
-					loyalty_program,
-					"conversion_factor",
-				)
-				or 1.0
+		try:
+			settings = frappe.get_single("Woo Settings")
+			company = getattr(settings, "default_company", None)
+			from erpnext.accounts.doctype.loyalty_program.loyalty_program import (
+				get_loyalty_program_details_with_points,
 			)
+
+			lp_details = get_loyalty_program_details_with_points(
+				customer_name,
+				company=company,
+				silent=True,
+			)
+			if lp_details:
+				loyalty_points = flt(lp_details.get("loyalty_points", 0))
+				conversion_factor = flt(lp_details.get("conversion_factor", 1.0)) or 1.0
+		except Exception:
+			# Fallback: try legacy get_loyalty_point_balance + separate program lookup
+			try:
+				from erpnext.accounts.doctype.loyalty_point_entry.loyalty_point_entry import (
+					get_loyalty_point_balance,
+				)
+
+				loyalty_points = flt(get_loyalty_point_balance(customer_name))
+				loyalty_program = frappe.db.get_value("Customer", customer_name, "loyalty_program")
+				if loyalty_program:
+					conversion_factor = flt(
+						frappe.db.get_value("Loyalty Program", loyalty_program, "conversion_factor")
+					) or 1.0
+			except Exception:
+				frappe.log_error(
+					f"woo_prime: loyalty points lookup error for {customer_name}",
+					frappe.get_traceback(),
+				)
 
 		redeemable_amount = flt(loyalty_points) * flt(conversion_factor)
 
