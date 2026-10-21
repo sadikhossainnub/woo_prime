@@ -39,6 +39,10 @@ class Woo_Prime_Dashboard {
 	public static function ajax_fetch_transactions() {
 		check_ajax_referer( 'woo_prime_admin_nonce', 'security' );
 
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( __( 'Permission denied.', 'woo-prime-connector' ), 403 );
+		}
+
 		$erpnext_url = rtrim( get_option( 'woo_prime_erpnext_url' ), '/' );
 		if ( empty( $erpnext_url ) ) {
 			wp_send_json_error( __( 'ERPNext URL is not configured.', 'woo-prime-connector' ) );

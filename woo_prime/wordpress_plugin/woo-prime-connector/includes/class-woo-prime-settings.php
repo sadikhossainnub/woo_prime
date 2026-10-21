@@ -98,6 +98,10 @@ class Woo_Prime_Settings {
 	public static function ajax_test_connection() {
 		check_ajax_referer( 'woo_prime_admin_nonce', 'security' );
 
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( __( 'Permission denied.', 'woo-prime-connector' ), 403 );
+		}
+
 		$erpnext_url = rtrim( get_option( 'woo_prime_erpnext_url' ), '/' );
 		if ( empty( $erpnext_url ) ) {
 			wp_send_json_error( __( 'ERPNext URL is empty.', 'woo-prime-connector' ) );
@@ -150,24 +154,36 @@ class Woo_Prime_Settings {
 
 	public static function ajax_clear_cache() {
 		check_ajax_referer( 'woo_prime_admin_nonce', 'security' );
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( __( 'Permission denied.', 'woo-prime-connector' ), 403 );
+		}
 		Woo_Prime_Cache::clear_all();
 		wp_send_json_success( __( 'Cache cleared successfully!', 'woo-prime-connector' ) );
 	}
 
 	public static function ajax_clear_logs() {
 		check_ajax_referer( 'woo_prime_admin_nonce', 'security' );
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( __( 'Permission denied.', 'woo-prime-connector' ), 403 );
+		}
 		Woo_Prime_Logger::clear_logs();
 		wp_send_json_success( __( 'Log file cleared successfully!', 'woo-prime-connector' ) );
 	}
 
 	public static function ajax_get_logs() {
 		check_ajax_referer( 'woo_prime_admin_nonce', 'security' );
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( __( 'Permission denied.', 'woo-prime-connector' ), 403 );
+		}
 		$logs = Woo_Prime_Logger::get_logs();
 		wp_send_json_success( $logs );
 	}
 
 	public static function ajax_list_erpnext_items() {
 		check_ajax_referer( 'woo_prime_admin_nonce', 'security' );
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( __( 'Permission denied.', 'woo-prime-connector' ), 403 );
+		}
 
 		$erpnext_url = rtrim( get_option( 'woo_prime_erpnext_url' ), '/' );
 		if ( empty( $erpnext_url ) ) {
@@ -214,6 +230,9 @@ class Woo_Prime_Settings {
 
 	public static function ajax_import_selected_items() {
 		check_ajax_referer( 'woo_prime_admin_nonce', 'security' );
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( __( 'Permission denied.', 'woo-prime-connector' ), 403 );
+		}
 
 		$selected_skus = isset( $_POST['selected_skus'] ) ? array_map( 'sanitize_text_field', (array) $_POST['selected_skus'] ) : array();
 
@@ -226,13 +245,7 @@ class Woo_Prime_Settings {
 			wp_send_json_error( __( 'ERPNext URL is empty.', 'woo-prime-connector' ) );
 		}
 
-		$api_key    = get_option( 'woo_prime_api_key' );
-		$api_secret = get_option( 'woo_prime_api_secret' );
-		$headers    = array( 'Content-Type' => 'application/json' );
-
-		if ( ! empty( $api_key ) && ! empty( $api_secret ) ) {
-			$headers['Authorization'] = 'token ' . $api_key . ':' . $api_secret;
-		}
+		$headers = self::get_request_headers();
 
 		// Query ERPNext API specifically for selected item codes
 		$endpoint = $erpnext_url . '/api/method/woo_prime.api.products.get_items_for_sync?limit=500&item_codes=' . rawurlencode( json_encode( $selected_skus ) );

@@ -117,13 +117,7 @@ class Woo_Prime_Loyalty {
 		$data         = Woo_Prime_Cache::get( $cache_key );
 
 		if ( false === $data ) {
-			$api_key    = get_option( 'woo_prime_api_key' );
-			$api_secret = get_option( 'woo_prime_api_secret' );
-			$headers    = array( 'Content-Type' => 'application/json' );
-
-			if ( ! empty( $api_key ) && ! empty( $api_secret ) ) {
-				$headers['Authorization'] = 'token ' . $api_key . ':' . $api_secret;
-			}
+			$headers = Woo_Prime_Settings::get_request_headers();
 
 			$response = wp_remote_get(
 				add_query_arg(

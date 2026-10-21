@@ -106,13 +106,15 @@ class Woo_Prime_Order_Sync {
 		// Send to ERPNext
 		$endpoint = $erpnext_url . '/api/method/woo_prime.api.webhook.handle_order';
 
-		$headers = array(
-			'Content-Type'      => 'application/json',
-			'X-WC-Webhook-Topic' => 'order.created',
-		);
+		$headers = Woo_Prime_Settings::get_request_headers();
+		$headers['X-WC-Webhook-Topic'] = 'order.created';
 
-		// Add webhook HMAC signature if secret is configured in WooCommerce
+		// Add webhook HMAC signature if secret is configured
 		$body_json = wp_json_encode( $order_data );
+		$webhook_secret = get_option( 'woo_prime_webhook_secret' ) ?: get_option( 'woo_prime_shared_secret' );
+		if ( ! empty( $webhook_secret ) ) {
+			$headers['X-WC-Webhook-Signature'] = base64_encode( hash_hmac( 'sha256', $body_json, $webhook_secret, true ) );
+		}
 
 		$response = wp_remote_post( $endpoint, array(
 			'headers'   => $headers,
@@ -241,6 +243,10 @@ class Woo_Prime_Order_Sync {
 	 */
 	public static function ajax_sync_order() {
 		check_ajax_referer( 'woo_prime_admin_nonce', 'security' );
+
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( __( 'Permission denied.', 'woo-prime-connector' ), 403 );
+		}
 
 		$order_id = isset( $_POST['order_id'] ) ? absint( $_POST['order_id'] ) : 0;
 		if ( ! $order_id ) {
