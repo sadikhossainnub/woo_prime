@@ -1,7 +1,7 @@
 {
  "app": "Woo Prime",
  "charts": [],
- "content": "[{\"type\":\"header\",\"data\":{\"text\":\"Woo Prime Integration\",\"level\":4}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Woo Settings\"}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Woo Item\"}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Woo Sync Log\"}},{\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Woo Category\"}},{\"type\":\"spacer\",\"data\":{\"col\":12}},{\"type\":\"card\",\"data\":{\"card_name\":\"Setup\"}},{\"type\":\"card\",\"data\":{\"card_name\":\"Masters\"}},{\"type\":\"card\",\"data\":{\"card_name\":\"Reports\"}},{\"type\":\"card\",\"data\":{\"card_name\":\"Logs\"}}]",
+ "content": "[{\"id\":\"cxcAt82_XR\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\">Woo Prime Integration</span>\",\"col\":12}},{\"id\":\"P0ccU51zJ_\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Woo Settings\",\"col\":3}},{\"id\":\"358hdaX23W\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Woo Item\",\"col\":3}},{\"id\":\"frhJd5zg9_\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Woo Sync Log\",\"col\":3}},{\"id\":\"e8LrSMlwNs\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Woo Category\",\"col\":3}},{\"id\":\"flRrEgeMEl\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"B81vvuC3Os\",\"type\":\"card\",\"data\":{\"card_name\":\"Setup\",\"col\":4}},{\"id\":\"3NtQ22YH6X\",\"type\":\"card\",\"data\":{\"card_name\":\"Masters\",\"col\":4}},{\"id\":\"QNAtf7JO5-\",\"type\":\"card\",\"data\":{\"card_name\":\"Reports\",\"col\":4}},{\"id\":\"_po2u8kDM3\",\"type\":\"card\",\"data\":{\"card_name\":\"Logs\",\"col\":4}}]",
  "creation": "2026-08-21 03:48:03.457815",
  "custom_blocks": [],
  "docstatus": 0,
@@ -20,6 +20,7 @@
    "label": "Setup",
    "link_count": 0,
    "link_type": "DocType",
+   "onboard": 0,
    "type": "Card Break"
   },
   {
@@ -30,6 +31,7 @@
    "link_count": 0,
    "link_to": "Woo Settings",
    "link_type": "DocType",
+   "onboard": 0,
    "type": "Link"
   },
   {
@@ -38,6 +40,7 @@
    "label": "Masters",
    "link_count": 0,
    "link_type": "DocType",
+   "onboard": 0,
    "type": "Card Break"
   },
   {
@@ -48,6 +51,7 @@
    "link_count": 0,
    "link_to": "Woo Item",
    "link_type": "DocType",
+   "onboard": 0,
    "type": "Link"
   },
   {
@@ -58,6 +62,7 @@
    "link_count": 0,
    "link_to": "Woo Category",
    "link_type": "DocType",
+   "onboard": 0,
    "type": "Link"
   },
   {
@@ -66,6 +71,7 @@
    "label": "Reports",
    "link_count": 0,
    "link_type": "Report",
+   "onboard": 0,
    "type": "Card Break"
   },
   {
@@ -76,6 +82,7 @@
    "link_count": 0,
    "link_to": "WooCommerce Sales Summary",
    "link_type": "Report",
+   "onboard": 0,
    "type": "Link"
   },
   {
@@ -86,6 +93,7 @@
    "link_count": 0,
    "link_to": "WooCommerce Order Status Summary",
    "link_type": "Report",
+   "onboard": 0,
    "type": "Link"
   },
   {
@@ -96,6 +104,7 @@
    "link_count": 0,
    "link_to": "WooCommerce vs ERPNext Stock Comparison",
    "link_type": "Report",
+   "onboard": 0,
    "type": "Link"
   },
   {
@@ -104,6 +113,7 @@
    "label": "Logs",
    "link_count": 0,
    "link_type": "DocType",
+   "onboard": 0,
    "type": "Card Break"
   },
   {
@@ -114,17 +124,19 @@
    "link_count": 0,
    "link_to": "Woo Sync Log",
    "link_type": "DocType",
+   "onboard": 0,
    "type": "Link"
   }
  ],
- "modified": "2026-09-01 12:00:00.000000",
+ "modified": "2026-10-22 15:58:32.319843",
  "modified_by": "Administrator",
  "module": "Woo Prime",
- "name": "Woo_Prime",
+ "name": "Woo Prime",
  "number_cards": [],
  "owner": "Administrator",
  "public": 1,
  "quick_lists": [],
+ "restrict_to_domain": "Retail",
  "roles": [],
  "sequence_id": 0.0,
  "shortcuts": [

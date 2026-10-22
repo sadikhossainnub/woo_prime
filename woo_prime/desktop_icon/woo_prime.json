@@ -5,17 +5,34 @@
  "docstatus": 0,
  "doctype": "Desktop Icon",
  "hidden": 0,
- "icon_type": "Link",
+ "icon_type": "App",
  "idx": 0,
  "label": "Woo_Prime",
+ "link": "",
  "link_to": "woo_prime",
  "link_type": "Workspace Sidebar",
- "modified": "2026-09-27 14:24:24.560908",
+ "modified": "2026-10-22 16:06:09.301232",
  "modified_by": "Administrator",
  "name": "Woo_Prime",
  "owner": "Administrator",
  "restrict_removal": 0,
- "roles": [],
+ "roles": [
+  {
+   "role": "System Manager"
+  },
+  {
+   "role": "Administrator"
+  },
+  {
+   "role": "Accounts Manager"
+  },
+  {
+   "role": "Stock Manager"
+  },
+  {
+   "role": "HR Manager"
+  }
+ ],
  "sidebar": "woo_prime",
  "standard": 1
 }
