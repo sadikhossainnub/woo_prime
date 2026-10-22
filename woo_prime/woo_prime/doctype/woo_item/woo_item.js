@@ -225,15 +225,21 @@ frappe.ui.form.on("Woo Item", {
 		}
 
 		// Render woo_product_url as a clickable link (Small Text has no 140-char limit but no auto-link)
-		if (frm.doc.woo_product_url) {
-			frappe.after_ajax(function () {
+		if (frm.doc.woo_product_url && frm.fields_dict["woo_product_url"]) {
+			let render_url = function () {
 				let $wrapper = frm.fields_dict["woo_product_url"].$wrapper;
+				if (!$wrapper) return;
 				let url = frm.doc.woo_product_url;
-				$wrapper.find(".control-value").html(
-					`<a href="${frappe.utils.escape_html(url)}" target="_blank" rel="noopener noreferrer"
-						style="word-break:break-all;">${frappe.utils.escape_html(url)}</a>`
-				);
-			});
+				let $target = $wrapper.find(".control-value, .like-disabled-input");
+				if ($target.length) {
+					$target.html(
+						`<a href="${frappe.utils.escape_html(url)}" target="_blank" rel="noopener noreferrer"
+							style="word-break:break-all;">${frappe.utils.escape_html(url)}</a>`
+					);
+				}
+			};
+			render_url();
+			frappe.after_ajax(render_url);
 		}
 
 		// Auto-fetch price if empty or 0
