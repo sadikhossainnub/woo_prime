@@ -96,7 +96,7 @@ class WooSyncLog(Document):
 
 
 def create_log(sync_type, direction, status, reference_doctype=None, reference_name=None,
-               woo_reference_id=None, request_data=None, response_data=None, error_message=None):
+               woo_reference_id=None, request_data=None, response_data=None, error_message=None, **kwargs):
 	"""Create a Woo Sync Log entry.
 
 	Args:
@@ -111,6 +111,9 @@ def create_log(sync_type, direction, status, reference_doctype=None, reference_n
 		error_message: Short error description
 	"""
 	try:
+		if not error_message and kwargs.get("message"):
+			error_message = kwargs.get("message")
+
 		ref_id_str = str(woo_reference_id) if woo_reference_id else None
 
 		req_str = _format_payload(request_data)

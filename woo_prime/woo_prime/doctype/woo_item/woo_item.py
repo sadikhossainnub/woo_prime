@@ -1719,8 +1719,16 @@ def delete_woo_item(woo_item_name, delete_item_master=False, delete_from_woocomm
 		direction="Outgoing",
 		status=status,
 		woo_reference_id=str(woo_product_id or ""),
-		item_name=item_name_label,
-		message="\n".join(parts) + ("\n\nErrors:\n" + error_msg if error_msg else ""),
+		request_data={
+			"action": "delete",
+			"woo_item_name": woo_item_name,
+			"item_name": item_name_label,
+			"delete_from_woocommerce": bool(delete_from_woocommerce),
+			"delete_item_master": bool(delete_item_master),
+			"details": parts,
+		},
+		response_data={"status": status, "errors": errors} if errors else {"status": "Success", "deleted": True},
+		error_message=error_msg or None,
 	)
 
 	if errors:
