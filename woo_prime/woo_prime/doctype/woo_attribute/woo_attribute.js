@@ -23,7 +23,7 @@ frappe.ui.form.on("Woo Attribute", {
 							method: "sync_to_woocommerce",
 							doc: frm.doc,
 							freeze: true,
-							freeze_message: __("Syncing Attribute & Settings to WooCommerce..."),
+							freeze_message: __("Syncing Attribute & Swatches to WooCommerce..."),
 							callback: function (r) {
 								if (r && r.message && r.message.status === "success") {
 									frappe.show_alert({
@@ -44,14 +44,69 @@ frappe.ui.form.on("Woo Attribute", {
 				},
 				__("Actions")
 			);
+
+			// Populate term swatches from ERPNext button
+			frm.add_custom_button(
+				__("Reload Swatch Rows"),
+				function () {
+					frm.call({
+						method: "reload_swatch_rows",
+						doc: frm.doc,
+						freeze: true,
+						freeze_message: __("Loading terms..."),
+						callback: function (r) {
+							frm.reload_doc();
+						},
+					});
+				},
+				__("Actions")
+			);
 		}
 
-		// Load and render terms table
+		// Load and render terms preview table
 		frm.trigger("load_terms_preview");
+
+		// Show/hide swatch section label hint
+		frm.trigger("type");
+	},
+
+	type(frm) {
+		let type = frm.doc.type || "select";
+		let swatch_section = frm.get_field("swatch_section");
+		if (swatch_section) {
+			let hint = "";
+			if (type === "color") {
+				hint = __("🎨 Color Swatch — set a Hex color per term below.");
+			} else if (type === "image") {
+				hint = __("🖼 Image Swatch — upload a thumbnail image per term below.");
+			} else if (type === "button" || type === "radio") {
+				hint = __("🔘 Text / Button Swatch — optionally set a custom label per term below.");
+			} else {
+				hint = __("ℹ Swatch Type is 'select' (default dropdown). Change Type above to enable swatches.");
+			}
+			// Show hint in swatch section description area
+			if (frm.fields_dict["swatch_section"] && frm.fields_dict["swatch_section"].$wrapper) {
+				let $desc = frm.fields_dict["swatch_section"].$wrapper.find(".section-description");
+				if (!$desc.length) {
+					frm.fields_dict["swatch_section"].$wrapper.find(".section-head").after(
+						`<div class="section-description text-muted small" style="padding:4px 15px 6px;">${hint}</div>`
+					);
+				} else {
+					$desc.html(hint);
+				}
+			}
+		}
 	},
 
 	erpnext_item_attribute(frm) {
 		frm.trigger("load_terms_preview");
+		// When attribute changes, auto-save so swatch rows get populated
+		if (!frm.is_new() && frm.doc.erpnext_item_attribute) {
+			frappe.show_alert({
+				message: __("Save the form to auto-populate swatch rows for this attribute's terms."),
+				indicator: "blue",
+			}, 4);
+		}
 	},
 
 	load_terms_preview(frm) {
@@ -100,3 +155,13 @@ frappe.ui.form.on("Woo Attribute", {
 	},
 });
 
+// Grid / Child table events for Woo Attribute Term
+frappe.ui.form.on("Woo Attribute Term", {
+	swatch_type(frm, cdt, cdn) {
+		let row = locals[cdt][cdn];
+		// Clear irrelevant fields when type changes
+		if (row.swatch_type !== "color") frappe.model.set_value(cdt, cdn, "swatch_color", "");
+		if (row.swatch_type !== "image") frappe.model.set_value(cdt, cdn, "swatch_image", "");
+		if (row.swatch_type !== "text") frappe.model.set_value(cdt, cdn, "swatch_text", "");
+	},
+});

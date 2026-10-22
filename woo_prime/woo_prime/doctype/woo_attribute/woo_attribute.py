@@ -20,6 +20,41 @@ class WooAttribute(Document):
 		if not self.erpnext_item_attribute and self.attribute_name:
 			if frappe.db.exists("Item Attribute", self.attribute_name):
 				self.erpnext_item_attribute = self.attribute_name
+		# Auto-populate term_swatches from linked ERPNext Item Attribute (new terms only)
+		self._sync_term_swatch_rows()
+
+	def _sync_term_swatch_rows(self):
+		"""Ensure term_swatches child table has a row for every ERPNext Item Attribute value."""
+		if not self.erpnext_item_attribute:
+			return
+		if not frappe.db.exists("Item Attribute", self.erpnext_item_attribute):
+			return
+
+		item_attr = frappe.get_doc("Item Attribute", self.erpnext_item_attribute)
+		existing = {row.term_name: row for row in (self.term_swatches or [])}
+
+		for av in (item_attr.item_attribute_values or []):
+			val = clean_text(av.attribute_value)
+			if not val:
+				continue
+			if val not in existing:
+				self.append("term_swatches", {
+					"term_name": val,
+					"swatch_type": "none",
+					"swatch_color": "",
+					"swatch_image": "",
+					"swatch_text": "",
+				})
+
+
+	@frappe.whitelist()
+	def reload_swatch_rows(self):
+		"""Re-sync term_swatches rows from the linked ERPNext Item Attribute and save."""
+		frappe.only_for(["System Manager", "Woo Manager"])
+		self._sync_term_swatch_rows()
+		self.flags.ignore_permissions = True
+		self.save(ignore_permissions=True)
+		return {"status": "success"}
 
 	@frappe.whitelist()
 	def sync_to_woocommerce(self):
@@ -79,11 +114,19 @@ class WooAttribute(Document):
 
 		self.woo_attribute_id = attr_id
 
-		# Sync terms from linked ERPNext Item Attribute
+		# ── Build swatch lookup (term_name → swatch row) from this doc ─────────
+		swatch_map = {}
+		for sw_row in (self.term_swatches or []):
+			t_key = clean_text(sw_row.term_name).lower()
+			swatch_map[t_key] = sw_row
+
+		# ── Sync terms from linked ERPNext Item Attribute ───────────────────────
 		terms_pushed = 0
 		if self.erpnext_item_attribute and frappe.db.exists("Item Attribute", self.erpnext_item_attribute):
 			attr_doc = frappe.get_doc("Item Attribute", self.erpnext_item_attribute)
-			existing_terms = set()
+
+			# Fetch existing WC terms (name → term_id mapping)
+			existing_terms = {}  # {name_lower: woo_term_id}
 			try:
 				t_page = 1
 				while True:
@@ -94,7 +137,7 @@ class WooAttribute(Document):
 					if not batch or not isinstance(batch, list):
 						break
 					for t in batch:
-						existing_terms.add(clean_text(t.get("name")).lower())
+						existing_terms[clean_text(t.get("name")).lower()] = int(t.get("id", 0))
 					if len(batch) < 100:
 						break
 					t_page += 1
@@ -103,18 +146,44 @@ class WooAttribute(Document):
 
 			for row in (attr_doc.item_attribute_values or []):
 				val_name = clean_text(row.attribute_value)
-				if not val_name or val_name.lower() in existing_terms:
+				if not val_name:
 					continue
+
 				val_slug = frappe.scrub(val_name).replace("_", "-")
+				val_key = val_name.lower()
+
+				# Build swatch meta_data payload (for Variation Swatches plugin)
+				meta_data = self._build_swatch_meta(val_key, swatch_map)
+
+				term_payload = {"name": val_name, "slug": val_slug}
+				if meta_data:
+					term_payload["meta_data"] = meta_data
+
 				try:
-					term_res = api.post(
-						f"products/attributes/{attr_id}/terms",
-						data={"name": val_name, "slug": val_slug},
-						timeout=45,
-					)
-					if term_res.status_code in (200, 201):
-						terms_pushed += 1
-						existing_terms.add(val_name.lower())
+					if val_key in existing_terms:
+						# Update existing term's swatch meta
+						term_id = existing_terms[val_key]
+						if meta_data:
+							upd_res = api.put(
+								f"products/attributes/{attr_id}/terms/{term_id}",
+								data=term_payload,
+								timeout=45,
+							)
+							if upd_res.status_code in (200, 201):
+								# Save term ID back to swatch row
+								self._save_swatch_term_id(val_key, swatch_map, term_id)
+					else:
+						# Create new term
+						term_res = api.post(
+							f"products/attributes/{attr_id}/terms",
+							data=term_payload,
+							timeout=45,
+						)
+						if term_res.status_code in (200, 201):
+							terms_pushed += 1
+							new_id = int(term_res.json().get("id", 0))
+							existing_terms[val_key] = new_id
+							self._save_swatch_term_id(val_key, swatch_map, new_id)
 				except Exception as te:
 					frappe.logger("woo_prime").error(f"Failed to push term '{val_name}': {te}")
 
@@ -162,6 +231,42 @@ class WooAttribute(Document):
 		)
 		return {"status": "success", "woo_attribute_id": attr_id, "terms_pushed": terms_pushed, "message": msg}
 
+	def _build_swatch_meta(self, val_key, swatch_map):
+		"""Build WooCommerce term meta_data for Variation Swatches plugin from swatch config."""
+		sw = swatch_map.get(val_key)
+		if not sw:
+			return []
+
+		stype = (sw.swatch_type or "none").lower()
+		meta_data = []
+
+		if stype == "color" and sw.swatch_color:
+			# Standard meta keys used by popular Variation Swatches plugins
+			meta_data = [
+				{"key": "product_attribute_color", "value": sw.swatch_color},
+				{"key": "color", "value": sw.swatch_color},
+				{"key": "product_attribute_type", "value": "color"},
+			]
+		elif stype == "image" and sw.swatch_image:
+			meta_data = [
+				{"key": "product_attribute_image", "value": sw.swatch_image},
+				{"key": "product_attribute_type", "value": "image"},
+			]
+		elif stype == "text":
+			text_val = sw.swatch_text or sw.term_name or ""
+			if text_val:
+				meta_data = [
+					{"key": "product_attribute_text", "value": text_val},
+					{"key": "product_attribute_type", "value": "button"},
+				]
+
+		return meta_data
+
+	def _save_swatch_term_id(self, val_key, swatch_map, term_id):
+		"""Save Woo term ID back to the swatch row in memory (persisted via .save())."""
+		sw = swatch_map.get(val_key)
+		if sw and term_id:
+			sw.woo_term_id = term_id
 
 def _publish_progress(user, operation, status, message, **kwargs):
 	"""Publish real-time progress update for sync operations."""

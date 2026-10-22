@@ -16,7 +16,9 @@
   "column_break_erp",
   "erpnext_item_attribute",
   "terms_section",
-  "terms_html"
+  "terms_html",
+  "swatch_section",
+  "term_swatches"
  ],
  "fields": [
   {
@@ -50,8 +52,9 @@
    "fieldname": "type",
    "fieldtype": "Select",
    "in_list_view": 1,
-   "label": "Type",
-   "options": "select\ntext"
+   "label": "Swatch Type",
+   "options": "select\ncolor\nimage\nbutton\nradio",
+   "description": "WooCommerce attribute display type. Use color/image/button for Variation Swatches plugin."
   },
   {
    "fieldname": "section_break_wc_settings",
@@ -96,6 +99,18 @@
    "fieldname": "terms_html",
    "fieldtype": "HTML",
    "label": "Terms List"
+  },
+  {
+   "fieldname": "swatch_section",
+   "fieldtype": "Section Break",
+   "label": "Swatch Configuration Per Term"
+  },
+  {
+   "description": "Configure Color / Image / Text swatch for each attribute term. Will be synced to WooCommerce.",
+   "fieldname": "term_swatches",
+   "fieldtype": "Table",
+   "label": "Term Swatches",
+   "options": "Woo Attribute Term"
   }
  ],
  "index_web_pages_for_search": 0,
