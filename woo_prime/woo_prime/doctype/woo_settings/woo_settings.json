@@ -168,14 +168,14 @@
    "fieldtype": "Column Break"
   },
   {
-   "description": "Copy and paste this URL into WooCommerce (Settings \u2192 Advanced \u2192 Webhooks for Order events)",
+   "description": "Copy and paste this URL into WooCommerce (Settings → Advanced → Webhooks for Order events)",
    "fieldname": "webhook_delivery_url",
    "fieldtype": "Data",
    "label": "Order Webhook Delivery URL",
    "read_only": 1
   },
   {
-   "description": "Copy and paste this URL into WooCommerce (Settings \u2192 Advanced \u2192 Webhooks for Product created/updated)",
+   "description": "Copy and paste this URL into WooCommerce (Settings → Advanced → Webhooks for Product created/updated)",
    "fieldname": "product_webhook_delivery_url",
    "fieldtype": "Data",
    "label": "Product Webhook Delivery URL",
@@ -379,8 +379,20 @@
    "description": "Explicitly map ERPNext Item Attributes to WooCommerce Global Attributes (ensures WooCommerce Swatches & Variation IDs link perfectly)",
    "fieldname": "attribute_mappings",
    "fieldtype": "Table",
-   "label": "ERPNext \u2194 WooCommerce Attribute Mappings",
+   "label": "ERPNext ↔ WooCommerce Attribute Mappings",
    "options": "Woo Attribute Mapping"
+  },
+  {
+   "fieldname": "media_section",
+   "fieldtype": "Section Break",
+   "label": "Media & Image Settings"
+  },
+  {
+   "fieldname": "allow_private_images",
+   "fieldtype": "Check",
+   "label": "Allow Private Images to be Pushed to WooCommerce",
+   "default": "0",
+   "description": "By default, only public files (/files/) are pushed to WooCommerce. Enable this to also allow private files (/private/files/) to be uploaded."
   },
   {
    "fieldname": "sync_features_section",
@@ -391,7 +403,7 @@
    "default": "1",
    "fieldname": "enable_item_sync",
    "fieldtype": "Check",
-   "label": "Enable Item / Product Auto Sync (ERPNext \u2192 WooCommerce)"
+   "label": "Enable Item / Product Auto Sync (ERPNext → WooCommerce)"
   },
   {
    "default": "0",
@@ -418,7 +430,7 @@
    "default": "1",
    "fieldname": "enable_stock_sync",
    "fieldtype": "Check",
-   "label": "Enable Stock Sync (ERPNext \u2192 WooCommerce)"
+   "label": "Enable Stock Sync (ERPNext → WooCommerce)"
   },
   {
    "default": "Hourly",
@@ -442,7 +454,7 @@
    "default": "1",
    "fieldname": "enable_price_sync",
    "fieldtype": "Check",
-   "label": "Enable Price Sync (ERPNext \u2192 WooCommerce)"
+   "label": "Enable Price Sync (ERPNext → WooCommerce)"
   },
   {
    "default": "Daily",
@@ -462,7 +474,7 @@
    "default": "1",
    "fieldname": "enable_order_sync",
    "fieldtype": "Check",
-   "label": "Enable Automatic Order Sync (WooCommerce \u2192 ERPNext)"
+   "label": "Enable Automatic Order Sync (WooCommerce → ERPNext)"
   },
   {
    "default": "5",
