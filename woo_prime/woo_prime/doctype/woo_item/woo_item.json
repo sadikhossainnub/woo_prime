@@ -104,9 +104,10 @@
   },
   {
    "fieldname": "woo_product_url",
-   "fieldtype": "Small Text",
+   "fieldtype": "Data",
    "label": "WooCommerce Product URL",
-   "read_only": 1
+   "read_only": 1,
+   "options": "URL"
   },
   {
    "fieldname": "woo_section",
