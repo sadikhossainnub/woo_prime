@@ -22,6 +22,7 @@
   "woo_description",
   "woo_category",
   "categories",
+  "woo_tags",
   "sync_section",
   "sync_price",
   "sync_stock",
@@ -234,6 +235,13 @@
    "fieldname": "variants_html",
    "fieldtype": "HTML",
    "label": "Variations List"
+  },
+  {
+   "description": "Select one or more WooCommerce Tags for this product. These will be pushed to WooCommerce.",
+   "fieldname": "woo_tags",
+   "fieldtype": "Table MultiSelect",
+   "label": "Tags",
+   "options": "Woo Item Tag"
   }
  ],
  "links": [

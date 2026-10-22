@@ -949,7 +949,11 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings):
 	if images:
 		product_data["images"] = images
 
-	if getattr(item, "_user_tags", None):
+	# Tags: prefer woo_tags Table MultiSelect, fallback to ERPNext _user_tags
+	woo_tag_ids = _get_woo_tag_ids(woo_item, api)
+	if woo_tag_ids:
+		product_data["tags"] = woo_tag_ids
+	elif getattr(item, "_user_tags", None):
 		tags_list = [{"name": t.strip()} for t in item._user_tags.split(",") if t.strip()]
 		if tags_list:
 			product_data["tags"] = tags_list
@@ -1036,7 +1040,11 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 	if images:
 		product_data["images"] = images
 
-	if getattr(item, "_user_tags", None):
+	# Tags: prefer woo_tags Table MultiSelect, fallback to ERPNext _user_tags
+	woo_tag_ids = _get_woo_tag_ids(woo_item, api)
+	if woo_tag_ids:
+		product_data["tags"] = woo_tag_ids
+	elif getattr(item, "_user_tags", None):
 		tags_list = [{"name": t.strip()} for t in item._user_tags.split(",") if t.strip()]
 		if tags_list:
 			product_data["tags"] = tags_list
@@ -1476,6 +1484,64 @@ def _get_woo_category_ids(woo_item, api):
 		add_category_by_name(woo_item.woo_category)
 
 	return category_ids
+
+
+def _get_woo_tag_ids(woo_item, api):
+	"""Extract and sync WooCommerce tag IDs from the woo_tags Table MultiSelect field.
+
+	For each tag in woo_item.woo_tags:
+	  1. Lookup woo_tag_id from Woo Tag DocType
+	  2. If not found, search WooCommerce by name or create it
+	  3. Return list of {id: <woo_tag_id>} dicts for the product payload
+	"""
+	tag_ids = []
+	seen_ids = set()
+
+	if not (hasattr(woo_item, "woo_tags") and woo_item.woo_tags):
+		return tag_ids
+
+	for row in woo_item.woo_tags:
+		tag_name = getattr(row, "tag", None)
+		if not tag_name:
+			continue
+		tag_name = tag_name.strip()
+		if not tag_name:
+			continue
+
+		try:
+			woo_tag_id = frappe.db.get_value("Woo Tag", tag_name, "woo_tag_id")
+
+			if not woo_tag_id:
+				# Search WooCommerce by name
+				search_resp = api.get("products/tags", params={"search": tag_name, "per_page": 10})
+				if search_resp.status_code == 200:
+					for t in search_resp.json():
+						if t.get("name", "").strip().lower() == tag_name.lower():
+							woo_tag_id = int(t.get("id"))
+							# Save back to DocType
+							if frappe.db.exists("Woo Tag", tag_name):
+								frappe.db.set_value("Woo Tag", tag_name, "woo_tag_id", woo_tag_id)
+							break
+
+			if not woo_tag_id:
+				# Create new tag in WooCommerce
+				slug = frappe.scrub(tag_name).replace("_", "-")
+				create_resp = api.post("products/tags", data={"name": tag_name, "slug": slug})
+				if create_resp.status_code in (200, 201):
+					woo_tag_id = int(create_resp.json().get("id", 0))
+					if woo_tag_id and frappe.db.exists("Woo Tag", tag_name):
+						frappe.db.set_value("Woo Tag", tag_name, "woo_tag_id", woo_tag_id)
+
+			if woo_tag_id and int(woo_tag_id) not in seen_ids:
+				tag_ids.append({"id": int(woo_tag_id)})
+				seen_ids.add(int(woo_tag_id))
+		except Exception:
+			frappe.log_error(
+				title=f"woo_prime: Tag sync error for '{tag_name}'",
+				message=frappe.get_traceback()
+			)
+
+	return tag_ids
 
 
 def _get_or_create_woo_category_id(cat_name, api):
