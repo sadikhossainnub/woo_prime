@@ -1545,6 +1545,26 @@ def update_regular_prices(items=None):
 	return updated_count
 
 
+def _delete_linked_sync_logs(reference_doctype, reference_name):
+	"""Delete all Woo Sync Log entries that reference the given document.
+
+	Frappe blocks deletion of a document that is referenced by Link / Dynamic Link
+	fields in other DocTypes.  Woo Sync Log stores (reference_doctype, reference_name)
+	pointing at Woo Item docs, so we must remove those log entries before the Woo
+	Item document itself can be deleted.
+	"""
+	logs = frappe.get_all(
+		"Woo Sync Log",
+		filters={
+			"reference_doctype": reference_doctype,
+			"reference_name": reference_name,
+		},
+		pluck="name",
+	)
+	for log_name in logs:
+		frappe.delete_doc("Woo Sync Log", log_name, ignore_permissions=True, force=True)
+
+
 @frappe.whitelist()
 def delete_woo_item(woo_item_name, delete_item_master=False, delete_from_woocommerce=False):
 	"""Delete a Woo Item with optional cascade to ERPNext Item Master and/or WooCommerce.
@@ -1653,7 +1673,9 @@ def delete_woo_item(woo_item_name, delete_item_master=False, delete_from_woocomm
 						pluck="name",
 					)
 					for v_wi in variant_woo_items:
+						_delete_linked_sync_logs("Woo Item", v_wi)
 						frappe.delete_doc("Woo Item", v_wi, ignore_permissions=True, force=True)
+		_delete_linked_sync_logs("Woo Item", woo_item_name)
 		frappe.delete_doc("Woo Item", woo_item_name, ignore_permissions=True, force=True)
 	except Exception as exc:
 		errors.append(f"Woo Item doc: {exc}")
