@@ -19,6 +19,28 @@ frappe.listview_settings["Woo Attribute"] = {
 				},
 			});
 		});
+
+		listview.page.add_inner_button(__("Push All to WooCommerce"), function () {
+			frappe.confirm(
+				__("Push and update all ERPNext attributes and their settings to WooCommerce?"),
+				function () {
+					frappe.call({
+						method: "woo_prime.woo_prime.doctype.woo_attribute.woo_attribute.push_all_attributes_to_woo",
+						freeze: true,
+						freeze_message: __("Pushing all attributes to WooCommerce..."),
+						callback: function (r) {
+							if (r && r.message) {
+								frappe.show_alert({
+									message: r.message.message || __("Pushed attributes successfully!"),
+									indicator: "green",
+								});
+							}
+							listview.refresh();
+						},
+					});
+				}
+			);
+		});
 	},
 };
 

@@ -6,14 +6,17 @@
  "engine": "InnoDB",
  "field_order": [
   "attribute_name",
-  "woo_attribute_id",
-  "column_break_attr",
   "slug",
+  "column_break_attr",
+  "woo_attribute_id",
   "type",
-  "section_break_erp",
-  "erpnext_item_attribute",
+  "section_break_wc_settings",
   "order_by",
-  "has_archives"
+  "has_archives",
+  "column_break_erp",
+  "erpnext_item_attribute",
+  "terms_section",
+  "terms_html"
  ],
  "fields": [
   {
@@ -25,6 +28,17 @@
    "unique": 1
   },
   {
+   "description": "URL-friendly slug (e.g. color, size). WooCommerce prefixes 'pa_' automatically.",
+   "fieldname": "slug",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Slug"
+  },
+  {
+   "fieldname": "column_break_attr",
+   "fieldtype": "Column Break"
+  },
+  {
    "fieldname": "woo_attribute_id",
    "fieldtype": "Int",
    "in_list_view": 1,
@@ -32,43 +46,56 @@
    "read_only": 1
   },
   {
-   "fieldname": "column_break_attr",
-   "fieldtype": "Column Break"
-  },
-  {
-   "fieldname": "slug",
-   "fieldtype": "Data",
-   "in_list_view": 1,
-   "label": "Slug"
-  },
-  {
+   "default": "select",
    "fieldname": "type",
-   "fieldtype": "Data",
+   "fieldtype": "Select",
    "in_list_view": 1,
-   "label": "Type"
+   "label": "Type",
+   "options": "select\ntext"
   },
   {
-   "fieldname": "section_break_erp",
+   "fieldname": "section_break_wc_settings",
    "fieldtype": "Section Break",
-   "label": "ERPNext Mapping"
+   "label": "WooCommerce Attribute Settings & Mapping"
   },
   {
-   "fieldname": "erpnext_item_attribute",
-   "fieldtype": "Link",
-   "in_list_view": 1,
-   "label": "ERPNext Item Attribute",
-   "options": "Item Attribute"
-  },
-  {
+   "default": "menu_order",
+   "description": "menu_order (Custom ordering), name (Name / Alphabetical), name_num (Name numeric), or id (Term ID)",
    "fieldname": "order_by",
-   "fieldtype": "Data",
-   "label": "Order By"
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Default Sort Order",
+   "options": "menu_order\nname\nname_num\nid"
   },
   {
    "default": "0",
+   "description": "Enable this if you want this attribute to have product archives in WooCommerce",
    "fieldname": "has_archives",
    "fieldtype": "Check",
-   "label": "Has Archives"
+   "in_list_view": 1,
+   "label": "Enable Archives?"
+  },
+  {
+   "fieldname": "column_break_erp",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "ERPNext Item Attribute whose values will be pushed as WooCommerce terms",
+   "fieldname": "erpnext_item_attribute",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Linked ERPNext Item Attribute",
+   "options": "Item Attribute"
+  },
+  {
+   "fieldname": "terms_section",
+   "fieldtype": "Section Break",
+   "label": "Attribute Terms / Values (From ERPNext)"
+  },
+  {
+   "fieldname": "terms_html",
+   "fieldtype": "HTML",
+   "label": "Terms List"
   }
  ],
  "index_web_pages_for_search": 0,
@@ -97,4 +124,3 @@
  "sort_order": "DESC",
  "track_changes": 1
 }
-

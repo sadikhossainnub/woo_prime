@@ -13,6 +13,154 @@ class WooAttribute(Document):
 	def validate(self):
 		if not self.slug and self.attribute_name:
 			self.slug = frappe.scrub(self.attribute_name).replace("_", "-")
+		if not self.type:
+			self.type = "select"
+		if not self.order_by:
+			self.order_by = "menu_order"
+		if not self.erpnext_item_attribute and self.attribute_name:
+			if frappe.db.exists("Item Attribute", self.attribute_name):
+				self.erpnext_item_attribute = self.attribute_name
+
+	@frappe.whitelist()
+	def sync_to_woocommerce(self):
+		"""Sync this attribute's settings and terms directly to WooCommerce."""
+		frappe.only_for(["System Manager", "Woo Manager"])
+		from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
+
+		api = get_woo_api()
+		clean_name = clean_text(self.attribute_name)
+		slug = self.slug or frappe.scrub(clean_name).replace("_", "-")
+
+		payload = {
+			"name": clean_name,
+			"slug": slug,
+			"type": self.type or "select",
+			"order_by": self.order_by or "menu_order",
+			"has_archives": bool(self.has_archives),
+		}
+
+		attr_id = self.woo_attribute_id
+		if attr_id:
+			# Update existing attribute in WooCommerce
+			res = api.put(f"products/attributes/{attr_id}", data=payload)
+			if res.status_code == 404:
+				attr_id = None
+			elif res.status_code not in (200, 201):
+				frappe.throw(_("WooCommerce attribute update failed ({0}): {1}").format(res.status_code, res.text[:300]))
+			else:
+				data = res.json() if res.text else {}
+				self.slug = data.get("slug") or self.slug
+
+		if not attr_id:
+			# Check by name/slug on WooCommerce to avoid duplicate errors
+			try:
+				res = api.get("products/attributes")
+				if res.status_code == 200 and isinstance(res.json(), list):
+					for a in res.json():
+						a_name = clean_text(a.get("name") or "").lower()
+						a_slug = (a.get("slug") or "").lower().replace("pa_", "")
+						if a_name == clean_name.lower() or a_slug == slug.lower():
+							attr_id = int(a.get("id"))
+							update_res = api.put(f"products/attributes/{attr_id}", data=payload)
+							if update_res.status_code == 200:
+								data = update_res.json() if update_res.text else {}
+								self.slug = data.get("slug") or self.slug
+							break
+			except Exception as e:
+				frappe.logger("woo_prime").error(f"Error querying WC attributes: {e}")
+
+		if not attr_id:
+			create_res = api.post("products/attributes", data=payload)
+			if create_res.status_code not in (200, 201):
+				frappe.throw(_("Failed to create attribute on WooCommerce ({0}): {1}").format(create_res.status_code, create_res.text[:300]))
+			data = create_res.json()
+			attr_id = int(data.get("id"))
+			self.slug = data.get("slug") or self.slug
+
+		self.woo_attribute_id = attr_id
+
+		# Sync terms from linked ERPNext Item Attribute
+		terms_pushed = 0
+		if self.erpnext_item_attribute and frappe.db.exists("Item Attribute", self.erpnext_item_attribute):
+			attr_doc = frappe.get_doc("Item Attribute", self.erpnext_item_attribute)
+			existing_terms = set()
+			try:
+				t_page = 1
+				while True:
+					t_res = api.get(f"products/attributes/{attr_id}/terms", params={"per_page": 100, "page": t_page}, timeout=45)
+					if t_res.status_code != 200:
+						break
+					batch = t_res.json()
+					if not batch or not isinstance(batch, list):
+						break
+					for t in batch:
+						existing_terms.add(clean_text(t.get("name")).lower())
+					if len(batch) < 100:
+						break
+					t_page += 1
+			except Exception:
+				pass
+
+			for row in (attr_doc.item_attribute_values or []):
+				val_name = clean_text(row.attribute_value)
+				if not val_name or val_name.lower() in existing_terms:
+					continue
+				val_slug = frappe.scrub(val_name).replace("_", "-")
+				try:
+					term_res = api.post(
+						f"products/attributes/{attr_id}/terms",
+						data={"name": val_name, "slug": val_slug},
+						timeout=45,
+					)
+					if term_res.status_code in (200, 201):
+						terms_pushed += 1
+						existing_terms.add(val_name.lower())
+				except Exception as te:
+					frappe.logger("woo_prime").error(f"Failed to push term '{val_name}': {te}")
+
+		# Update attribute mapping in Woo Settings
+		try:
+			settings = frappe.get_single("Woo Settings")
+			matched = False
+			for m in (settings.attribute_mappings or []):
+				if m.woo_attribute == self.name or (self.erpnext_item_attribute and m.erpnext_attribute == self.erpnext_item_attribute):
+					m.woo_attribute = self.name
+					m.woo_attribute_id = attr_id
+					m.woo_attribute_slug = self.slug
+					matched = True
+					break
+			if not matched and self.erpnext_item_attribute:
+				settings.append("attribute_mappings", {
+					"erpnext_attribute": self.erpnext_item_attribute,
+					"woo_attribute": self.name,
+					"woo_attribute_id": attr_id,
+					"woo_attribute_slug": self.slug,
+				})
+			settings.flags.ignore_permissions = True
+			settings.save(ignore_permissions=True)
+			frappe.db.commit()
+		except Exception:
+			pass
+
+		self.flags.ignore_permissions = True
+		self.save(ignore_permissions=True)
+
+		from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
+		create_log(
+			sync_type="Item",
+			direction="Outgoing",
+			status="Success",
+			reference_doctype="Woo Attribute",
+			reference_name=self.name,
+			woo_reference_id=str(attr_id),
+			request_data=payload,
+			response_data={"status": "Success", "woo_attribute_id": attr_id, "terms_pushed": terms_pushed},
+		)
+
+		msg = _("✅ Attribute <b>{0}</b> (ID: {1}) synced to WooCommerce successfully! {2} new term(s) pushed.").format(
+			self.attribute_name, attr_id, terms_pushed
+		)
+		return {"status": "success", "woo_attribute_id": attr_id, "terms_pushed": terms_pushed, "message": msg}
 
 
 def _publish_progress(user, operation, status, message, **kwargs):
@@ -234,7 +382,6 @@ def ensure_woo_attribute_tables():
 def push_attribute_to_woo(attribute_name):
 	"""Push a single ERPNext Item Attribute and its values to WooCommerce as a Global Attribute."""
 	frappe.only_for(["System Manager", "Woo Manager"])
-	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
 
 	repair_crashed_tables()
 	ensure_woo_attribute_tables()
@@ -243,127 +390,43 @@ def push_attribute_to_woo(attribute_name):
 		frappe.throw(_("Item Attribute '{0}' not found in ERPNext.").format(attribute_name))
 
 	attr_doc = frappe.get_doc("Item Attribute", attribute_name)
-	api = get_woo_api()
-
 	clean_name = clean_text(attr_doc.attribute_name or attribute_name)
-	slug = frappe.scrub(clean_name).replace("_", "-")
 
-	# 1. Check if attribute already exists on WooCommerce
-	attr_id = None
-	try:
-		res = api.get("products/attributes")
-		if res.status_code == 200 and isinstance(res.json(), list):
-			for a in res.json():
-				a_name = clean_text(a.get("name") or "").lower()
-				a_slug = (a.get("slug") or "").lower().replace("pa_", "")
-				if a_name == clean_name.lower() or a_slug == slug.lower():
-					attr_id = int(a.get("id"))
-					slug = a.get("slug") or slug
-					break
-	except Exception as e:
-		frappe.logger("woo_prime").error(f"Error querying WC attributes: {e}")
-
-	# 2. If not found on WooCommerce, create it
-	if not attr_id:
-		payload = {
-			"name": clean_name,
-			"slug": slug,
-			"type": "select",
-			"order_by": "menu_order",
-			"has_archives": True,
-		}
-		create_res = api.post("products/attributes", data=payload)
-		if create_res.status_code not in (200, 201):
-			frappe.throw(_("Failed to create attribute on WooCommerce: {0}").format(create_res.text[:250]))
-		data = create_res.json()
-		attr_id = int(data.get("id"))
-		slug = data.get("slug") or slug
-
-	# 3. Push terms (values) from item_attribute_values
-	existing_terms = set()
-	try:
-		t_page = 1
-		while True:
-			t_res = api.get(f"products/attributes/{attr_id}/terms", params={"per_page": 100, "page": t_page}, timeout=45)
-			if t_res.status_code != 200:
-				break
-			batch = t_res.json()
-			if not batch or not isinstance(batch, list):
-				break
-			for t in batch:
-				existing_terms.add(clean_text(t.get("name")).lower())
-			if len(batch) < 100:
-				break
-			t_page += 1
-	except Exception:
-		pass
-
-	terms_pushed = 0
-	for row in (attr_doc.item_attribute_values or []):
-		val_name = clean_text(row.attribute_value)
-		if not val_name or val_name.lower() in existing_terms:
-			continue
-
-		val_slug = frappe.scrub(val_name).replace("_", "-")
-		try:
-			term_res = api.post(
-				f"products/attributes/{attr_id}/terms",
-				data={"name": val_name, "slug": val_slug},
-				timeout=45,
-			)
-			if term_res.status_code in (200, 201):
-				terms_pushed += 1
-				existing_terms.add(val_name.lower())
-		except Exception as te:
-			frappe.logger("woo_prime").error(f"Failed to push term '{val_name}' for attribute '{clean_name}': {te}")
-
-	# 4. Save/update local Woo Attribute DocType
-	woo_attr_name = frappe.db.get_value("Woo Attribute", {"woo_attribute_id": attr_id}, "name")
-	if not woo_attr_name:
-		woo_attr_name = frappe.db.get_value("Woo Attribute", {"attribute_name": clean_name}, "name")
-
+	# Find or create corresponding Woo Attribute
+	woo_attr_name = (
+		frappe.db.get_value("Woo Attribute", {"erpnext_item_attribute": attribute_name})
+		or frappe.db.get_value("Woo Attribute", {"attribute_name": clean_name})
+	)
 	if woo_attr_name:
 		wa = frappe.get_doc("Woo Attribute", woo_attr_name)
 	else:
 		wa = frappe.new_doc("Woo Attribute")
 		wa.attribute_name = clean_name
+		wa.erpnext_item_attribute = attribute_name
+		wa.slug = frappe.scrub(clean_name).replace("_", "-")
+		wa.type = "select"
+		wa.order_by = "menu_order"
+		wa.has_archives = 0
+		wa.flags.ignore_permissions = True
+		wa.save(ignore_permissions=True)
 
-	wa.woo_attribute_id = attr_id
-	wa.slug = slug
-	wa.type = "select"
-	wa.erpnext_item_attribute = attr_doc.name
-	wa.flags.ignore_permissions = True
-	wa.save(ignore_permissions=True)
+	return wa.sync_to_woocommerce()
 
-	# 5. Ensure mapped in Woo Settings
-	try:
-		settings = frappe.get_single("Woo Settings")
-		existing_maps = {row.erpnext_attribute for row in (settings.attribute_mappings or [])}
-		if attr_doc.name not in existing_maps:
-			settings.append("attribute_mappings", {
-				"erpnext_attribute": attr_doc.name,
-				"woo_attribute": wa.name,
-				"woo_attribute_id": attr_id,
-				"woo_attribute_slug": slug,
+
+@frappe.whitelist()
+def get_attribute_terms_info(woo_attribute_name):
+	"""Return list of terms for this attribute from ERPNext and WooCommerce."""
+	frappe.only_for(["System Manager", "Woo Manager"])
+	woo_attr = frappe.get_doc("Woo Attribute", woo_attribute_name)
+	terms = []
+	if woo_attr.erpnext_item_attribute and frappe.db.exists("Item Attribute", woo_attr.erpnext_item_attribute):
+		item_attr = frappe.get_doc("Item Attribute", woo_attr.erpnext_item_attribute)
+		for row in (item_attr.item_attribute_values or []):
+			terms.append({
+				"attribute_value": row.attribute_value,
+				"abbr": getattr(row, "abbr", "") or "",
 			})
-			settings.flags.ignore_permissions = True
-			settings.save(ignore_permissions=True)
-		frappe.db.commit()
-	except Exception:
-		pass
-
-	msg = _("✅ Successfully pushed attribute <b>{0}</b> (ID: {1}) with {2} new term(s) to WooCommerce!").format(
-		clean_name, attr_id, terms_pushed
-	)
-	if frappe.request:
-		frappe.msgprint(msg, title=_("Attribute Pushed"), indicator="green")
-
-	return {
-		"status": "success",
-		"woo_attribute_id": attr_id,
-		"terms_pushed": terms_pushed,
-		"message": msg,
-	}
+	return {"terms": terms, "woo_attribute_id": woo_attr.woo_attribute_id}
 
 
 @frappe.whitelist()
