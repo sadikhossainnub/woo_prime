@@ -1076,9 +1076,16 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 		update_list = []
 		meta_list = []
 
+		manage_var_stock = getattr(woo_item, "manage_variation_stock", None)
 		for v_name in variant_item_names:
 			v_item = variant_docs[v_name]
 			child_woo_item = get_or_create_woo_item(v_name, v_item.item_code)
+			if manage_var_stock is not None:
+				child_woo_item.manage_stock = int(manage_var_stock)
+				try:
+					child_woo_item.db_set("manage_stock", int(manage_var_stock))
+				except Exception:
+					pass
 			var_payload = _prepare_variation_payload(child_woo_item, v_item, api, settings)
 
 			if child_woo_item.woo_product_id:

@@ -224,6 +224,68 @@ frappe.ui.form.on("Woo Item", {
 			);
 		}
 
+		// Adjust stock management labels based on template / variant / simple product
+		if (frm.doc.has_variants) {
+			frm.set_df_property("manage_stock", "label", __("Track stock quantity on parent product (Inventory tab)"));
+			frm.set_df_property("manage_variation_stock", "hidden", 0);
+		} else if (frm.doc.variant_of) {
+			frm.set_df_property("manage_stock", "label", __("Manage stock? (Variation level)"));
+			frm.set_df_property("manage_variation_stock", "hidden", 1);
+		} else {
+			frm.set_df_property("manage_stock", "label", __("Track stock quantity for this product"));
+			frm.set_df_property("manage_variation_stock", "hidden", 1);
+		}
+
+		// Render variants list and stock status for template items
+		if (frm.doc.has_variants && frm.doc.item_code && frm.fields_dict["variants_html"]) {
+			frappe.call({
+				method: "woo_prime.woo_prime.doctype.woo_item.woo_item.get_template_variants_info",
+				args: { item_code: frm.doc.item_code },
+				callback: function (r) {
+					if (r && r.message && r.message.length) {
+						let rows = r.message.map((v) => {
+							let woo_badge = v.published
+								? `<span class="indicator-pill green">#${v.woo_product_id || ""}</span>`
+								: `<span class="indicator-pill gray">${__("Not Published")}</span>`;
+							let manage_badge = v.manage_stock
+								? `<span class="text-success font-weight-bold"><i class="fa fa-check"></i> ${__("Yes")}</span>`
+								: `<span class="text-muted"><i class="fa fa-times"></i> ${__("No")}</span>`;
+							let link = v.woo_item_name
+								? `<a href="/desk/woo-item/${v.woo_item_name}">${v.sku || v.item_code}</a>`
+								: (v.sku || v.item_code);
+							return `<tr>
+								<td>${link}</td>
+								<td>${frappe.utils.escape_html(v.item_name || "")}</td>
+								<td>${woo_badge}</td>
+								<td><b>${v.stock_qty}</b></td>
+								<td>${manage_badge}</td>
+							</tr>`;
+						}).join("");
+
+						let html = `
+							<table class="table table-bordered table-hover table-sm text-sm" style="margin-top:10px;">
+								<thead>
+									<tr class="text-muted bg-light">
+										<th>${__("Variation / SKU")}</th>
+										<th>${__("Item Name")}</th>
+										<th>${__("WooCommerce ID")}</th>
+										<th>${__("Stock Qty")}</th>
+										<th>${__("Manage Stock?")}</th>
+									</tr>
+								</thead>
+								<tbody>${rows}</tbody>
+							</table>
+						`;
+						frm.fields_dict["variants_html"].$wrapper.html(html);
+					} else if (frm.fields_dict["variants_html"] && frm.fields_dict["variants_html"].$wrapper) {
+						frm.fields_dict["variants_html"].$wrapper.html(
+							`<div class="text-muted text-sm" style="padding:10px 0;">${__("No active variants found for this template.")}</div>`
+						);
+					}
+				},
+			});
+		}
+
 		// Render woo_product_url as a clickable link (Small Text has no 140-char limit but no auto-link)
 		if (frm.doc.woo_product_url && frm.fields_dict["woo_product_url"]) {
 			let render_url = function () {

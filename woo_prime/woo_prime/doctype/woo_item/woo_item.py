@@ -11,8 +11,14 @@ from woo_prime.utils import clean_text
 
 class WooItem(Document):
 	def validate(self):
-		from frappe.utils import flt
+		from frappe.utils import flt, cint
 		if self.item_code:
+			# Cache has_variants and variant_of for UI visibility and stock handling
+			item_data = frappe.db.get_value("Item", self.item_code, ["has_variants", "variant_of"], as_dict=True)
+			if item_data:
+				self.has_variants = cint(item_data.has_variants)
+				self.variant_of = item_data.variant_of or ""
+
 			# Fetch item_name if not set
 			if not self.item_name:
 				raw_name = frappe.db.get_value("Item", self.item_code, "item_name")
@@ -197,12 +203,17 @@ class WooItem(Document):
 			if has_variants:
 				if self.woo_product_id:
 					sync_stock_to_woo(self)
+
+				manage_var_stock = getattr(self, "manage_variation_stock", None)
 				variant_names = frappe.get_all("Item", filters={"variant_of": self.item_code, "disabled": 0}, pluck="name")
 				count = 0
 				for v_name in variant_names:
 					v_woo_name = frappe.db.get_value("Woo Item", {"item_code": v_name})
 					if v_woo_name:
 						v_woo_doc = frappe.get_doc("Woo Item", v_woo_name)
+						if manage_var_stock is not None and v_woo_doc.manage_stock != manage_var_stock:
+							v_woo_doc.manage_stock = int(manage_var_stock)
+							v_woo_doc.db_set("manage_stock", int(manage_var_stock))
 						if v_woo_doc.woo_product_id:
 							sync_stock_to_woo(v_woo_doc)
 							v_woo_doc.db_set("last_synced", now_datetime())
@@ -1718,4 +1729,41 @@ def delete_woo_item(woo_item_name, delete_item_master=False, delete_from_woocomm
 		)
 
 	return {"status": "ok", "message": _("Deleted successfully: {0}").format(item_name_label)}
+
+
+@frappe.whitelist()
+def get_template_variants_info(item_code):
+	"""Return variant details for a template item including SKU, Woo ID, stock qty, and manage_stock."""
+	frappe.only_for(["System Manager", "Woo Manager"])
+	settings = frappe.get_single("Woo Settings")
+	warehouse = getattr(settings, "default_warehouse", None)
+	from woo_prime.api.sync import _get_stock_qty
+
+	variants = frappe.get_all(
+		"Item",
+		filters={"variant_of": item_code, "disabled": 0},
+		fields=["name", "item_code", "item_name"],
+		order_by="name asc",
+	)
+	res = []
+	for v in variants:
+		woo_info = frappe.db.get_value(
+			"Woo Item",
+			{"item_code": v.item_code},
+			["name", "sku", "woo_product_id", "published", "manage_stock", "last_pushed_qty"],
+			as_dict=True,
+		) or {}
+		stock_qty = _get_stock_qty(v.item_code, warehouse) if warehouse else 0
+		res.append({
+			"item_code": v.item_code,
+			"item_name": v.item_name,
+			"woo_item_name": woo_info.get("name"),
+			"sku": woo_info.get("sku") or v.item_code,
+			"woo_product_id": woo_info.get("woo_product_id"),
+			"published": bool(woo_info.get("published")),
+			"manage_stock": bool(woo_info.get("manage_stock", 1)),
+			"stock_qty": int(stock_qty),
+			"last_pushed_qty": woo_info.get("last_pushed_qty"),
+		})
+	return res
 

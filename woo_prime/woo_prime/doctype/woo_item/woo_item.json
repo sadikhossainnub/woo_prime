@@ -164,10 +164,18 @@
   },
   {
    "default": "1",
-   "description": "Track stock quantity for this product in WooCommerce (manage_stock)",
+   "description": "Enable stock quantity tracking in WooCommerce (Inventory tab)",
    "fieldname": "manage_stock",
    "fieldtype": "Check",
-   "label": "Track stock quantity for this product"
+   "label": "Track stock quantity on parent product"
+  },
+  {
+   "default": "1",
+   "depends_on": "eval:doc.has_variants",
+   "description": "Enable 'Manage stock?' for all variations of this product in WooCommerce (Variations tab)",
+   "fieldname": "manage_variation_stock",
+   "fieldtype": "Check",
+   "label": "Manage stock for all variations"
   },
   {
    "fieldname": "column_break_sync",
@@ -199,6 +207,33 @@
    "label": "Sync Status",
    "options": "Not Synced\nSynced\nError",
    "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "has_variants",
+   "fieldtype": "Check",
+   "hidden": 1,
+   "label": "Has Variants",
+   "read_only": 1
+  },
+  {
+   "fieldname": "variant_of",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Variant Of",
+   "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.has_variants",
+   "fieldname": "variants_section",
+   "fieldtype": "Section Break",
+   "label": "Product Variations & Stock Status"
+  },
+  {
+   "depends_on": "eval:doc.has_variants",
+   "fieldname": "variants_html",
+   "fieldtype": "HTML",
+   "label": "Variations List"
   }
  ],
  "links": [
