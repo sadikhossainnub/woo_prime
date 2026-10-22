@@ -712,6 +712,61 @@ class WooAPI:
 			return response.json()
 		return None
 
+	def delete_product(self, product_id, force=True):
+		"""Permanently delete a WooCommerce product.
+
+		Args:
+			product_id: WooCommerce product ID.
+			force: If True, permanently delete (bypass trash).
+
+		Returns:
+			dict: WooCommerce response.
+
+		Raises:
+			frappe.ValidationError: on 404 (product not found).
+			Exception: on other non-200 responses.
+		"""
+		params = {"force": "true"} if force else {}
+		response = self.delete(f"products/{product_id}", params=params)
+		if response.status_code == 404:
+			raise frappe.ValidationError(
+				f"WooCommerce product {product_id} not found (404). Already deleted?"
+			)
+		if response.status_code not in (200, 204):
+			raise Exception(
+				f"WooCommerce delete product {product_id} failed: HTTP {response.status_code} — {response.text[:300]}"
+			)
+		return response.json() if response.text else {}
+
+	def delete_variation(self, parent_id, variation_id, force=True):
+		"""Permanently delete a WooCommerce product variation.
+
+		Args:
+			parent_id: WooCommerce parent (variable) product ID.
+			variation_id: WooCommerce variation ID.
+			force: If True, permanently delete (bypass trash).
+
+		Returns:
+			dict: WooCommerce response.
+
+		Raises:
+			frappe.ValidationError: on 404.
+			Exception: on other non-200 responses.
+		"""
+		params = {"force": "true"} if force else {}
+		response = self.delete(
+			f"products/{parent_id}/variations/{variation_id}", params=params
+		)
+		if response.status_code == 404:
+			raise frappe.ValidationError(
+				f"WooCommerce variation {variation_id} (parent {parent_id}) not found (404). Already deleted?"
+			)
+		if response.status_code not in (200, 204):
+			raise Exception(
+				f"WooCommerce delete variation {variation_id} failed: HTTP {response.status_code} — {response.text[:300]}"
+			)
+		return response.json() if response.text else {}
+
 	def update_stock(self, product_id, stock_quantity, manage_stock=True):
 		"""Update stock quantity for a product.
 

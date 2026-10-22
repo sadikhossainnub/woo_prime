@@ -129,6 +129,88 @@ frappe.ui.form.on("Woo Item", {
 					__("Actions")
 				);
 			}
+
+			// Delete Woo Item (with optional cascade to ERPNext & WooCommerce)
+			frm.add_custom_button(
+				__("Delete Item"),
+				function () {
+					let d = new frappe.ui.Dialog({
+						title: __("Delete Woo Item"),
+						indicator: "red",
+						fields: [
+							{
+								fieldtype: "HTML",
+								fieldname: "info_html",
+								options: `<div class="alert alert-warning" style="margin-bottom:10px;">
+									<b>${__("Warning:")}</b>
+									${__("This will permanently delete the Woo Item record.")}
+									${frm.doc.woo_product_id
+										? " " + __("If you also delete from WooCommerce, the product will be removed from your store.")
+										: ""}
+									${__("This action cannot be undone.")}
+								</div>`,
+							},
+							{
+								fieldname: "delete_from_woocommerce",
+								label: __("Also delete from WooCommerce"),
+								fieldtype: "Check",
+								default: 0,
+								description: frm.doc.woo_product_id
+									? __("Product ID: {0}", [frm.doc.woo_product_id])
+									: __("No WooCommerce product linked"),
+							},
+							{
+								fieldname: "delete_item_master",
+								label: __("Also delete from ERPNext Item Master"),
+								fieldtype: "Check",
+								default: 0,
+								description: frm.doc.item_code
+									? __("Item Code: {0}", [frm.doc.item_code])
+									: __("No ERPNext Item linked"),
+							},
+						],
+						primary_action_label: __("Delete"),
+						primary_action: function (values) {
+							d.hide();
+							let confirm_lines = [
+								__("Are you sure you want to delete <b>{0}</b>?", [frm.doc.item_name || frm.doc.name]),
+							];
+							if (values.delete_from_woocommerce) {
+								confirm_lines.push("<br>✅ " + __("Will delete from WooCommerce"));
+							}
+							if (values.delete_item_master) {
+								confirm_lines.push("<br>✅ " + __("Will delete from ERPNext Item Master"));
+							}
+							frappe.confirm(
+								confirm_lines.join(""),
+								function () {
+									frappe.call({
+										method: "woo_prime.woo_prime.doctype.woo_item.woo_item.delete_woo_item",
+										args: {
+											woo_item_name: frm.doc.name,
+											delete_item_master: values.delete_item_master ? 1 : 0,
+											delete_from_woocommerce: values.delete_from_woocommerce ? 1 : 0,
+										},
+										freeze: true,
+										freeze_message: __("Deleting..."),
+										callback: function (r) {
+											if (r && r.message && r.message.status === "ok") {
+												frappe.show_alert({
+													message: r.message.message || __("Deleted successfully."),
+													indicator: "green",
+												}, 5);
+												frappe.set_route("List", "Woo Item");
+											}
+										},
+									});
+								}
+							);
+						},
+					});
+					d.show();
+				},
+				__("Actions")
+			);
 		}
 
 		// Status indicator

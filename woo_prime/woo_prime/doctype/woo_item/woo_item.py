@@ -1545,4 +1545,151 @@ def update_regular_prices(items=None):
 	return updated_count
 
 
+@frappe.whitelist()
+def delete_woo_item(woo_item_name, delete_item_master=False, delete_from_woocommerce=False):
+	"""Delete a Woo Item with optional cascade to ERPNext Item Master and/or WooCommerce.
+
+	Args:
+		woo_item_name (str): Name of the Woo Item document.
+		delete_item_master (bool|int): If truthy, also delete from ERPNext Item Master.
+		delete_from_woocommerce (bool|int): If truthy, also delete the product from WooCommerce.
+
+	Handles:
+		- Simple product → delete the single WC product.
+		- Template (has_variants) → delete WC variable product (all WC variations cascade).
+		  Also delete all variant Woo Item docs and, if delete_item_master, all variant Items.
+		- Variant (variant_of set) → delete only the WC variation under its parent product.
+	"""
+	frappe.only_for(["System Manager", "Woo Manager"])
+
+	delete_item_master = _parse_bool(delete_item_master)
+	delete_from_woocommerce = _parse_bool(delete_from_woocommerce)
+
+	woo_item = frappe.get_doc("Woo Item", woo_item_name)
+	item_code = woo_item.item_code
+	woo_product_id = woo_item.woo_product_id
+	item_name_label = woo_item.item_name or woo_item_name
+
+	# Resolve ERPNext Item to determine template / variant status
+	is_template = False
+	is_variant = False
+	variant_of = None
+	if item_code:
+		item_doc = frappe.get_doc("Item", item_code) if frappe.db.exists("Item", item_code) else None
+		if item_doc:
+			is_template = bool(item_doc.has_variants)
+			variant_of = item_doc.variant_of
+			is_variant = bool(variant_of)
+
+	errors = []
+
+	# --- WooCommerce deletion ---
+	if delete_from_woocommerce and woo_product_id:
+		try:
+			from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
+			api = get_woo_api()
+
+			if is_template:
+				# Deleting the WC variable product also removes all WC variations
+				api.delete_product(woo_product_id)
+			elif is_variant:
+				# Find the parent Woo Item to get the parent's woo_product_id
+				parent_woo_item = frappe.db.get_value(
+					"Woo Item", {"item_code": variant_of}, ["woo_product_id"], as_dict=True
+				)
+				if parent_woo_item and parent_woo_item.woo_product_id:
+					api.delete_variation(parent_woo_item.woo_product_id, woo_product_id)
+				else:
+					# Fallback: try deleting as a top-level product
+					api.delete_product(woo_product_id)
+			else:
+				# Simple product
+				api.delete_product(woo_product_id)
+
+		except frappe.ValidationError as exc:
+			# 404 — product already gone in WooCommerce; treat as success
+			frappe.log_error(
+				title=f"WooCommerce delete (404 – already gone): {woo_item_name}",
+				message=str(exc),
+			)
+		except Exception as exc:
+			errors.append(f"WooCommerce: {exc}")
+			frappe.log_error(
+				title=f"WooCommerce delete failed: {woo_item_name}",
+				message=frappe.get_traceback(),
+			)
+
+	# --- ERPNext Item Master deletion ---
+	if delete_item_master and item_code:
+		try:
+			if is_template:
+				# Delete all variant Items first
+				variant_items = frappe.get_all(
+					"Item", filters={"variant_of": item_code}, pluck="name"
+				)
+				for v_item in variant_items:
+					frappe.delete_doc("Item", v_item, ignore_permissions=True, force=True)
+			# Delete the template/simple item itself
+			frappe.delete_doc("Item", item_code, ignore_permissions=True, force=True)
+		except Exception as exc:
+			errors.append(f"ERPNext Item: {exc}")
+			frappe.log_error(
+				title=f"ERPNext Item delete failed: {woo_item_name}",
+				message=frappe.get_traceback(),
+			)
+
+	# --- Woo Item doc deletion (always) ---
+	try:
+		if is_template:
+			# Delete all variant Woo Items linked to variants of this template
+			if item_code:
+				variant_codes = frappe.get_all(
+					"Item", filters={"variant_of": item_code}, pluck="name"
+				)
+				if variant_codes:
+					variant_woo_items = frappe.get_all(
+						"Woo Item",
+						filters={"item_code": ["in", variant_codes]},
+						pluck="name",
+					)
+					for v_wi in variant_woo_items:
+						frappe.delete_doc("Woo Item", v_wi, ignore_permissions=True, force=True)
+		frappe.delete_doc("Woo Item", woo_item_name, ignore_permissions=True, force=True)
+	except Exception as exc:
+		errors.append(f"Woo Item doc: {exc}")
+		frappe.log_error(
+			title=f"Woo Item doc delete failed: {woo_item_name}",
+			message=frappe.get_traceback(),
+		)
+
+	# Log the delete event
+	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
+	status = "Failed" if errors else "Success"
+	error_msg = "\n".join(errors) if errors else ""
+	parts = [f"Woo Item: {woo_item_name}"]
+	if delete_from_woocommerce:
+		parts.append("WooCommerce: yes")
+	if delete_item_master:
+		parts.append("ERPNext Item: yes")
+	if is_template:
+		parts.append("Type: Template (cascade)")
+	elif is_variant:
+		parts.append("Type: Variant")
+	else:
+		parts.append("Type: Simple")
+	create_log(
+		sync_type="Item",
+		direction="Outgoing",
+		status=status,
+		woo_reference_id=str(woo_product_id or ""),
+		item_name=item_name_label,
+		message="\n".join(parts) + ("\n\nErrors:\n" + error_msg if error_msg else ""),
+	)
+
+	if errors:
+		frappe.throw(
+			_("Woo Item deleted but some errors occurred:\n{0}").format("\n".join(errors))
+		)
+
+	return {"status": "ok", "message": _("Deleted successfully: {0}").format(item_name_label)}
 
