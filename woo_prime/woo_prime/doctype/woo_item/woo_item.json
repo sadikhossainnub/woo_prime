@@ -163,6 +163,13 @@
    "label": "Sync Stock"
   },
   {
+   "default": "1",
+   "description": "Track stock quantity for this product in WooCommerce (manage_stock)",
+   "fieldname": "manage_stock",
+   "fieldtype": "Check",
+   "label": "Track stock quantity for this product"
+  },
+  {
    "fieldname": "column_break_sync",
    "fieldtype": "Column Break"
   },

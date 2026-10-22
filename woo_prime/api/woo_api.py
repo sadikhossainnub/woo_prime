@@ -782,10 +782,13 @@ class WooAPI:
 			frappe.ValidationError: on 404 (product not found in WooCommerce)
 		"""
 		data = {
-			"manage_stock": manage_stock,
-			"stock_quantity": int(stock_quantity),
-			"stock_status": "instock" if int(stock_quantity) > 0 else "outofstock",
+			"manage_stock": bool(manage_stock),
 		}
+		if manage_stock:
+			data["stock_quantity"] = int(stock_quantity or 0)
+			data["stock_status"] = "instock" if int(stock_quantity or 0) > 0 else "outofstock"
+		else:
+			data["stock_status"] = "instock"
 		response = self.put(f"products/{product_id}", data=data)
 		if response.status_code == 200:
 			return response.json()
@@ -812,10 +815,13 @@ class WooAPI:
 			frappe.ValidationError: on 404 (variation not found in WooCommerce)
 		"""
 		data = {
-			"manage_stock": manage_stock,
-			"stock_quantity": int(stock_quantity),
-			"stock_status": "instock" if int(stock_quantity) > 0 else "outofstock",
+			"manage_stock": bool(manage_stock),
 		}
+		if manage_stock:
+			data["stock_quantity"] = int(stock_quantity or 0)
+			data["stock_status"] = "instock" if int(stock_quantity or 0) > 0 else "outofstock"
+		else:
+			data["stock_status"] = "instock"
 		response = self.put(f"products/{parent_id}/variations/{variation_id}", data=data)
 		if response.status_code == 200:
 			return response.json()

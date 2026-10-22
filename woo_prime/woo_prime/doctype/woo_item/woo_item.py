@@ -195,6 +195,8 @@ class WooItem(Document):
 			# If this is a template item, sync stock for all its variants
 			has_variants = frappe.db.get_value("Item", self.item_code, "has_variants")
 			if has_variants:
+				if self.woo_product_id:
+					sync_stock_to_woo(self)
 				variant_names = frappe.get_all("Item", filters={"variant_of": self.item_code, "disabled": 0}, pluck="name")
 				count = 0
 				for v_name in variant_names:
@@ -680,6 +682,8 @@ def _process_single_product(prod, settings, default_item_group, auto_create_miss
 	woo_item.woo_description = description
 	woo_item.woo_short_description = short_description
 	woo_item.published = 1
+	if "manage_stock" in prod:
+		woo_item.manage_stock = 1 if prod.get("manage_stock") else 0
 	
 	# Set prices using frappe.utils.flt() (Requirement 8.2)
 	reg_p = flt(prod.get("regular_price") or 0)

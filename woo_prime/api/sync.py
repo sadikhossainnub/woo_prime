@@ -915,17 +915,21 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings):
 	sale_price = flt(woo_item.sale_price) if getattr(woo_item, "sale_price", None) and flt(woo_item.sale_price) > 0 else None
 	stock_qty = _get_stock_qty(woo_item.item_code, settings.default_warehouse)
 
+	manage_stock = bool(getattr(woo_item, "manage_stock", 1))
 	product_data = {
 		"name": html.unescape(item.item_name or ""),
 		"sku": woo_item.sku,
 		"regular_price": str(flt(regular_price)),
 		"description": html.unescape(woo_item.woo_description or item.description or ""),
 		"short_description": html.unescape(getattr(woo_item, "woo_short_description", None) or item.description or ""),
-		"manage_stock": True,
-		"stock_quantity": int(stock_qty),
-		"stock_status": "instock" if int(stock_qty) > 0 else "outofstock",
+		"manage_stock": manage_stock,
 		"status": "publish",
 	}
+	if manage_stock:
+		product_data["stock_quantity"] = int(stock_qty)
+		product_data["stock_status"] = "instock" if int(stock_qty) > 0 else "outofstock"
+	else:
+		product_data["stock_status"] = "instock"
 	if sale_price is not None:
 		product_data["sale_price"] = str(flt(sale_price))
 
@@ -1021,6 +1025,7 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 		"short_description": html.unescape(getattr(woo_item, "woo_short_description", None) or item.description or ""),
 		"status": "publish",
 		"attributes": woo_attributes,
+		"manage_stock": bool(getattr(woo_item, "manage_stock", 0)),
 	}
 
 	category_ids = _get_woo_category_ids(woo_item, api)
@@ -1269,16 +1274,20 @@ def _prepare_variation_payload(child_woo_item, v_item, api, settings):
 			var_attr["id"] = int(woo_attr_id)
 		var_attributes.append(var_attr)
 
+	manage_stock = bool(getattr(child_woo_item, "manage_stock", 1))
 	var_data = {
 		"sku": child_woo_item.sku or v_item.item_code,
 		"regular_price": str(flt(regular_price)),
-		"manage_stock": True,
-		"stock_quantity": int(stock_qty),
-		"stock_status": "instock" if int(stock_qty) > 0 else "outofstock",
+		"manage_stock": manage_stock,
 		"status": "publish",
 		"attributes": var_attributes,
 		"description": html.unescape(child_woo_item.woo_description or v_item.description or ""),
 	}
+	if manage_stock:
+		var_data["stock_quantity"] = int(stock_qty)
+		var_data["stock_status"] = "instock" if int(stock_qty) > 0 else "outofstock"
+	else:
+		var_data["stock_status"] = "instock"
 	if sale_price is not None:
 		var_data["sale_price"] = str(flt(sale_price))
 
@@ -1679,6 +1688,8 @@ def sync_stock_to_woo(woo_item):
 
 	stock_qty = _get_stock_qty(woo_item.item_code, settings.default_warehouse)
 
+	manage_stock = bool(getattr(woo_item, "manage_stock", 1))
+
 	# Check if item is a Variant of a Template product
 	variant_of = frappe.db.get_value("Item", woo_item.item_code, "variant_of")
 	parent_woo_id = None
@@ -1687,9 +1698,9 @@ def sync_stock_to_woo(woo_item):
 
 	try:
 		if parent_woo_id:
-			api.update_variation_stock(parent_woo_id, woo_item.woo_product_id, stock_qty)
+			api.update_variation_stock(parent_woo_id, woo_item.woo_product_id, stock_qty, manage_stock=manage_stock)
 		else:
-			api.update_stock(woo_item.woo_product_id, stock_qty)
+			api.update_stock(woo_item.woo_product_id, stock_qty, manage_stock=manage_stock)
 	except frappe.ValidationError as e:
 		# 404 — product gone from WooCommerce
 		err_msg = str(e)
@@ -2078,12 +2089,17 @@ def sync_all_stock(force=False):
 					woo_item = frappe.get_doc("Woo Item", item_data.name)
 					sync_stock_to_woo(woo_item)
 				else:
-					batch_updates.append({
+					manage_stock = bool(getattr(item_data, "manage_stock", 1))
+					upd = {
 						"id": int(item_data.woo_product_id),
-						"manage_stock": True,
-						"stock_quantity": int(qty),
-						"stock_status": "instock" if int(qty) > 0 else "outofstock",
-					})
+						"manage_stock": manage_stock,
+					}
+					if manage_stock:
+						upd["stock_quantity"] = int(qty)
+						upd["stock_status"] = "instock" if int(qty) > 0 else "outofstock"
+					else:
+						upd["stock_status"] = "instock"
+					batch_updates.append(upd)
 					batch_docs.append((item_data.name, int(qty)))
 			except Exception:
 				frappe.log_error(f"Stock sync failed for Woo Item: {item_data.name}")
