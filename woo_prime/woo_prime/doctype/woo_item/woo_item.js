@@ -130,6 +130,43 @@ frappe.ui.form.on("Woo Item", {
 				);
 			}
 
+			// Fetch / Reload attributes from ERPNext
+			frm.add_custom_button(
+				__("Fetch Attributes from ERPNext"),
+				function () {
+					let has_existing = (frm.doc.item_attributes || []).length > 0;
+					let do_fetch = function (overwrite) {
+						frappe.call({
+							method: "populate_attributes_from_erpnext",
+							doc: frm.doc,
+							args: { overwrite: overwrite ? 1 : 0 },
+							freeze: true,
+							freeze_message: __("Fetching attributes from ERPNext..."),
+							callback: function (r) {
+								if (r && r.message && r.message.status === "success") {
+									frappe.show_alert({
+										message: __("Loaded {0} attribute(s) from ERPNext", [r.message.count]),
+										indicator: "green",
+									}, 4);
+									frm.reload_doc();
+								}
+							},
+						});
+					};
+
+					if (has_existing) {
+						frappe.confirm(
+							__("Overwrite existing attributes with ERPNext values, or only append missing ones?"),
+							function () { do_fetch(true); }, // Yes -> Overwrite
+							function () { do_fetch(false); } // No -> Merge
+						);
+					} else {
+						do_fetch(false);
+					}
+				},
+				__("Actions")
+			);
+
 			// Delete Woo Item (with optional cascade to ERPNext & WooCommerce)
 			frm.add_custom_button(
 				__("Delete Item"),
@@ -331,7 +368,52 @@ frappe.ui.form.on("Woo Item", {
 					}
 				},
 			});
+
+			// If item_attributes table is currently empty, auto-populate from ERPNext
+			if (!frm.doc.item_attributes || frm.doc.item_attributes.length === 0) {
+				frappe.call({
+					method: "populate_attributes_from_erpnext",
+					doc: frm.doc,
+					args: { overwrite: 0 },
+					callback: function (r) {
+						if (r && r.message && r.message.status === "success") {
+							frm.refresh_field("item_attributes");
+						}
+					},
+				});
+			}
 		}
+	},
+});
+
+// Event handlers for Woo Item Attribute child table
+frappe.ui.form.on("Woo Item Attribute", {
+	attribute(frm, cdt, cdn) {
+		let row = locals[cdt][cdn];
+		if (row.attribute) {
+			frappe.db.get_doc("Item Attribute", row.attribute).then((doc) => {
+				if (!row.attribute_name) {
+					frappe.model.set_value(cdt, cdn, "attribute_name", doc.attribute_name || row.attribute);
+				}
+				if (!row.options && doc.item_attribute_values && doc.item_attribute_values.length) {
+					let vals = doc.item_attribute_values.map((v) => v.attribute_value).filter(Boolean);
+					if (vals.length) {
+						frappe.model.set_value(cdt, cdn, "options", vals.join(", "));
+					}
+				}
+				if (row.is_variation === undefined || row.is_variation === null) {
+					frappe.model.set_value(cdt, cdn, "is_variation", frm.doc.has_variants ? 1 : 0);
+				}
+				if (row.is_visible === undefined || row.is_visible === null) {
+					frappe.model.set_value(cdt, cdn, "is_visible", 1);
+				}
+			});
+		}
+	},
+	item_attributes_add(frm, cdt, cdn) {
+		let is_var = frm.doc.has_variants ? 1 : 0;
+		frappe.model.set_value(cdt, cdn, "is_variation", is_var);
+		frappe.model.set_value(cdt, cdn, "is_visible", 1);
 	},
 });
 

@@ -38,6 +38,91 @@ class WooItem(Document):
 		if self.woo_product_url:
 			self.woo_product_url = html.unescape(str(self.woo_product_url)).strip()
 
+		# Auto-populate product attributes from ERPNext if table is empty
+		self._auto_populate_attributes()
+
+	def _auto_populate_attributes(self):
+		"""Auto-populate item_attributes child table from ERPNext Item / Variants if empty."""
+		if getattr(self, "item_attributes", None) and len(self.item_attributes) > 0:
+			return
+		if not self.item_code or not frappe.db.exists("Item", self.item_code):
+			return
+		self._load_attributes_from_erpnext(overwrite=False)
+
+	def _load_attributes_from_erpnext(self, overwrite=False):
+		"""Extract and load attributes from ERPNext Item or its variants."""
+		if not self.item_code or not frappe.db.exists("Item", self.item_code):
+			return
+
+		item = frappe.get_doc("Item", self.item_code)
+		if overwrite:
+			self.set("item_attributes", [])
+
+		existing_attrs = {r.attribute: r for r in (self.item_attributes or []) if r.attribute}
+
+		if getattr(item, "has_variants", 0):
+			variant_names = frappe.get_all(
+				"Item",
+				filters={"variant_of": item.name, "disabled": 0},
+				pluck="name"
+			)
+			attr_values = {}
+			for v_name in variant_names:
+				v_doc = frappe.get_doc("Item", v_name)
+				for a in (v_doc.attributes or []):
+					if a.attribute:
+						val = clean_text(a.attribute_value) if a.attribute_value else ""
+						if val:
+							attr_values.setdefault(a.attribute, set()).add(val)
+
+			# Include template-level defined attributes
+			for a in (item.attributes or []):
+				if a.attribute and a.attribute not in attr_values:
+					attr_values[a.attribute] = set()
+					if a.attribute_value:
+						attr_values[a.attribute].add(clean_text(a.attribute_value))
+
+			for attr_name, vals in attr_values.items():
+				val_str = ", ".join(sorted(list(vals)))
+				if attr_name in existing_attrs:
+					if not existing_attrs[attr_name].options and val_str:
+						existing_attrs[attr_name].options = val_str
+				else:
+					self.append("item_attributes", {
+						"attribute": attr_name,
+						"attribute_name": attr_name,
+						"options": val_str,
+						"is_variation": 1,
+						"is_visible": 1,
+					})
+		else:
+			for a in (item.attributes or []):
+				if not a.attribute:
+					continue
+				val = clean_text(a.attribute_value) if a.attribute_value else ""
+				if a.attribute in existing_attrs:
+					if not existing_attrs[a.attribute].options and val:
+						existing_attrs[a.attribute].options = val
+				else:
+					self.append("item_attributes", {
+						"attribute": a.attribute,
+						"attribute_name": a.attribute,
+						"options": val,
+						"is_variation": 0,
+						"is_visible": 1,
+					})
+
+	@frappe.whitelist()
+	def populate_attributes_from_erpnext(self, overwrite=False):
+		"""Whitelisted method to reload attributes from ERPNext."""
+		frappe.only_for(["System Manager", "Woo Manager"])
+		from frappe.utils import cint
+		overwrite = bool(cint(overwrite))
+		self._load_attributes_from_erpnext(overwrite=overwrite)
+		self.flags.ignore_permissions = True
+		self.save(ignore_permissions=True)
+		return {"status": "success", "count": len(self.item_attributes or [])}
+
 	def on_update(self):
 		"""Auto-sync to WooCommerce when Woo Item is updated."""
 		if getattr(self.flags, "in_woo_sync", False) or getattr(frappe.flags, "in_test", False):

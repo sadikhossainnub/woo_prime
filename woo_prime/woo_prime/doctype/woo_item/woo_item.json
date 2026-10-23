@@ -23,12 +23,22 @@
   "woo_category",
   "categories",
   "woo_tags",
+  "attributes_section",
+  "item_attributes",
   "sync_section",
   "sync_price",
   "sync_stock",
+  "manage_stock",
+  "manage_variation_stock",
   "column_break_sync",
+  "last_pushed_qty",
+  "last_pushed_price",
   "last_synced",
-  "sync_status"
+  "sync_status",
+  "has_variants",
+  "variant_of",
+  "variants_section",
+  "variants_html"
  ],
  "fields": [
   {
@@ -242,6 +252,18 @@
    "fieldtype": "Table MultiSelect",
    "label": "Tags",
    "options": "Woo Item Tag"
+  },
+  {
+   "fieldname": "attributes_section",
+   "fieldtype": "Section Break",
+   "label": "WooCommerce Product Attributes & Variations"
+  },
+  {
+   "description": "Configure attributes, their values, and which attributes generate variations for WooCommerce",
+   "fieldname": "item_attributes",
+   "fieldtype": "Table",
+   "label": "Product Attributes",
+   "options": "Woo Item Attribute"
   }
  ],
  "links": [

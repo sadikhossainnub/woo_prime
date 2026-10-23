@@ -941,7 +941,7 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings):
 	if category_ids:
 		product_data["categories"] = category_ids
 
-	simple_attrs = _get_simple_item_attributes(item)
+	simple_attrs = _get_simple_item_attributes(item, woo_item, api)
 	if simple_attrs:
 		product_data["attributes"] = simple_attrs
 
@@ -1006,20 +1006,54 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 		for attr in v_item.attributes:
 			if attr.attribute not in attributes_dict:
 				attributes_dict[attr.attribute] = set()
-			attributes_dict[attr.attribute].add(attr.attribute_value)
+			if attr.attribute_value:
+				attributes_dict[attr.attribute].add(clean_text(attr.attribute_value))
 
 	woo_attributes = []
-	for attr_name, options in attributes_dict.items():
-		woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr_name, api)
-		attr_payload = {
-			"name": target_name or attr_name,
-			"visible": True,
-			"variation": True,
-			"options": sorted(list(options))
-		}
-		if woo_attr_id:
-			attr_payload["id"] = int(woo_attr_id)
-		woo_attributes.append(attr_payload)
+	variation_attr_keys = set()
+
+	if getattr(woo_item, "item_attributes", None) and len(woo_item.item_attributes) > 0:
+		for row in woo_item.item_attributes:
+			attr_name = row.attribute_name or row.attribute
+			if not attr_name:
+				continue
+			opts = [o.strip() for o in (row.options or "").replace("\n", ",").split(",") if o.strip()]
+			if not opts and row.attribute in attributes_dict:
+				opts = sorted(list(attributes_dict[row.attribute]))
+
+			woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr_name, api)
+			is_var = bool(getattr(row, "is_variation", 1))
+			attr_payload = {
+				"name": target_name or attr_name,
+				"visible": bool(getattr(row, "is_visible", 1)),
+				"variation": is_var,
+				"options": opts or [attr_name],
+			}
+			if woo_attr_id:
+				attr_payload["id"] = int(woo_attr_id)
+			woo_attributes.append(attr_payload)
+
+			if is_var:
+				variation_attr_keys.add(clean_text(attr_name).lower())
+				if row.attribute:
+					variation_attr_keys.add(clean_text(row.attribute).lower())
+				if target_name:
+					variation_attr_keys.add(clean_text(target_name).lower())
+	else:
+		for attr_name, options in attributes_dict.items():
+			woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr_name, api)
+			attr_payload = {
+				"name": target_name or attr_name,
+				"visible": True,
+				"variation": True,
+				"options": sorted(list(options))
+			}
+			if woo_attr_id:
+				attr_payload["id"] = int(woo_attr_id)
+			woo_attributes.append(attr_payload)
+			variation_attr_keys.add(clean_text(attr_name).lower())
+			if target_name:
+				variation_attr_keys.add(clean_text(target_name).lower())
 
 	product_data = {
 		"name": html.unescape(item.item_name or ""),
@@ -1094,7 +1128,7 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 					child_woo_item.db_set("manage_stock", int(manage_var_stock))
 				except Exception:
 					pass
-			var_payload = _prepare_variation_payload(child_woo_item, v_item, api, settings)
+			var_payload = _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_attr_keys=variation_attr_keys)
 
 			if child_woo_item.woo_product_id:
 				var_payload["id"] = int(child_woo_item.woo_product_id)
@@ -1268,7 +1302,7 @@ def _publish_variant_item_to_woo(woo_item, item, api, settings):
 	return _publish_variation_data(parent_woo_item.woo_product_id, woo_item, item, api, settings)
 
 
-def _prepare_variation_payload(child_woo_item, v_item, api, settings):
+def _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_attr_keys=None):
 	"""Prepare variation payload dictionary for WooCommerce."""
 	import html
 	price = _get_item_price(v_item.name, settings.default_price_list)
@@ -1278,9 +1312,30 @@ def _prepare_variation_payload(child_woo_item, v_item, api, settings):
 	sale_price = flt(child_woo_item.sale_price) if getattr(child_woo_item, "sale_price", None) and flt(child_woo_item.sale_price) > 0 else None
 	stock_qty = _get_stock_qty(v_item.name, settings.default_warehouse)
 
+	if variation_attr_keys is None and getattr(v_item, "variant_of", None):
+		parent_woo = frappe.db.get_value("Woo Item", {"item_code": v_item.variant_of})
+		if parent_woo:
+			try:
+				p_doc = frappe.get_doc("Woo Item", parent_woo)
+				if getattr(p_doc, "item_attributes", None) and len(p_doc.item_attributes) > 0:
+					variation_attr_keys = {
+						clean_text(r.attribute_name or r.attribute).lower()
+						for r in p_doc.item_attributes if getattr(r, "is_variation", 1)
+					}
+			except Exception:
+				pass
+
 	var_attributes = []
 	for attr in v_item.attributes:
+		attr_key = clean_text(attr.attribute).lower()
 		woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr.attribute, api)
+		target_key = clean_text(target_name).lower() if target_name else attr_key
+
+		# Filter out attributes not marked as variation
+		if variation_attr_keys is not None and len(variation_attr_keys) > 0:
+			if attr_key not in variation_attr_keys and target_key not in variation_attr_keys:
+				continue
+
 		var_attr = {
 			"name": target_name or attr.attribute,
 			"option": attr.attribute_value
@@ -1711,15 +1766,34 @@ def _get_or_create_woo_attribute_id(attr_name, api=None):
 	return (None, attr_name)
 
 
-def _get_simple_item_attributes(item):
-	"""Extract Item Attributes from ERPNext Item child table for simple products."""
+def _get_simple_item_attributes(item, woo_item=None, api=None):
+	"""Extract Item Attributes for simple products. Uses woo_item.item_attributes if available, else item.attributes."""
+	if woo_item and getattr(woo_item, "item_attributes", None) and len(woo_item.item_attributes) > 0:
+		woo_attrs = []
+		for row in woo_item.item_attributes:
+			attr_name = row.attribute_name or row.attribute
+			if not attr_name:
+				continue
+			opts = [o.strip() for o in (row.options or "").replace("\n", ",").split(",") if o.strip()]
+			woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr_name, api)
+			attr_payload = {
+				"name": target_name or attr_name,
+				"visible": bool(getattr(row, "is_visible", 1)),
+				"variation": False,
+				"options": opts or [attr_name],
+			}
+			if woo_attr_id:
+				attr_payload["id"] = int(woo_attr_id)
+			woo_attrs.append(attr_payload)
+		return woo_attrs
+
 	if not hasattr(item, "attributes") or not item.attributes:
 		return []
 
 	woo_attrs = []
 	for attr in item.attributes:
 		if attr.attribute and attr.attribute_value:
-			woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr.attribute, None)
+			woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr.attribute, api)
 			attr_payload = {
 				"name": target_name or attr.attribute,
 				"visible": True,
