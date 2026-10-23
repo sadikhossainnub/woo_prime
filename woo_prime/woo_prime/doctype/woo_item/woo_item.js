@@ -391,31 +391,164 @@ frappe.ui.form.on("Woo Item Attribute", {
 	attribute(frm, cdt, cdn) {
 		let row = locals[cdt][cdn];
 		if (row.attribute) {
-			frappe.db.get_doc("Item Attribute", row.attribute).then((doc) => {
-				if (!row.attribute_name) {
-					frappe.model.set_value(cdt, cdn, "attribute_name", doc.attribute_name || row.attribute);
-				}
-				if (!row.options && doc.item_attribute_values && doc.item_attribute_values.length) {
-					let vals = doc.item_attribute_values.map((v) => v.attribute_value).filter(Boolean);
-					if (vals.length) {
-						frappe.model.set_value(cdt, cdn, "options", vals.join(", "));
+			if (!row.attribute_name) {
+				frappe.model.set_value(cdt, cdn, "attribute_name", row.attribute);
+			}
+			if (row.is_variation === undefined || row.is_variation === null) {
+				frappe.model.set_value(cdt, cdn, "is_variation", frm.doc.has_variants ? 1 : 0);
+			}
+			if (row.is_visible === undefined || row.is_visible === null) {
+				frappe.model.set_value(cdt, cdn, "is_visible", 1);
+			}
+
+			// Fetch terms for this Woo Attribute
+			frappe.call({
+				method: "woo_prime.woo_prime.doctype.woo_item.woo_item.get_attribute_terms_for_woo_item",
+				args: {
+					woo_attribute: row.attribute,
+					item_code: frm.doc.item_code || null,
+				},
+				callback: function (r) {
+					if (r && r.message && r.message.terms && r.message.terms.length) {
+						let terms = r.message.terms;
+						_update_multiselect_terms(frm, row.attribute, terms);
+
+						// If options is empty, auto-fill with terms
+						if (!row.options) {
+							frappe.model.set_value(cdt, cdn, "options", terms.join(", "));
+						}
 					}
-				}
-				if (row.is_variation === undefined || row.is_variation === null) {
-					frappe.model.set_value(cdt, cdn, "is_variation", frm.doc.has_variants ? 1 : 0);
-				}
-				if (row.is_visible === undefined || row.is_visible === null) {
-					frappe.model.set_value(cdt, cdn, "is_visible", 1);
-				}
+				},
 			});
 		}
 	},
+
+	btn_select_values(frm, cdt, cdn) {
+		let row = locals[cdt][cdn];
+		if (!row.attribute) {
+			frappe.msgprint(__("Please select a Woo Attribute first."));
+			return;
+		}
+
+		frappe.call({
+			method: "woo_prime.woo_prime.doctype.woo_item.woo_item.get_attribute_terms_for_woo_item",
+			args: {
+				woo_attribute: row.attribute,
+				item_code: frm.doc.item_code || null,
+			},
+			freeze: true,
+			freeze_message: __("Loading values..."),
+			callback: function (r) {
+				let terms = (r && r.message && r.message.terms) ? r.message.terms : [];
+				let current_vals = (row.options || "")
+					.replace(/\n/g, ",")
+					.split(",")
+					.map((v) => v.trim())
+					.filter(Boolean);
+
+				let all_terms = Array.from(new Set([...terms, ...current_vals])).sort();
+
+				if (all_terms.length === 0) {
+					frappe.prompt(
+						[
+							{
+								label: __("Values (Comma-separated)"),
+								fieldname: "custom_values",
+								fieldtype: "Small Text",
+								default: row.options || "",
+								reqd: 1,
+							},
+						],
+						function (values) {
+							frappe.model.set_value(cdt, cdn, "options", values.custom_values);
+						},
+						__("Set Values for {0}", [row.attribute]),
+						__("Set Values")
+					);
+					return;
+				}
+
+				let check_options = all_terms.map((t) => ({
+					label: t,
+					value: t,
+					checked: current_vals.includes(t),
+				}));
+
+				let d = new frappe.ui.Dialog({
+					title: __("Select Values for {0}", [row.attribute]),
+					fields: [
+						{
+							fieldtype: "HTML",
+							fieldname: "quick_actions",
+							options: `
+								<div class="mb-2">
+									<button class="btn btn-xs btn-default select-all-btn mr-1">Select All</button>
+									<button class="btn btn-xs btn-default unselect-all-btn">Unselect All</button>
+								</div>
+							`,
+						},
+						{
+							fieldtype: "MultiCheck",
+							fieldname: "selected_terms",
+							label: __("Available Values"),
+							options: check_options,
+							columns: 2,
+						},
+						{
+							fieldtype: "Data",
+							fieldname: "add_custom",
+							label: __("Add New Value"),
+							description: __("Type and click Apply if value is not in list"),
+						},
+					],
+					primary_action_label: __("Apply"),
+					primary_action: function () {
+						let selected = d.get_value("selected_terms") || [];
+						let custom = (d.get_value("add_custom") || "").trim();
+						if (custom && !selected.includes(custom)) {
+							selected.push(custom);
+						}
+						frappe.model.set_value(cdt, cdn, "options", selected.join(", "));
+						d.hide();
+					},
+				});
+
+				d.$wrapper.find(".select-all-btn").on("click", function () {
+					d.set_value("selected_terms", all_terms);
+				});
+				d.$wrapper.find(".unselect-all-btn").on("click", function () {
+					d.set_value("selected_terms", []);
+				});
+
+				d.show();
+			},
+		});
+	},
+
 	item_attributes_add(frm, cdt, cdn) {
 		let is_var = frm.doc.has_variants ? 1 : 0;
 		frappe.model.set_value(cdt, cdn, "is_variation", is_var);
 		frappe.model.set_value(cdt, cdn, "is_visible", 1);
 	},
 });
+
+function _update_multiselect_terms(frm, attr_name, terms) {
+	if (!terms || !terms.length) return;
+	try {
+		let grid_field = frm.get_field("item_attributes");
+		if (grid_field && grid_field.grid) {
+			let df = grid_field.grid.get_docfield("options");
+			if (df) {
+				df.options = terms.join("\n");
+				df.get_data = function () {
+					return terms;
+				};
+			}
+		}
+	} catch (e) {
+		console.warn("Could not update multiselect options:", e);
+	}
+}
 
 // List View: Bulk Publish action
 frappe.listview_settings["Woo Item"] = {

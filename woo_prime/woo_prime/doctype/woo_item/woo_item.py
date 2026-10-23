@@ -50,7 +50,7 @@ class WooItem(Document):
 		self._load_attributes_from_erpnext(overwrite=False)
 
 	def _load_attributes_from_erpnext(self, overwrite=False):
-		"""Extract and load attributes from ERPNext Item or its variants."""
+		"""Extract and load attributes from ERPNext Item or its variants, linking them to Woo Attribute."""
 		if not self.item_code or not frappe.db.exists("Item", self.item_code):
 			return
 
@@ -83,13 +83,16 @@ class WooItem(Document):
 						attr_values[a.attribute].add(clean_text(a.attribute_value))
 
 			for attr_name, vals in attr_values.items():
+				woo_attr = _get_or_create_woo_attribute_doc(attr_name)
 				val_str = ", ".join(sorted(list(vals)))
-				if attr_name in existing_attrs:
-					if not existing_attrs[attr_name].options and val_str:
-						existing_attrs[attr_name].options = val_str
+				if woo_attr in existing_attrs or attr_name in existing_attrs:
+					row = existing_attrs.get(woo_attr) or existing_attrs.get(attr_name)
+					row.attribute = woo_attr
+					if not row.options and val_str:
+						row.options = val_str
 				else:
 					self.append("item_attributes", {
-						"attribute": attr_name,
+						"attribute": woo_attr,
 						"attribute_name": attr_name,
 						"options": val_str,
 						"is_variation": 1,
@@ -99,13 +102,16 @@ class WooItem(Document):
 			for a in (item.attributes or []):
 				if not a.attribute:
 					continue
+				woo_attr = _get_or_create_woo_attribute_doc(a.attribute)
 				val = clean_text(a.attribute_value) if a.attribute_value else ""
-				if a.attribute in existing_attrs:
-					if not existing_attrs[a.attribute].options and val:
-						existing_attrs[a.attribute].options = val
+				if woo_attr in existing_attrs or a.attribute in existing_attrs:
+					row = existing_attrs.get(woo_attr) or existing_attrs.get(a.attribute)
+					row.attribute = woo_attr
+					if not row.options and val:
+						row.options = val
 				else:
 					self.append("item_attributes", {
-						"attribute": a.attribute,
+						"attribute": woo_attr,
 						"attribute_name": a.attribute,
 						"options": val,
 						"is_variation": 0,
@@ -122,6 +128,68 @@ class WooItem(Document):
 		self.flags.ignore_permissions = True
 		self.save(ignore_permissions=True)
 		return {"status": "success", "count": len(self.item_attributes or [])}
+
+
+def _get_or_create_woo_attribute_doc(attr_name):
+	"""Find or create Woo Attribute for the given attribute name."""
+	clean = clean_text(attr_name)
+	woo_attr_name = (
+		frappe.db.get_value("Woo Attribute", {"attribute_name": clean})
+		or frappe.db.get_value("Woo Attribute", {"erpnext_item_attribute": clean})
+		or (frappe.db.exists("Woo Attribute", clean) and clean)
+	)
+	if not woo_attr_name:
+		try:
+			wa = frappe.new_doc("Woo Attribute")
+			wa.attribute_name = clean
+			wa.erpnext_item_attribute = clean if frappe.db.exists("Item Attribute", clean) else None
+			wa.slug = frappe.scrub(clean).replace("_", "-")
+			wa.type = "select"
+			wa.flags.ignore_permissions = True
+			wa.save(ignore_permissions=True)
+			woo_attr_name = wa.name
+		except Exception:
+			woo_attr_name = clean
+	return woo_attr_name
+
+
+@frappe.whitelist()
+def get_attribute_terms_for_woo_item(woo_attribute, item_code=None):
+	"""Return available terms/values for a Woo Attribute to populate multi-select."""
+	frappe.only_for(["System Manager", "Woo Manager"])
+	terms = set()
+
+	if not woo_attribute:
+		return {"terms": []}
+
+	# 1. From Woo Attribute term_swatches
+	if frappe.db.exists("Woo Attribute", woo_attribute):
+		wa = frappe.get_doc("Woo Attribute", woo_attribute)
+		for t in (wa.term_swatches or []):
+			if t.term_name:
+				terms.add(clean_text(t.term_name))
+
+		# 2. From linked ERPNext Item Attribute
+		erp_attr = wa.erpnext_item_attribute or wa.attribute_name
+		if erp_attr and frappe.db.exists("Item Attribute", erp_attr):
+			ia = frappe.get_doc("Item Attribute", erp_attr)
+			for val in (ia.item_attribute_values or []):
+				if val.attribute_value:
+					terms.add(clean_text(val.attribute_value))
+
+	# 3. If item_code provided, inspect its variants
+	if item_code and frappe.db.exists("Item", item_code):
+		item = frappe.get_doc("Item", item_code)
+		if item.has_variants:
+			variant_names = frappe.get_all("Item", filters={"variant_of": item.name, "disabled": 0}, pluck="name")
+			for v_name in variant_names:
+				v_doc = frappe.get_doc("Item", v_name)
+				for a in (v_doc.attributes or []):
+					if a.attribute and (a.attribute == woo_attribute or clean_text(a.attribute).lower() == clean_text(woo_attribute).lower()):
+						if a.attribute_value:
+							terms.add(clean_text(a.attribute_value))
+
+	return {"terms": sorted(list(terms))}
 
 	def on_update(self):
 		"""Auto-sync to WooCommerce when Woo Item is updated."""

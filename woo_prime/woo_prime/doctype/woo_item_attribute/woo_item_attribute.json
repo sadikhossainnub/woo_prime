@@ -8,6 +8,7 @@
   "attribute",
   "attribute_name",
   "options",
+  "btn_select_values",
   "is_variation",
   "is_visible"
  ],
@@ -17,8 +18,8 @@
    "fieldname": "attribute",
    "fieldtype": "Link",
    "in_list_view": 1,
-   "label": "ERPNext Attribute",
-   "options": "Item Attribute",
+   "label": "Woo Attribute",
+   "options": "Woo Attribute",
    "reqd": 1,
    "search_index": 1
   },
@@ -32,15 +33,22 @@
   },
   {
    "columns": 3,
-   "description": "Comma-separated values (e.g. Red, Blue, Green or S, M, L)",
+   "description": "Multi-select attribute values/terms",
    "fieldname": "options",
-   "fieldtype": "Small Text",
+   "fieldtype": "MultiSelect",
    "in_list_view": 1,
    "label": "Values / Options",
    "reqd": 1
   },
   {
-   "columns": 2,
+   "columns": 1,
+   "fieldname": "btn_select_values",
+   "fieldtype": "Button",
+   "in_list_view": 1,
+   "label": "Select Values"
+  },
+  {
+   "columns": 1,
    "default": "1",
    "description": "Check if this attribute is used for product variations (variable products)",
    "fieldname": "is_variation",
@@ -49,13 +57,13 @@
    "label": "Used for Variation?"
   },
   {
-   "columns": 2,
+   "columns": 1,
    "default": "1",
    "description": "Check if this attribute is visible on the product page specification tab",
    "fieldname": "is_visible",
    "fieldtype": "Check",
    "in_list_view": 1,
-   "label": "Visible on Product Page?"
+   "label": "Visible?"
   }
  ],
  "istable": 1,
