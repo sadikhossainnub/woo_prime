@@ -369,6 +369,15 @@ frappe.ui.form.on("Woo Item", {
 				},
 			});
 
+			// Auto-fill description from Item Master if empty
+			if (!frm.doc.woo_description) {
+				frappe.db.get_value("Item", frm.doc.item_code, "description", function (r) {
+					if (r && r.description) {
+						frm.set_value("woo_description", r.description);
+					}
+				});
+			}
+
 			// If item_attributes table is currently empty, auto-populate from ERPNext
 			if (!frm.doc.item_attributes || frm.doc.item_attributes.length === 0) {
 				frappe.call({

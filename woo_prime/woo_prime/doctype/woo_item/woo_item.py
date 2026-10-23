@@ -35,6 +35,12 @@ class WooItem(Document):
 				if price:
 					self.regular_price = flt(price)
 
+			# Auto-fetch description from Item Master if woo_description is empty
+			if not self.woo_description:
+				raw_desc = frappe.db.get_value("Item", self.item_code, "description")
+				if raw_desc:
+					self.woo_description = html.unescape(str(raw_desc))
+
 		if self.woo_product_url:
 			self.woo_product_url = html.unescape(str(self.woo_product_url)).strip()
 
