@@ -355,6 +355,9 @@ frappe.ui.form.on("Woo Item", {
 				},
 			});
 		}
+
+		// Initialize Multi-Select Dropdown for Product Attributes table
+		_setup_attributes_multiselect(frm);
 	},
 
 	item_code(frm) {
@@ -387,6 +390,7 @@ frappe.ui.form.on("Woo Item", {
 					callback: function (r) {
 						if (r && r.message && r.message.status === "success") {
 							frm.refresh_field("item_attributes");
+							_setup_attributes_multiselect(frm);
 						}
 					},
 				});
@@ -420,6 +424,8 @@ frappe.ui.form.on("Woo Item Attribute", {
 				callback: function (r) {
 					if (r && r.message && r.message.terms && r.message.terms.length) {
 						let terms = r.message.terms;
+						frm._attribute_terms_cache = frm._attribute_terms_cache || {};
+						frm._attribute_terms_cache[row.attribute] = terms;
 						_update_multiselect_terms(frm, row.attribute, terms);
 
 						// If options is empty, auto-fill with terms
@@ -433,105 +439,22 @@ frappe.ui.form.on("Woo Item Attribute", {
 	},
 
 	btn_select_values(frm, cdt, cdn) {
-		let row = locals[cdt][cdn];
-		if (!row.attribute) {
-			frappe.msgprint(__("Please select a Woo Attribute first."));
-			return;
+		let grid_row = frm.get_field("item_attributes") && frm.get_field("item_attributes").grid.get_row(cdn);
+		let $btn = grid_row ? grid_row.$row.find("[data-fieldname='btn_select_values']") : null;
+		_open_attribute_multiselect_dropdown(frm, cdt, cdn, $btn, true);
+	},
+
+	form_render(frm, cdt, cdn) {
+		let grid_row = frm.get_field("item_attributes") && frm.get_field("item_attributes").grid.get_row(cdn);
+		if (grid_row && grid_row.grid_form) {
+			let $options_input = grid_row.grid_form.fields_dict.options && grid_row.grid_form.fields_dict.options.$input;
+			if ($options_input && !$options_input.data("woo-multiselect-attached")) {
+				$options_input.data("woo-multiselect-attached", true);
+				$options_input.on("focus click", function () {
+					_open_attribute_multiselect_dropdown(frm, cdt, cdn, $options_input);
+				});
+			}
 		}
-
-		frappe.call({
-			method: "woo_prime.woo_prime.doctype.woo_item.woo_item.get_attribute_terms_for_woo_item",
-			args: {
-				woo_attribute: row.attribute,
-				item_code: frm.doc.item_code || null,
-			},
-			freeze: true,
-			freeze_message: __("Loading values..."),
-			callback: function (r) {
-				let terms = (r && r.message && r.message.terms) ? r.message.terms : [];
-				let current_vals = (row.options || "")
-					.replace(/\n/g, ",")
-					.split(",")
-					.map((v) => v.trim())
-					.filter(Boolean);
-
-				let all_terms = Array.from(new Set([...terms, ...current_vals])).sort();
-
-				if (all_terms.length === 0) {
-					frappe.prompt(
-						[
-							{
-								label: __("Values (Comma-separated)"),
-								fieldname: "custom_values",
-								fieldtype: "Small Text",
-								default: row.options || "",
-								reqd: 1,
-							},
-						],
-						function (values) {
-							frappe.model.set_value(cdt, cdn, "options", values.custom_values);
-						},
-						__("Set Values for {0}", [row.attribute]),
-						__("Set Values")
-					);
-					return;
-				}
-
-				let check_options = all_terms.map((t) => ({
-					label: t,
-					value: t,
-					checked: current_vals.includes(t),
-				}));
-
-				let d = new frappe.ui.Dialog({
-					title: __("Select Values for {0}", [row.attribute]),
-					fields: [
-						{
-							fieldtype: "HTML",
-							fieldname: "quick_actions",
-							options: `
-								<div class="mb-2">
-									<button class="btn btn-xs btn-default select-all-btn mr-1">Select All</button>
-									<button class="btn btn-xs btn-default unselect-all-btn">Unselect All</button>
-								</div>
-							`,
-						},
-						{
-							fieldtype: "MultiCheck",
-							fieldname: "selected_terms",
-							label: __("Available Values"),
-							options: check_options,
-							columns: 2,
-						},
-						{
-							fieldtype: "Data",
-							fieldname: "add_custom",
-							label: __("Add New Value"),
-							description: __("Type and click Apply if value is not in list"),
-						},
-					],
-					primary_action_label: __("Apply"),
-					primary_action: function () {
-						let selected = d.get_value("selected_terms") || [];
-						let custom = (d.get_value("add_custom") || "").trim();
-						if (custom && !selected.includes(custom)) {
-							selected.push(custom);
-						}
-						frappe.model.set_value(cdt, cdn, "options", selected.join(", "));
-						d.hide();
-					},
-				});
-
-				d.$wrapper.find(".select-all-btn").on("click", function () {
-					d.set_value("selected_terms", all_terms);
-				});
-				d.$wrapper.find(".unselect-all-btn").on("click", function () {
-					d.set_value("selected_terms", []);
-				});
-
-				d.show();
-			},
-		});
 	},
 
 	item_attributes_add(frm, cdt, cdn) {
@@ -541,6 +464,388 @@ frappe.ui.form.on("Woo Item Attribute", {
 	},
 });
 
+function _inject_multiselect_styles() {
+	if (document.getElementById("woo-multiselect-styles")) return;
+	let style = document.createElement("style");
+	style.id = "woo-multiselect-styles";
+	style.innerHTML = `
+		.woo-multiselect-dropdown {
+			position: absolute;
+			z-index: 1060;
+			background: var(--card-bg, #ffffff);
+			color: var(--text-color, #1f272e);
+			border: 1px solid var(--border-color, #d1d8dd);
+			border-radius: 8px;
+			box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+			min-width: 290px;
+			max-width: 420px;
+			padding: 10px 12px;
+			font-size: 12px;
+			animation: fadeInFast 0.15s ease-in-out;
+		}
+		.woo-multiselect-dropdown .dropdown-header {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			border-bottom: 1px solid var(--border-color, #ebeff2);
+			padding-bottom: 6px;
+			margin-bottom: 8px;
+		}
+		.woo-multiselect-dropdown .term-search-box {
+			font-size: 11px;
+			height: 28px;
+			padding: 4px 8px;
+			border-radius: 4px;
+			border: 1px solid var(--border-color, #d1d8dd);
+			width: 100%;
+			margin-bottom: 8px;
+		}
+		.woo-multiselect-dropdown .terms-scroll-area {
+			max-height: 180px;
+			overflow-y: auto;
+			border: 1px solid var(--border-color, #ebeff2);
+			border-radius: 6px;
+			padding: 6px 8px;
+			margin-bottom: 8px;
+			background: var(--bg-light-gray, #f8f9fa);
+		}
+		.woo-multiselect-dropdown .term-label {
+			display: flex;
+			align-items: center;
+			margin-bottom: 4px;
+			cursor: pointer;
+			font-size: 12px;
+			font-weight: 500;
+			padding: 3px 6px;
+			border-radius: 4px;
+			transition: background 0.1s;
+		}
+		.woo-multiselect-dropdown .term-label:hover {
+			background: var(--fg-hover-color, #e9ecef);
+		}
+		.woo-multiselect-dropdown .term-label input {
+			margin-right: 8px;
+			cursor: pointer;
+			accent-color: var(--primary, #171717);
+		}
+		.woo-multiselect-dropdown .dropdown-footer {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			border-top: 1px solid var(--border-color, #ebeff2);
+			padding-top: 8px;
+			gap: 6px;
+		}
+		.grid-row [data-fieldname="options"] input {
+			background-image: url("data:image/svg+xml;utf8,<svg fill='%238d99a6' height='18' viewBox='0 0 24 24' width='18' xmlns='http://www.w3.org/2000/svg'><path d='M7 10l5 5 5-5z'/></svg>") !important;
+			background-repeat: no-repeat !important;
+			background-position: right 6px center !important;
+			padding-right: 22px !important;
+			cursor: pointer;
+		}
+	`;
+	document.head.appendChild(style);
+}
+
+function _setup_attributes_multiselect(frm) {
+	_inject_multiselect_styles();
+
+	frm._attribute_terms_cache = frm._attribute_terms_cache || {};
+
+	let attrs = (frm.doc.item_attributes || [])
+		.map((r) => r.attribute)
+		.filter(Boolean);
+
+	if (attrs.length > 0) {
+		frappe.call({
+			method: "woo_prime.woo_prime.doctype.woo_item.woo_item.get_all_attribute_terms_for_woo_item",
+			args: {
+				attributes: JSON.stringify(Array.from(new Set(attrs))),
+				item_code: frm.doc.item_code || null,
+			},
+			callback: function (r) {
+				if (r && r.message && r.message.attribute_terms) {
+					Object.assign(frm._attribute_terms_cache, r.message.attribute_terms);
+				}
+			},
+		});
+	}
+
+	let grid_field = frm.get_field("item_attributes");
+	if (grid_field && grid_field.grid) {
+		let df = grid_field.grid.get_docfield("options");
+		if (df) {
+			df.get_data = function () {
+				let row = null;
+				if (frm.cur_grid && frm.cur_grid.grid_row && frm.cur_grid.grid_row.doc) {
+					row = frm.cur_grid.grid_row.doc;
+				} else if (frappe.ui.form.get_open_grid_form()) {
+					let gf = frappe.ui.form.get_open_grid_form();
+					row = gf.doc;
+				}
+				if (row && row.attribute && frm._attribute_terms_cache && frm._attribute_terms_cache[row.attribute]) {
+					return frm._attribute_terms_cache[row.attribute];
+				}
+				return [];
+			};
+		}
+
+		let $wrapper = grid_field.$wrapper;
+		if ($wrapper && !$wrapper.data("woo-multiselect-init")) {
+			$wrapper.data("woo-multiselect-init", true);
+
+			$wrapper.on("focus click", "input[data-fieldname='options']", function (e) {
+				let $input = $(this);
+				let $row = $input.closest(".grid-row");
+				let docname = $row.attr("data-name");
+				if (!docname) return;
+				let row = (frm.doc.item_attributes || []).find((r) => r.name === docname);
+				if (row) {
+					_open_attribute_multiselect_dropdown(frm, row.doctype, row.name, $input);
+				}
+			});
+
+			$wrapper.on("click", ".grid-row .col[data-fieldname='options']", function (e) {
+				if ($(e.target).closest(".woo-multiselect-dropdown, input").length) return;
+				let $col = $(this);
+				let $row = $col.closest(".grid-row");
+				let docname = $row.attr("data-name");
+				if (!docname) return;
+				let row = (frm.doc.item_attributes || []).find((r) => r.name === docname);
+				if (row) {
+					setTimeout(() => {
+						let $input = $col.find("input[data-fieldname='options']");
+						_open_attribute_multiselect_dropdown(frm, row.doctype, row.name, $input.length ? $input : $col);
+					}, 50);
+				}
+			});
+		}
+	}
+}
+
+function _open_attribute_multiselect_dropdown(frm, cdt, cdn, $target_elem, is_button) {
+	let row = locals[cdt] && locals[cdt][cdn];
+	if (!row) return;
+
+	if (!row.attribute) {
+		frappe.show_alert(
+			{
+				message: __("Please select a Woo Attribute first."),
+				indicator: "orange",
+			},
+			3
+		);
+		return;
+	}
+
+	$("#woo-multiselect-dropdown").remove();
+
+	let render_dropdown = function (terms) {
+		let current_vals = (row.options || "")
+			.replace(/\n/g, ",")
+			.split(",")
+			.map((v) => v.trim())
+			.filter(Boolean);
+
+		let all_terms = Array.from(new Set([...terms, ...current_vals])).sort((a, b) =>
+			a.localeCompare(undefined, { numeric: true, sensitivity: "base" })
+		);
+
+		let selected_set = new Set(current_vals);
+
+		let $dropdown = $(`
+			<div id="woo-multiselect-dropdown" class="woo-multiselect-dropdown">
+				<div class="dropdown-header">
+					<div class="d-flex align-items-center" style="gap: 6px;">
+						<i class="fa fa-list text-primary"></i>
+						<strong>${frappe.utils.escape_html(row.attribute)}</strong>
+						<span class="badge badge-info text-xs selected-count">${selected_set.size} selected</span>
+					</div>
+					<button type="button" class="btn btn-xs btn-link p-0 text-muted btn-close">&times;</button>
+				</div>
+				<div class="d-flex align-items-center justify-content-between mb-2" style="gap: 6px;">
+					<div>
+						<button type="button" class="btn btn-xs btn-default select-all-btn mr-1">Select All</button>
+						<button type="button" class="btn btn-xs btn-default clear-all-btn">Clear All</button>
+					</div>
+					${all_terms.length > 5 ? `<input type="text" class="form-control term-search-box m-0" placeholder="Filter..." style="width: 120px;">` : ""}
+				</div>
+				<div class="terms-scroll-area">
+					${
+						all_terms.length === 0
+							? `<div class="text-muted p-2 text-center text-xs">No predefined values found. Add one below.</div>`
+							: all_terms
+									.map(
+										(t) => `
+							<label class="term-label" data-term="${frappe.utils.escape_html(t).toLowerCase()}">
+								<input type="checkbox" value="${frappe.utils.escape_html(t)}" ${selected_set.has(t) ? "checked" : ""}>
+								<span class="term-text">${frappe.utils.escape_html(t)}</span>
+							</label>
+						`
+									)
+									.join("")
+					}
+				</div>
+				<div class="dropdown-footer">
+					<div class="input-group input-group-xs flex-grow-1 mr-2" style="max-width: 220px;">
+						<input type="text" class="form-control add-custom-term-input" placeholder="Add new value..." style="font-size: 11px; height: 26px;">
+						<div class="input-group-append">
+							<button type="button" class="btn btn-xs btn-primary add-custom-term-btn">Add</button>
+						</div>
+					</div>
+					<button type="button" class="btn btn-xs btn-primary btn-done">Done</button>
+				</div>
+			</div>
+		`);
+
+		$("body").append($dropdown);
+
+		if ($target_elem && $target_elem.is(":visible")) {
+			let offset = $target_elem.offset();
+			let elem_h = $target_elem.outerHeight();
+			let drop_w = $dropdown.outerWidth() || 320;
+			let drop_h = $dropdown.outerHeight() || 280;
+
+			let top = offset.top + elem_h + 4;
+			let left = offset.left;
+
+			if (left + drop_w > $(window).width() - 20) {
+				left = Math.max(10, $(window).width() - drop_w - 20);
+			}
+			if (top + drop_h > $(window).height() + $(window).scrollTop() - 10) {
+				top = Math.max(10, offset.top - drop_h - 4);
+			}
+
+			$dropdown.css({ top: top + "px", left: left + "px" });
+		} else {
+			$dropdown.css({
+				position: "fixed",
+				top: "50%",
+				left: "50%",
+				transform: "translate(-50%, -50%)",
+				boxShadow: "0 12px 36px rgba(0,0,0,0.25)",
+			});
+		}
+
+		let update_values = function () {
+			let arr = Array.from(selected_set);
+			let val_str = arr.join(", ");
+			frappe.model.set_value(cdt, cdn, "options", val_str);
+			if ($target_elem && $target_elem.is("input")) {
+				$target_elem.val(val_str);
+			}
+			$dropdown.find(".selected-count").text(`${selected_set.size} selected`);
+			frm.dirty();
+		};
+
+		$dropdown.on("change", ".term-label input", function () {
+			let val = $(this).val();
+			if (this.checked) {
+				selected_set.add(val);
+			} else {
+				selected_set.delete(val);
+			}
+			update_values();
+		});
+
+		$dropdown.find(".select-all-btn").on("click", function () {
+			$dropdown.find(".term-label:visible input").each(function () {
+				this.checked = true;
+				selected_set.add($(this).val());
+			});
+			update_values();
+		});
+
+		$dropdown.find(".clear-all-btn").on("click", function () {
+			$dropdown.find(".term-label:visible input").each(function () {
+				this.checked = false;
+				selected_set.delete($(this).val());
+			});
+			update_values();
+		});
+
+		$dropdown.find(".term-search-box").on("input", function () {
+			let q = $(this).val().toLowerCase().trim();
+			$dropdown.find(".term-label").each(function () {
+				let t = $(this).attr("data-term") || "";
+				$(this).toggle(!q || t.includes(q));
+			});
+		});
+
+		let handle_add_custom = function () {
+			let $inp = $dropdown.find(".add-custom-term-input");
+			let val = ($inp.val() || "").trim();
+			if (!val) return;
+			$inp.val("");
+			if (!selected_set.has(val)) {
+				selected_set.add(val);
+				let $existing = $dropdown.find(`.term-label input[value="${val}"]`);
+				if ($existing.length) {
+					$existing.prop("checked", true);
+				} else {
+					let $new_label = $(`
+						<label class="term-label" data-term="${frappe.utils.escape_html(val).toLowerCase()}">
+							<input type="checkbox" value="${frappe.utils.escape_html(val)}" checked>
+							<span class="term-text">${frappe.utils.escape_html(val)}</span>
+						</label>
+					`);
+					$dropdown.find(".terms-scroll-area").append($new_label);
+				}
+				update_values();
+			}
+		};
+
+		$dropdown.find(".add-custom-term-btn").on("click", handle_add_custom);
+		$dropdown.find(".add-custom-term-input").on("keypress", function (e) {
+			if (e.which === 13) {
+				e.preventDefault();
+				handle_add_custom();
+			}
+		});
+
+		let close_dropdown = function () {
+			$dropdown.remove();
+			$(document).off("mousedown.woo_multiselect keydown.woo_multiselect");
+		};
+
+		$dropdown.find(".btn-close, .btn-done").on("click", close_dropdown);
+
+		setTimeout(() => {
+			$(document).on("mousedown.woo_multiselect", function (e) {
+				if (!$(e.target).closest("#woo-multiselect-dropdown").length && !$(e.target).is($target_elem)) {
+					close_dropdown();
+				}
+			});
+			$(document).on("keydown.woo_multiselect", function (e) {
+				if (e.which === 27) {
+					close_dropdown();
+				}
+			});
+		}, 100);
+	};
+
+	let cached = frm._attribute_terms_cache && frm._attribute_terms_cache[row.attribute];
+	if (cached && cached.length) {
+		render_dropdown(cached);
+	} else {
+		frappe.call({
+			method: "woo_prime.woo_prime.doctype.woo_item.woo_item.get_attribute_terms_for_woo_item",
+			args: {
+				woo_attribute: row.attribute,
+				item_code: frm.doc.item_code || null,
+			},
+			freeze: is_button,
+			freeze_message: is_button ? __("Loading values...") : null,
+			callback: function (r) {
+				let terms = r && r.message && r.message.terms ? r.message.terms : [];
+				frm._attribute_terms_cache = frm._attribute_terms_cache || {};
+				frm._attribute_terms_cache[row.attribute] = terms;
+				render_dropdown(terms);
+			},
+		});
+	}
+}
+
 function _update_multiselect_terms(frm, attr_name, terms) {
 	if (!terms || !terms.length) return;
 	try {
@@ -549,9 +854,6 @@ function _update_multiselect_terms(frm, attr_name, terms) {
 			let df = grid_field.grid.get_docfield("options");
 			if (df) {
 				df.options = terms.join("\n");
-				df.get_data = function () {
-					return terms;
-				};
 			}
 		}
 	} catch (e) {
