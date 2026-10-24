@@ -1022,6 +1022,10 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 			if not opts and row.attribute in attributes_dict:
 				opts = sorted(list(attributes_dict[row.attribute]))
 
+			# Skip variation attributes with no options — WooCommerce rejects empty options for variations
+			if not opts and getattr(row, "is_variation", 1):
+				continue
+
 			woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr_name, api)
 			is_var = bool(getattr(row, "is_variation", 1))
 			attr_payload = {
@@ -1512,7 +1516,11 @@ def _get_item_images(item, woo_item=None, api=None):
 	return images
 
 
-_CAT_CACHE = {}
+def _get_cat_cache():
+	"""Request-scoped category cache — never stale across requests."""
+	if not hasattr(frappe.local, "_woo_cat_cache"):
+		frappe.local._woo_cat_cache = {}
+	return frappe.local._woo_cat_cache
 
 
 def _get_woo_category_ids(woo_item, api):
@@ -1613,22 +1621,23 @@ def _get_or_create_woo_category_id(cat_name, api):
 	if not cat_name:
 		return None
 
+	_cat_cache = _get_cat_cache()
 	cat_key = cat_name.strip().lower()
-	if cat_key in _CAT_CACHE:
-		return _CAT_CACHE[cat_key]
+	if cat_key in _cat_cache:
+		return _cat_cache[cat_key]
 
 	try:
 		if frappe.db.exists("Woo Category", cat_name):
 			woo_cat_id = frappe.db.get_value("Woo Category", cat_name, "woo_category_id")
 			if woo_cat_id:
-				_CAT_CACHE[cat_key] = int(woo_cat_id)
+				_cat_cache[cat_key] = int(woo_cat_id)
 				return int(woo_cat_id)
 
 			from woo_prime.woo_prime.doctype.woo_category.woo_category import push_category_to_woo
 			res = push_category_to_woo(cat_name)
 			if res and isinstance(res, dict) and res.get("id"):
 				cid = int(res.get("id"))
-				_CAT_CACHE[cat_key] = cid
+				_cat_cache[cat_key] = cid
 				return cid
 
 		response = api.get("products/categories", params={"search": cat_name})
@@ -1638,7 +1647,7 @@ def _get_or_create_woo_category_id(cat_name, api):
 				if cat.get("name", "").strip().lower() == cat_key:
 					cid = int(cat.get("id"))
 					_save_woo_category_loc(cat_name, cid, cat.get("slug"))
-					_CAT_CACHE[cat_key] = cid
+					_cat_cache[cat_key] = cid
 					return cid
 
 		create_resp = api.post("products/categories", data={"name": cat_name})
@@ -1646,7 +1655,7 @@ def _get_or_create_woo_category_id(cat_name, api):
 			new_cat = create_resp.json()
 			cat_id = int(new_cat.get("id"))
 			_save_woo_category_loc(cat_name, cat_id, new_cat.get("slug"))
-			_CAT_CACHE[cat_key] = cat_id
+			_cat_cache[cat_key] = cat_id
 			return cat_id
 	except Exception:
 		frappe.log_error(title=f"woo_prime: Category creation/fetch error for {cat_name}", message=frappe.get_traceback())
