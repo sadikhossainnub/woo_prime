@@ -35,10 +35,10 @@
    "columns": 3,
    "description": "Multi-select attribute values/terms",
    "fieldname": "options",
-   "fieldtype": "MultiSelect",
+   "fieldtype": "Small Text",
    "in_list_view": 1,
    "label": "Values / Options",
-   "reqd": 1
+   "reqd": 0
   },
   {
    "columns": 1,

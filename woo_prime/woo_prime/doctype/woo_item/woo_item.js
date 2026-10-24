@@ -9,24 +9,20 @@ frappe.ui.form.on("Woo Item", {
 				__("Publish to WooCommerce"),
 				function () {
 					let do_publish = function () {
-						frappe.confirm(
-							__("Publish <b>{0}</b> to WooCommerce in the background?", [frm.doc.item_name || frm.doc.name]),
-							function () {
-								frappe.call({
-									method: "publish_to_woocommerce",
-									doc: frm.doc,
-									args: { background: true },
-									callback: function (r) {
-										if (r && r.message) {
-											frappe.show_alert({
-												message: r.message.message || __("Publishing to WooCommerce in background..."),
-												indicator: "blue"
-											}, 5);
-										}
-									}
-								});
+						frappe.call({
+							method: "woo_prime.woo_prime.doctype.woo_item.woo_item.publish_single_item",
+							args: {
+								woo_item_name: frm.doc.name,
+								background: false
+							},
+							freeze: true,
+							freeze_message: __("Publishing to WooCommerce..."),
+							callback: function (r) {
+								if (r && r.message) {
+									frm.reload_doc();
+								}
 							}
-						);
+						});
 					};
 					if (frm.is_dirty()) {
 						frm.save().then(do_publish);
@@ -385,6 +381,15 @@ frappe.ui.form.on("Woo Item", {
 
 	item_code(frm) {
 		if (frm.doc.item_code) {
+			// Auto-fill item_name from Item Master only if item_name is currently empty
+			if (!frm.doc.item_name) {
+				frappe.db.get_value("Item", frm.doc.item_code, "item_name", function (r) {
+					if (r && r.item_name && !frm.doc.item_name) {
+						frm.set_value("item_name", r.item_name);
+					}
+				});
+			}
+
 			frappe.call({
 				method: "woo_prime.woo_prime.doctype.woo_item.woo_item.get_item_price_rate",
 				args: { item_code: frm.doc.item_code },
@@ -755,8 +760,19 @@ function _open_attribute_multiselect_dropdown(frm, cdt, cdn, $target_elem, is_bu
 			let arr = Array.from(selected_set);
 			let val_str = arr.join(", ");
 			frappe.model.set_value(cdt, cdn, "options", val_str);
-			if ($target_elem && $target_elem.is("input")) {
-				$target_elem.val(val_str);
+			if ($target_elem) {
+				if ($target_elem.is("input")) {
+					$target_elem.val(val_str).trigger("change");
+				} else {
+					let $inp = $target_elem.find("input");
+					if ($inp.length) {
+						$inp.val(val_str).trigger("change");
+					}
+				}
+			}
+			let grid_field = frm.get_field("item_attributes");
+			if (grid_field && grid_field.grid) {
+				grid_field.grid.refresh();
 			}
 			$dropdown.find(".selected-count").text(`${selected_set.size} selected`);
 			frm.dirty();
@@ -803,6 +819,14 @@ function _open_attribute_multiselect_dropdown(frm, cdt, cdn, $target_elem, is_bu
 			$inp.val("");
 			if (!selected_set.has(val)) {
 				selected_set.add(val);
+				// Bug #10 fix: persist custom term into cache so it appears on next dropdown open
+				if (row.attribute) {
+					frm._attribute_terms_cache = frm._attribute_terms_cache || {};
+					let cached = frm._attribute_terms_cache[row.attribute] || [];
+					if (!cached.includes(val)) {
+						frm._attribute_terms_cache[row.attribute] = [...cached, val].sort();
+					}
+				}
 				let $existing = $dropdown.find(`.term-label input[value="${val}"]`);
 				if ($existing.length) {
 					$existing.prop("checked", true);
@@ -871,17 +895,14 @@ function _open_attribute_multiselect_dropdown(frm, cdt, cdn, $target_elem, is_bu
 }
 
 function _update_multiselect_terms(frm, attr_name, terms) {
+	// Bug #9 fix: do NOT overwrite shared df.options (affects all rows).
+	// Only update the per-attribute cache used by _open_attribute_multiselect_dropdown.
 	if (!terms || !terms.length) return;
 	try {
-		let grid_field = frm.get_field("item_attributes");
-		if (grid_field && grid_field.grid) {
-			let df = grid_field.grid.get_docfield("options");
-			if (df) {
-				df.options = terms.join("\n");
-			}
-		}
+		frm._attribute_terms_cache = frm._attribute_terms_cache || {};
+		frm._attribute_terms_cache[attr_name] = terms;
 	} catch (e) {
-		console.warn("Could not update multiselect options:", e);
+		console.warn("Could not update attribute terms cache:", e);
 	}
 }
 

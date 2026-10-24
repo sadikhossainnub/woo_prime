@@ -66,11 +66,11 @@
    "options": "Item"
   },
   {
-   "fetch_from": "item_code.item_name",
    "fieldname": "item_name",
    "fieldtype": "Data",
    "label": "Item Name",
-   "read_only": 1
+   "in_list_view": 1,
+   "description": "Product Title on WooCommerce. Auto-fetched from Item Master if empty, but editable."
   },
   {
    "description": "Regular selling price on WooCommerce. If empty, auto-fetched from ERPNext Item Price.",

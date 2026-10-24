@@ -51,6 +51,18 @@ class WooItem(Document):
 		# Auto-populate product attributes from ERPNext if table is empty
 		self._auto_populate_attributes()
 
+		# Ensure item_attributes have options populated or fallback from master
+		self._validate_and_fill_attribute_options()
+
+	def _validate_and_fill_attribute_options(self):
+		"""Ensure no attribute row is left with empty options if terms can be discovered."""
+		for row in (self.item_attributes or []):
+			if not row.options and row.attribute:
+				terms_data = get_attribute_terms_for_woo_item(row.attribute, item_code=self.item_code)
+				terms = terms_data.get("terms", [])
+				if terms:
+					row.options = ", ".join(terms)
+
 	def _auto_populate_attributes(self):
 		"""Auto-populate item_attributes child table from ERPNext Item / Variants if empty."""
 		if getattr(self, "item_attributes", None) and len(self.item_attributes) > 0:
@@ -68,7 +80,13 @@ class WooItem(Document):
 		if overwrite:
 			self.set("item_attributes", [])
 
-		existing_attrs = {r.attribute: r for r in (self.item_attributes or []) if r.attribute}
+		# Bug #3 fix: index by BOTH woo_attr name AND erpnext attribute_name to prevent duplicate rows
+		existing_attrs = {}
+		for r in (self.item_attributes or []):
+			if r.attribute:
+				existing_attrs[r.attribute] = r
+			if r.attribute_name:
+				existing_attrs[r.attribute_name] = r
 
 		if getattr(item, "has_variants", 0):
 			variant_names = frappe.get_all(
@@ -77,13 +95,22 @@ class WooItem(Document):
 				pluck="name"
 			)
 			attr_values = {}
-			for v_name in variant_names:
-				v_doc = frappe.get_doc("Item", v_name)
-				for a in (v_doc.attributes or []):
+
+			# Bug #1 fix: single batch query instead of N+1 frappe.get_doc() calls
+			if variant_names:
+				all_variant_attrs = frappe.get_all(
+					"Item Variant Attribute",
+					filters={"parent": ["in", variant_names]},
+					fields=["parent", "attribute", "attribute_value"],
+				)
+				for a in all_variant_attrs:
 					if a.attribute:
 						val = clean_text(a.attribute_value) if a.attribute_value else ""
 						if val:
 							attr_values.setdefault(a.attribute, set()).add(val)
+						else:
+							# Bug #2 fix: register attribute even when value is empty
+							attr_values.setdefault(a.attribute, set())
 
 			# Include template-level defined attributes
 			for a in (item.attributes or []):
@@ -94,6 +121,8 @@ class WooItem(Document):
 
 			for attr_name, vals in attr_values.items():
 				woo_attr = _get_or_create_woo_attribute_doc(attr_name)
+				if not woo_attr:
+					continue
 				val_str = ", ".join(sorted(list(vals)))
 				if woo_attr in existing_attrs or attr_name in existing_attrs:
 					row = existing_attrs.get(woo_attr) or existing_attrs.get(attr_name)
@@ -113,6 +142,8 @@ class WooItem(Document):
 				if not a.attribute:
 					continue
 				woo_attr = _get_or_create_woo_attribute_doc(a.attribute)
+				if not woo_attr:
+					continue
 				val = clean_text(a.attribute_value) if a.attribute_value else ""
 				if woo_attr in existing_attrs or a.attribute in existing_attrs:
 					row = existing_attrs.get(woo_attr) or existing_attrs.get(a.attribute)
@@ -178,7 +209,8 @@ class WooItem(Document):
 				queue="long",
 				timeout=1800,
 				enqueue_after_commit=True,
-				job_name=f"woo_publish_{self.name}",
+				job_id=f"woo_publish_{self.name}",
+				deduplicate=True,
 			)
 			msg = _("Publishing '{0}' to WooCommerce in the background...").format(self.item_name or self.name)
 			if frappe.request:
@@ -409,6 +441,31 @@ class WooItem(Document):
 			frappe.throw(_("Price sync failed: {0}").format(str(e)))
 
 
+@frappe.whitelist()
+def publish_single_item(woo_item_name, background=False):
+	"""Standalone whitelist method to publish a Woo Item without for_update lock."""
+	frappe.only_for(["System Manager", "Woo Manager"])
+	background = _parse_bool(background)
+	if not woo_item_name or not frappe.db.exists("Woo Item", woo_item_name):
+		frappe.throw(_("Woo Item {0} not found.").format(woo_item_name))
+
+	doc = frappe.get_doc("Woo Item", woo_item_name)
+	return doc.publish_to_woocommerce(background=background)
+
+
+@frappe.whitelist()
+def test_publish(woo_item_name="TP00210"):
+	import traceback
+	try:
+		doc = frappe.get_doc("Woo Item", woo_item_name)
+		res = doc._execute_publish_sync(user="Administrator")
+		print("PUBLISH SUCCESS:", res)
+		return res
+	except Exception as e:
+		traceback.print_exc()
+		return {"error": str(e), "traceback": traceback.format_exc()}
+
+
 # -------------------------------------------------------------------------
 # Description & Table Formatting Helpers
 # -------------------------------------------------------------------------
@@ -496,7 +553,10 @@ def fix_existing_table_descriptions(woo_item_name=None):
 # -------------------------------------------------------------------------
 
 def _get_or_create_woo_attribute_doc(attr_name):
-	"""Find or create Woo Attribute for the given attribute name."""
+	"""Find or create Woo Attribute for the given attribute name.
+
+	Returns the Woo Attribute name (str) or None if it could not be found or created.
+	"""
 	clean = clean_text(attr_name)
 	woo_attr_name = (
 		frappe.db.get_value("Woo Attribute", {"attribute_name": clean})
@@ -513,8 +573,23 @@ def _get_or_create_woo_attribute_doc(attr_name):
 			wa.flags.ignore_permissions = True
 			wa.save(ignore_permissions=True)
 			woo_attr_name = wa.name
+		except frappe.DuplicateEntryError:
+			# Another request created it concurrently — re-fetch
+			woo_attr_name = (
+				frappe.db.get_value("Woo Attribute", {"attribute_name": clean})
+				or frappe.db.get_value("Woo Attribute", {"erpnext_item_attribute": clean})
+				or (frappe.db.exists("Woo Attribute", clean) and clean)
+			)
+			if not woo_attr_name:
+				frappe.logger("woo_prime").warning(
+					f"_get_or_create_woo_attribute_doc: could not find or create Woo Attribute for '{clean}'"
+				)
+				return None
 		except Exception:
-			woo_attr_name = clean
+			frappe.logger("woo_prime").warning(
+				f"_get_or_create_woo_attribute_doc: failed to create Woo Attribute for '{clean}'"
+			)
+			return None
 	return woo_attr_name
 
 
@@ -580,7 +655,14 @@ def get_attribute_terms_for_woo_item(woo_attribute, item_code=None):
 		except Exception:
 			pass
 
-	return {"terms": sorted(list(terms))}
+	# Bug #8 fix: deduplicate case-insensitively (keep original casing of first seen value)
+	seen_lower = set()
+	deduped = []
+	for t in sorted(list(terms)):
+		if t.lower() not in seen_lower:
+			seen_lower.add(t.lower())
+			deduped.append(t)
+	return {"terms": deduped}
 
 
 @frappe.whitelist()
@@ -657,6 +739,15 @@ def _publish_single_woo_item_worker(woo_item_name, user=None):
 	except Exception as e:
 		frappe.db.rollback()
 		frappe.logger("woo_prime").error(f"Background publish failed for {woo_item_name}: {e}")
+		# After rollback, persist Error status in a fresh transaction so user sees it on form
+		try:
+			frappe.db.set_value("Woo Item", woo_item_name, {
+				"sync_status": "Error",
+				"last_synced": now_datetime(),
+			})
+			frappe.db.commit()
+		except Exception:
+			pass
 
 
 def _bulk_publish_worker(items, user=None):

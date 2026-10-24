@@ -7,7 +7,7 @@ import json
 import frappe
 from frappe import _
 from frappe.utils import now_datetime, flt, cstr, today, add_days
-from woo_prime.utils import safe_log_error
+from woo_prime.utils import safe_log_error, clean_text
 
 
 def sync_order(order_data):
@@ -916,8 +916,9 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings):
 	stock_qty = _get_stock_qty(woo_item.item_code, settings.default_warehouse)
 
 	manage_stock = bool(getattr(woo_item, "manage_stock", 1))
+	product_name = woo_item.item_name or item.item_name or ""
 	product_data = {
-		"name": html.unescape(item.item_name or ""),
+		"name": html.unescape(product_name),
 		"sku": woo_item.sku,
 		"regular_price": str(flt(regular_price)),
 		"description": html.unescape(woo_item.woo_description or item.description or ""),
@@ -1027,7 +1028,7 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 				"name": target_name or attr_name,
 				"visible": bool(getattr(row, "is_visible", 1)),
 				"variation": is_var,
-				"options": opts or [attr_name],
+				"options": opts if opts else [],
 			}
 			if woo_attr_id:
 				attr_payload["id"] = int(woo_attr_id)
@@ -1055,8 +1056,9 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 			if target_name:
 				variation_attr_keys.add(clean_text(target_name).lower())
 
+	product_name = woo_item.item_name or item.item_name or ""
 	product_data = {
-		"name": html.unescape(item.item_name or ""),
+		"name": html.unescape(product_name),
 		"type": "variable",
 		"sku": woo_item.sku,
 		"description": html.unescape(woo_item.woo_description or item.description or ""),
@@ -1101,6 +1103,9 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 			result = api.update_product(existing_id, product_data)
 		else:
 			result = api.create_product(product_data)
+
+	if not result or not result.get("id"):
+		frappe.throw(f"WooCommerce did not return a valid product ID for template '{item.name}'. Response: {str(result)[:300]}")
 
 	parent_woo_id = result.get("id")
 	woo_item.woo_product_id = parent_woo_id
@@ -1330,10 +1335,14 @@ def _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_
 		attr_key = clean_text(attr.attribute).lower()
 		woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr.attribute, api)
 		target_key = clean_text(target_name).lower() if target_name else attr_key
+		# Bug #7 fix: also try slug/scrubbed forms to avoid missing valid variation attrs
+		slug_key = frappe.scrub(attr.attribute).replace("_", "-").lower()
+		pa_slug_key = "pa_" + slug_key
 
 		# Filter out attributes not marked as variation
 		if variation_attr_keys is not None and len(variation_attr_keys) > 0:
-			if attr_key not in variation_attr_keys and target_key not in variation_attr_keys:
+			candidate_keys = {attr_key, target_key, slug_key, pa_slug_key}
+			if not candidate_keys.intersection(variation_attr_keys):
 				continue
 
 		var_attr = {
@@ -1641,7 +1650,14 @@ def _get_or_create_woo_category_id(cat_name, api):
 			return cat_id
 	except Exception:
 		frappe.log_error(title=f"woo_prime: Category creation/fetch error for {cat_name}", message=frappe.get_traceback())
-_ATTR_CACHE = {}
+def _get_attr_cache():
+	"""Return a request-scoped attribute ID cache stored in frappe.local.
+	Using frappe.local avoids stale data from a module-level dict that persists
+	across requests in the same worker process (Bug #6).
+	"""
+	if not hasattr(frappe.local, "_woo_attr_cache"):
+		frappe.local._woo_attr_cache = {}
+	return frappe.local._woo_attr_cache
 
 
 def _get_or_create_woo_attribute_id(attr_name, api=None):
@@ -1659,8 +1675,10 @@ def _get_or_create_woo_attribute_id(attr_name, api=None):
 		return (None, attr_name)
 
 	key = attr_name.strip().lower()
-	if key in _ATTR_CACHE:
-		return _ATTR_CACHE[key]
+	# Bug #6 fix: use request-scoped cache instead of stale module-level dict
+	_cache = _get_attr_cache()
+	if key in _cache:
+		return _cache[key]
 
 	# 1. Check Woo Settings attribute_mappings table (explicit user mapping)
 	try:
@@ -1672,7 +1690,7 @@ def _get_or_create_woo_attribute_id(attr_name, api=None):
 					woo_attr_name = frappe.db.get_value("Woo Attribute", row.woo_attribute, "attribute_name") or row.woo_attribute
 					if woo_attr_id:
 						res = (int(woo_attr_id), woo_attr_name)
-						_ATTR_CACHE[key] = res
+						_cache[key] = res
 						return res
 	except Exception:
 		pass
@@ -1688,7 +1706,7 @@ def _get_or_create_woo_attribute_id(attr_name, api=None):
 
 		if matched and matched.get("woo_attribute_id"):
 			res = (int(matched.woo_attribute_id), matched.attribute_name)
-			_ATTR_CACHE[key] = res
+			_cache[key] = res
 			return res
 
 	# 3. Query WooCommerce API
@@ -1702,9 +1720,9 @@ def _get_or_create_woo_attribute_id(attr_name, api=None):
 					clean_slug = a_slug.replace("pa_", "")
 					aid = int(a.get("id"))
 					entry = (aid, a_name)
-					_ATTR_CACHE[a_name.lower()] = entry
-					_ATTR_CACHE[a_slug] = entry
-					_ATTR_CACHE[clean_slug] = entry
+					_cache[a_name.lower()] = entry
+					_cache[a_slug] = entry
+					_cache[clean_slug] = entry
 
 					# Save to Woo Attribute if DocType exists
 					if frappe.db.exists("DocType", "Woo Attribute") and not frappe.db.exists("Woo Attribute", {"woo_attribute_id": aid}):
@@ -1718,8 +1736,8 @@ def _get_or_create_woo_attribute_id(attr_name, api=None):
 						except Exception:
 							pass
 
-				if key in _ATTR_CACHE:
-					return _ATTR_CACHE[key]
+				if key in _cache:
+					return _cache[key]
 		except Exception:
 			safe_log_error(title=f"woo_prime: Attribute ID lookup error for {attr_name}", message=frappe.get_traceback())
 
@@ -1741,10 +1759,10 @@ def _get_or_create_woo_attribute_id(attr_name, api=None):
 				new_slug = (created_data.get("slug") or "").strip().lower()
 				clean_slug = new_slug.replace("pa_", "")
 				res = (new_id, new_name)
-				_ATTR_CACHE[key] = res
-				_ATTR_CACHE[new_name.lower()] = res
-				_ATTR_CACHE[new_slug] = res
-				_ATTR_CACHE[clean_slug] = res
+				_cache[key] = res
+				_cache[new_name.lower()] = res
+				_cache[new_slug] = res
+				_cache[clean_slug] = res
 
 				# Auto-save to Woo Attribute DocType
 				if frappe.db.exists("DocType", "Woo Attribute"):
@@ -1780,7 +1798,7 @@ def _get_simple_item_attributes(item, woo_item=None, api=None):
 				"name": target_name or attr_name,
 				"visible": bool(getattr(row, "is_visible", 1)),
 				"variation": False,
-				"options": opts or [attr_name],
+				"options": opts if opts else [],
 			}
 			if woo_attr_id:
 				attr_payload["id"] = int(woo_attr_id)

@@ -301,6 +301,15 @@ class WooAPI:
 		if response.status_code in (200, 201):
 			return response.json()
 
+		if self._is_image_error(response):
+			retry = self.post("products", data=self._strip_images(product_data))
+			if retry.status_code in (200, 201):
+				frappe.log_error(
+					title="woo_prime: Product created without image",
+					message=f"Product created without image: {response.json().get('message', '')}",
+				)
+				return retry.json()
+
 		if response.status_code == 400:
 			try:
 				err_json = response.json()
