@@ -167,6 +167,29 @@ frappe.ui.form.on("Woo Item", {
 				__("Actions")
 			);
 
+			// Reload / Format Description from ERPNext Item
+			frm.add_custom_button(
+				__("Reload Description from Item"),
+				function () {
+					frappe.call({
+						method: "woo_prime.woo_prime.doctype.woo_item.woo_item.fix_existing_table_descriptions",
+						args: { woo_item_name: frm.doc.name },
+						freeze: true,
+						freeze_message: __("Formatting description tables..."),
+						callback: function (r) {
+							if (r && r.message && r.message.status === "success") {
+								frappe.show_alert({
+									message: __("Description table formatted successfully!"),
+									indicator: "green",
+								});
+								frm.reload_doc();
+							}
+						},
+					});
+				},
+				__("Actions")
+			);
+
 			// Delete Woo Item (with optional cascade to ERPNext & WooCommerce)
 			frm.add_custom_button(
 				__("Delete Item"),
@@ -376,7 +399,8 @@ frappe.ui.form.on("Woo Item", {
 			if (!frm.doc.woo_description) {
 				frappe.db.get_value("Item", frm.doc.item_code, "description", function (r) {
 					if (r && r.description) {
-						frm.set_value("woo_description", r.description);
+						let clean_desc = _normalize_table_html(r.description);
+						frm.set_value("woo_description", clean_desc);
 					}
 				});
 			}
@@ -859,6 +883,30 @@ function _update_multiselect_terms(frm, attr_name, terms) {
 	} catch (e) {
 		console.warn("Could not update multiselect options:", e);
 	}
+}
+
+function _normalize_table_html(content) {
+	if (!content || !content.includes("<table")) return content;
+	let res = content.replace(/<\/?thead[^>]*>/gi, "").replace(/<\/?tfoot[^>]*>/gi, "");
+	res = res.replace(/<th(\s[^>]*)?>(.*?)<\/th>/gis, function (match, attrs, inner) {
+		attrs = attrs || "";
+		if (/style=["']/i.test(attrs)) {
+			attrs = attrs.replace(/style=["'](.*?)["']/i, function (m, style) {
+				if (!/font-weight/i.test(style)) style += ";font-weight:bold";
+				if (!/background/i.test(style)) style += ";background-color:#f8fafc";
+				if (!/text-align/i.test(style)) style += ";text-align:center";
+				return `style="${style}"`;
+			});
+		} else {
+			attrs += ' style="font-weight:bold;background-color:#f8fafc;text-align:center;border:1px solid #cbd5e1;padding:7px 4px;"';
+		}
+		return `<td${attrs}><strong>${(inner || "").trim()}</strong></td>`;
+	});
+	res = res.replace(/(<table[^>]*>)(.*?)(<\/table>)/gis, function (m, open, body, close) {
+		let body_clean = body.replace(/<\/?tbody[^>]*>/gi, "").trim();
+		return `${open}<tbody>\n${body_clean}\n</tbody>${close}`;
+	});
+	return res;
 }
 
 // List View: Bulk Publish action

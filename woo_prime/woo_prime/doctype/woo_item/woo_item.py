@@ -1,6 +1,7 @@
 # Copyright (c) 2026, prime tech bd and contributors
 # For license information, please see license.txt
 
+import re
 import html
 import frappe
 from frappe import _
@@ -39,7 +40,10 @@ class WooItem(Document):
 			if not self.woo_description:
 				raw_desc = frappe.db.get_value("Item", self.item_code, "description")
 				if raw_desc:
-					self.woo_description = html.unescape(str(raw_desc))
+					self.woo_description = clean_table_html_for_editor(html.unescape(str(raw_desc)))
+
+		if self.woo_description:
+			self.woo_description = clean_table_html_for_editor(self.woo_description)
 
 		if self.woo_product_url:
 			self.woo_product_url = html.unescape(str(self.woo_product_url)).strip()
@@ -403,6 +407,88 @@ class WooItem(Document):
 				error_message=str(e),
 			)
 			frappe.throw(_("Price sync failed: {0}").format(str(e)))
+
+
+# -------------------------------------------------------------------------
+# Description & Table Formatting Helpers
+# -------------------------------------------------------------------------
+
+def clean_table_html_for_editor(content):
+	"""Normalize HTML tables for Frappe Text Editor (Quill) and WooCommerce display.
+
+	Quill does not natively support <thead> and <th>. It collapses all <th> elements
+	into the first <td> of the row, breaking table layouts (e.g. Size Charts).
+	This converts <th> to bold <td> and standardizes table structure into clean <tbody>.
+	"""
+	if not content or "<table" not in str(content).lower():
+		return content
+
+	res = str(content)
+
+	# 1. Strip thead / tfoot tags
+	res = re.sub(r"</?thead[^>]*>", "", res, flags=re.I)
+	res = re.sub(r"</?tfoot[^>]*>", "", res, flags=re.I)
+
+	# 2. Replace <th ...>...</th> with <td ...><strong>...</strong></td>
+	def th_to_td(m):
+		attrs = m.group(1) or ""
+		inner = (m.group(2) or "").strip()
+		style_match = re.search(r"style=[\"\x27](.*?)[\"\x27]", attrs, re.I)
+		if style_match:
+			style = style_match.group(1).rstrip("; ")
+			if "font-weight" not in style.lower():
+				style += ";font-weight:bold"
+			if "background" not in style.lower():
+				style += ";background-color:#f8fafc"
+			if "text-align" not in style.lower():
+				style += ";text-align:center"
+			attrs = attrs[:style_match.start(1)] + style + attrs[style_match.end(1):]
+		else:
+			attrs += ' style="font-weight:bold;background-color:#f8fafc;text-align:center;border:1px solid #cbd5e1;padding:7px 4px;"'
+		return f"<td{attrs}><strong>{inner}</strong></td>"
+
+	res = re.sub(r"<th(\s[^>]*)?>(.*?)</th>", th_to_td, res, flags=re.I | re.S)
+
+	# 3. Ensure all <tr> in table are wrapped cleanly in <tbody>
+	def wrap_tbody(m):
+		table_open = m.group(1)
+		body = m.group(2)
+		table_close = m.group(3)
+		body_clean = re.sub(r"</?tbody[^>]*>", "", body, flags=re.I).strip()
+		return f"{table_open}<tbody>\n{body_clean}\n</tbody>{table_close}"
+
+	res = re.sub(r"(<table[^>]*>)(.*?)(</table>)", wrap_tbody, res, flags=re.I | re.S)
+	return res
+
+
+@frappe.whitelist()
+def fix_existing_table_descriptions(woo_item_name=None):
+	"""Clean and fix table layout in woo_description for one or all Woo Items."""
+	frappe.only_for(["System Manager", "Woo Manager"])
+	filters = {"name": woo_item_name} if woo_item_name else {}
+	items = frappe.get_all("Woo Item", filters=filters, fields=["name", "item_code", "woo_description"])
+	count = 0
+	for it in items:
+		desc = it.woo_description
+		# If description has broken table or <th>, or if empty and item_code exists
+		if not desc and it.item_code:
+			raw = frappe.db.get_value("Item", it.item_code, "description")
+			if raw:
+				desc = html.unescape(str(raw))
+		elif it.item_code:
+			# Re-fetch from Item Master if user wants pristine layout or if table header was mangled
+			raw = frappe.db.get_value("Item", it.item_code, "description")
+			if raw and ("<th" in str(raw).lower() or "<th" in str(desc).lower() or "BODY LENGTH SLEEVE" in str(desc) or "LENGTH WIDTH" in str(desc)):
+				desc = html.unescape(str(raw))
+
+		if desc:
+			cleaned = clean_table_html_for_editor(desc)
+			if cleaned != it.woo_description:
+				frappe.db.set_value("Woo Item", it.name, "woo_description", cleaned)
+				count += 1
+
+	frappe.db.commit()
+	return {"status": "success", "updated_count": count}
 
 
 # -------------------------------------------------------------------------
