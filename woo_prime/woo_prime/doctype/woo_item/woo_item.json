@@ -13,6 +13,8 @@
   "sale_price",
   "image",
   "column_break_item",
+  "sync_status",
+  "woo_product_type",
   "woo_product_id",
   "published",
   "woo_product_url",
@@ -20,7 +22,6 @@
   "images",
   "woo_short_description",
   "woo_description",
-  "woo_category",
   "categories",
   "woo_tags",
   "attributes_section",
@@ -34,10 +35,8 @@
   "last_pushed_qty",
   "last_pushed_price",
   "last_synced",
-  "sync_status",
   "has_variants",
   "variant_of",
-  "woo_product_type",
   "variants_section",
   "variants_html"
  ],
@@ -145,12 +144,6 @@
    "label": "WooCommerce Full Description"
   },
   {
-   "fieldname": "woo_category",
-   "fieldtype": "Link",
-   "label": "Primary WooCommerce Category",
-   "options": "Woo Category"
-  },
-  {
    "description": "Select multiple categories for this product in WooCommerce",
    "fieldname": "categories",
    "fieldtype": "Table MultiSelect",
@@ -240,7 +233,7 @@
   },
   {
    "depends_on": "eval:doc.variant_of",
-   "description": "Choose how to publish this variant item on WooCommerce:\n- Blank: Publish as variation under parent product (default)\n- Simple Item: Publish as independent simple product\n- Variant Item: Create as new variant product with its own variations",
+   "description": "Choose how to publish this variant item on WooCommerce:\n\u2022 Blank: Publish as variation under parent product (default)\n\u2022 Simple Item: Publish as independent simple product\n\u2022 Variant Item: Create as new variable product with its own variations",
    "fieldname": "woo_product_type",
    "fieldtype": "Select",
    "label": "WooCommerce Product Type",
@@ -284,7 +277,7 @@
    "link_fieldname": "reference_name"
   }
  ],
- "modified": "2026-10-25 13:25:54.478519",
+ "modified": "2026-10-25 18:41:31.730184",
  "modified_by": "Administrator",
  "module": "Woo Prime",
  "name": "Woo Item",
