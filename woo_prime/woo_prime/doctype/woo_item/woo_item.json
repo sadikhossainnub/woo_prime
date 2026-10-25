@@ -37,6 +37,7 @@
   "sync_status",
   "has_variants",
   "variant_of",
+  "woo_product_type",
   "variants_section",
   "variants_html"
  ],
@@ -66,11 +67,11 @@
    "options": "Item"
   },
   {
+   "description": "Product Title on WooCommerce. Auto-fetched from Item Master if empty, but editable.",
    "fieldname": "item_name",
    "fieldtype": "Data",
-   "label": "Item Name",
    "in_list_view": 1,
-   "description": "Product Title on WooCommerce. Auto-fetched from Item Master if empty, but editable."
+   "label": "Item Name"
   },
   {
    "description": "Regular selling price on WooCommerce. If empty, auto-fetched from ERPNext Item Price.",
@@ -174,7 +175,7 @@
    "label": "Sync Stock"
   },
   {
-   "default": "1",
+   "default": "0",
    "description": "Enable stock quantity tracking in WooCommerce (Inventory tab)",
    "fieldname": "manage_stock",
    "fieldtype": "Check",
@@ -207,6 +208,9 @@
   {
    "fieldname": "last_synced",
    "fieldtype": "Datetime",
+   "in_filter": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Last Synced",
    "read_only": 1
   },
@@ -233,6 +237,14 @@
    "hidden": 1,
    "label": "Variant Of",
    "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.variant_of",
+   "description": "Choose how to publish this variant item on WooCommerce:\n- Blank: Publish as variation under parent product (default)\n- Simple Item: Publish as independent simple product\n- Variant Item: Create as new variant product with its own variations",
+   "fieldname": "woo_product_type",
+   "fieldtype": "Select",
+   "label": "WooCommerce Product Type",
+   "options": "\nSimple Item\nVariant Item"
   },
   {
    "depends_on": "eval:doc.has_variants",
@@ -272,7 +284,7 @@
    "link_fieldname": "reference_name"
   }
  ],
- "modified": "2026-10-19 02:34:31.120164",
+ "modified": "2026-10-25 13:25:54.478519",
  "modified_by": "Administrator",
  "module": "Woo Prime",
  "name": "Woo Item",

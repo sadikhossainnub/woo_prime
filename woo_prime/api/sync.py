@@ -899,8 +899,19 @@ def publish_item_to_woo(woo_item):
 	settings = frappe.get_single("Woo Settings")
 	item = frappe.get_doc("Item", woo_item.item_code)
 
+	# Handle variant items with custom product type
 	if item.variant_of:
-		return _publish_variant_item_to_woo(woo_item, item, api, settings)
+		woo_product_type = getattr(woo_item, "woo_product_type", "")
+		
+		if woo_product_type == "Simple Item":
+			# Publish as independent simple product
+			return _publish_variant_as_simple_item(woo_item, item, api, settings)
+		elif woo_product_type == "Variant Item":
+			# Create as new variant product (template with its own variations)
+			return _publish_variant_as_new_template(woo_item, item, api, settings)
+		else:
+			# Default: publish as variation under parent template
+			return _publish_variant_item_to_woo(woo_item, item, api, settings)
 	elif item.has_variants:
 		return _publish_template_item_to_woo(woo_item, item, api, settings)
 	else:
@@ -2873,3 +2884,214 @@ def sync_all_items():
 	frappe.db.commit()
 
 
+
+
+def _publish_variant_as_simple_item(woo_item, item, api, settings):
+	"""Publish a variant item as an independent simple product on WooCommerce.
+	
+	This is used when woo_product_type is set to 'Simple Item' for a variant.
+	It will delete any existing variation relationship and create a standalone product.
+	
+	Args:
+		woo_item: Woo Item document
+		item: ERPNext Item document (variant item)
+		api: WooCommerce API instance
+		settings: Woo Settings document
+		
+	Returns:
+		dict: WooCommerce product response
+	"""
+	import html
+	
+	# If this variant was previously published as a variation, delete it from WooCommerce
+	if woo_item.woo_product_id:
+		try:
+			# Check if it's a variation by trying to get parent
+			parent_item_name = item.variant_of
+			if parent_item_name:
+				parent_woo_item = frappe.db.get_value(
+					"Woo Item",
+					{"item_code": parent_item_name},
+					["name", "woo_product_id"],
+					as_dict=True
+				)
+				
+				if parent_woo_item and parent_woo_item.woo_product_id:
+					# Delete the variation from parent product
+					try:
+						api.delete(f"products/{parent_woo_item.woo_product_id}/variations/{woo_item.woo_product_id}", params={"force": True})
+					except Exception as e:
+						frappe.log_error(
+							title=f"Failed to delete variation {woo_item.woo_product_id} from parent {parent_woo_item.woo_product_id}",
+							message=str(e)
+						)
+		except Exception as e:
+			frappe.log_error(
+				title=f"Error checking/deleting previous variation for {woo_item.name}",
+				message=str(e)
+			)
+		
+		# Reset woo_product_id so it creates a new simple product
+		woo_item.woo_product_id = None
+	
+	# Now publish as a simple product using the existing function
+	return _publish_simple_item_to_woo(woo_item, item, api, settings)
+
+
+def _publish_variant_as_new_template(woo_item, item, api, settings):
+	"""Publish a variant item as a new template/variable product on WooCommerce.
+	
+	This is used when woo_product_type is set to 'Variant Item' for a variant.
+	It will create a new variable product that can have its own variations.
+	
+	Args:
+		woo_item: Woo Item document
+		item: ERPNext Item document (variant item)
+		api: WooCommerce API instance
+		settings: Woo Settings document
+		
+	Returns:
+		dict: WooCommerce product response
+	"""
+	import html
+	
+	# If this variant was previously published as a variation, delete it from WooCommerce
+	if woo_item.woo_product_id:
+		try:
+			# Check if it's a variation by trying to get parent
+			parent_item_name = item.variant_of
+			if parent_item_name:
+				parent_woo_item = frappe.db.get_value(
+					"Woo Item",
+					{"item_code": parent_item_name},
+					["name", "woo_product_id"],
+					as_dict=True
+				)
+				
+				if parent_woo_item and parent_woo_item.woo_product_id:
+					# Delete the variation from parent product
+					try:
+						api.delete(f"products/{parent_woo_item.woo_product_id}/variations/{woo_item.woo_product_id}", params={"force": True})
+					except Exception as e:
+						frappe.log_error(
+							title=f"Failed to delete variation {woo_item.woo_product_id} from parent {parent_woo_item.woo_product_id}",
+							message=str(e)
+						)
+		except Exception as e:
+			frappe.log_error(
+				title=f"Error checking/deleting previous variation for {woo_item.name}",
+				message=str(e)
+			)
+		
+		# Reset woo_product_id so it creates a new variable product
+		woo_item.woo_product_id = None
+	
+	# Get attributes from the variant item to create as variable product attributes
+	attributes_dict = {}
+	for attr in item.attributes:
+		if attr.attribute not in attributes_dict:
+			attributes_dict[attr.attribute] = set()
+		if attr.attribute_value:
+			attributes_dict[attr.attribute].add(clean_text(attr.attribute_value))
+	
+	woo_attributes = []
+	
+	# Use attributes from woo_item.item_attributes if available, otherwise use item.attributes
+	if getattr(woo_item, "item_attributes", None) and len(woo_item.item_attributes) > 0:
+		for row in woo_item.item_attributes:
+			attr_name = row.attribute_name or row.attribute
+			if not attr_name:
+				continue
+			
+			opts = [o.strip() for o in (row.options or "").replace("\n", ",").split(",") if o.strip()]
+			
+			woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr_name, api)
+			is_var = bool(getattr(row, "is_variation", 1))
+			
+			attr_payload = {
+				"name": target_name or attr_name,
+				"visible": bool(getattr(row, "is_visible", 1)),
+				"variation": is_var,
+				"options": opts if opts else [],
+			}
+			if woo_attr_id:
+				attr_payload["id"] = int(woo_attr_id)
+			woo_attributes.append(attr_payload)
+	else:
+		# Fallback to item attributes
+		for attr_name, options in attributes_dict.items():
+			woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr_name, api)
+			attr_payload = {
+				"name": target_name or attr_name,
+				"visible": True,
+				"variation": True,
+				"options": sorted(list(options))
+			}
+			if woo_attr_id:
+				attr_payload["id"] = int(woo_attr_id)
+			woo_attributes.append(attr_payload)
+	
+	# Build product data for variable product
+	product_name = woo_item.item_name or item.item_name or ""
+	product_data = {
+		"name": html.unescape(product_name),
+		"type": "variable",
+		"sku": woo_item.sku,
+		"description": html.unescape(woo_item.woo_description or item.description or ""),
+		"short_description": html.unescape(getattr(woo_item, "woo_short_description", None) or item.description or ""),
+		"status": "publish",
+		"attributes": woo_attributes,
+		"manage_stock": bool(getattr(woo_item, "manage_stock", 0)),
+	}
+	
+	# Add categories
+	category_ids = _get_woo_category_ids(woo_item, api)
+	if category_ids:
+		product_data["categories"] = category_ids
+	
+	# Add images
+	images = _get_item_images(item, woo_item, api)
+	if images:
+		product_data["images"] = images
+	
+	# Add tags
+	woo_tag_ids = _get_woo_tag_ids(woo_item, api)
+	if woo_tag_ids:
+		product_data["tags"] = woo_tag_ids
+	elif getattr(item, "_user_tags", None):
+		tags_list = [{"name": t.strip()} for t in item._user_tags.split(",") if t.strip()]
+		if tags_list:
+			product_data["tags"] = tags_list
+	
+	# Create or update the product
+	if woo_item.woo_product_id:
+		result = api.update_product(woo_item.woo_product_id, product_data)
+	else:
+		# Check if product with same SKU exists
+		existing_id = None
+		if product_data.get("sku"):
+			try:
+				search_resp = api.get("products", params={"sku": product_data.get("sku"), "status": "any"})
+				if search_resp.status_code == 200 and search_resp.json():
+					existing_id = search_resp.json()[0].get("id")
+			except Exception:
+				frappe.log_error(title="woo_prime: SKU search error in _publish_variant_as_new_template", message=frappe.get_traceback())
+		
+		if existing_id:
+			woo_item.woo_product_id = existing_id
+			result = api.update_product(existing_id, product_data)
+		else:
+			result = api.create_product(product_data)
+	
+	# Update woo_item with response
+	if result and result.get("id"):
+		woo_item.woo_product_id = result.get("id")
+		woo_item.published = 1
+		permalink = result.get("permalink", "")
+		woo_item.woo_product_url = html.unescape(permalink) if permalink else ""
+		woo_item.sync_status = "Synced"
+		woo_item.last_synced = now_datetime()
+		woo_item.flags.in_woo_sync = True
+		woo_item.save(ignore_permissions=True)
+	
+	return result
