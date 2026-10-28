@@ -19,6 +19,21 @@ class WooItem(Document):
 			if item_data:
 				self.has_variants = cint(item_data.has_variants)
 				self.variant_of = item_data.variant_of or ""
+				
+				# Auto-set stock management based on product type (only for new docs or when item_code changes)
+				# Simple item (no variants) → manage_stock = 1 (track stock on parent)
+				# Template item (has variants) → manage_stock = 0, manage_variation_stock = 1 (track stock on variations)
+				if self.is_new() or (self.has_value_changed("item_code") and not self.has_value_changed("manage_stock")):
+					if self.has_variants:
+						# Template item: Don't manage stock on parent, manage on variations
+						self.manage_stock = 0
+						self.manage_variation_stock = 1
+					else:
+						# Simple item or Variant: Manage stock on parent product
+						self.manage_stock = 1
+						# Only unset manage_variation_stock if it's not a template
+						if not self.variant_of:
+							self.manage_variation_stock = 0
 
 			# Fetch item_name if not set
 			if not self.item_name:
@@ -64,7 +79,15 @@ class WooItem(Document):
 					row.options = ", ".join(terms)
 
 	def _auto_populate_attributes(self):
-		"""Auto-populate item_attributes child table from ERPNext Item / Variants if empty."""
+		"""Auto-populate item_attributes child table from ERPNext Item / Variants if empty.
+		
+		Only runs during API sync (when in_woo_sync flag is set).
+		For manual creation, user must explicitly click 'Fetch Attributes from ERPNext' button.
+		"""
+		# Only auto-populate during API sync, not manual form entry
+		if not getattr(self.flags, "in_woo_sync", False):
+			return
+		
 		if getattr(self, "item_attributes", None) and len(self.item_attributes) > 0:
 			return
 		if not self.item_code or not frappe.db.exists("Item", self.item_code):
@@ -72,9 +95,17 @@ class WooItem(Document):
 		self._load_attributes_from_erpnext(overwrite=False)
 
 	def _load_attributes_from_erpnext(self, overwrite=False):
-		"""Extract and load attributes from ERPNext Item or its variants, linking them to Woo Attribute."""
+		"""Extract and load attributes from ERPNext Item or its variants, linking them to Woo Attribute.
+		
+		Auto-creates Woo Attribute documents only during API sync (when in_woo_sync flag is set).
+		For manual operations, Woo Attributes must be created beforehand.
+		"""
 		if not self.item_code or not frappe.db.exists("Item", self.item_code):
 			return
+
+		# Check if we should auto-create Woo Attributes
+		# Only auto-create during API sync operations
+		auto_create_attributes = getattr(self.flags, "in_woo_sync", False)
 
 		item = frappe.get_doc("Item", self.item_code)
 		if overwrite:
@@ -120,8 +151,13 @@ class WooItem(Document):
 						attr_values[a.attribute].add(clean_text(a.attribute_value))
 
 			for attr_name, vals in attr_values.items():
-				woo_attr = _get_or_create_woo_attribute_doc(attr_name)
+				woo_attr = _get_or_create_woo_attribute_doc(attr_name, auto_create=auto_create_attributes)
 				if not woo_attr:
+					# Skip this attribute if Woo Attribute doesn't exist and we're not auto-creating
+					if not auto_create_attributes:
+						frappe.logger("woo_prime").info(
+							f"Skipping attribute '{attr_name}' - Woo Attribute not found. Create it manually in Woo Attribute list."
+						)
 					continue
 				val_str = ", ".join(sorted(list(vals)))
 				if woo_attr in existing_attrs or attr_name in existing_attrs:
@@ -138,11 +174,17 @@ class WooItem(Document):
 						"is_visible": 1,
 					})
 		else:
+			# Simple product (no variants)
 			for a in (item.attributes or []):
 				if not a.attribute:
 					continue
-				woo_attr = _get_or_create_woo_attribute_doc(a.attribute)
+				woo_attr = _get_or_create_woo_attribute_doc(a.attribute, auto_create=auto_create_attributes)
 				if not woo_attr:
+					# Skip this attribute if Woo Attribute doesn't exist and we're not auto-creating
+					if not auto_create_attributes:
+						frappe.logger("woo_prime").info(
+							f"Skipping attribute '{a.attribute}' - Woo Attribute not found. Create it manually in Woo Attribute list."
+						)
 					continue
 				val = clean_text(a.attribute_value) if a.attribute_value else ""
 				if woo_attr in existing_attrs or a.attribute in existing_attrs:
@@ -552,8 +594,12 @@ def fix_existing_table_descriptions(woo_item_name=None):
 # Attribute & Term Helpers
 # -------------------------------------------------------------------------
 
-def _get_or_create_woo_attribute_doc(attr_name):
-	"""Find or create Woo Attribute for the given attribute name.
+def _get_or_create_woo_attribute_doc(attr_name, auto_create=False):
+	"""Find or optionally create Woo Attribute for the given attribute name.
+
+	Args:
+		attr_name: Attribute name to search for
+		auto_create: If True, create Woo Attribute if not found. Default False.
 
 	Returns the Woo Attribute name (str) or None if it could not be found or created.
 	"""
@@ -563,7 +609,8 @@ def _get_or_create_woo_attribute_doc(attr_name):
 		or frappe.db.get_value("Woo Attribute", {"erpnext_item_attribute": clean})
 		or (frappe.db.exists("Woo Attribute", clean) and clean)
 	)
-	if not woo_attr_name:
+	
+	if not woo_attr_name and auto_create:
 		try:
 			wa = frappe.new_doc("Woo Attribute")
 			wa.attribute_name = clean
@@ -590,6 +637,7 @@ def _get_or_create_woo_attribute_doc(attr_name):
 				f"_get_or_create_woo_attribute_doc: failed to create Woo Attribute for '{clean}'"
 			)
 			return None
+	
 	return woo_attr_name
 
 
@@ -1348,6 +1396,8 @@ def fetch_items_from_woocommerce(auto_create_missing=False, batch_size=10, skip_
 				elif not woo_item.item_code:
 					woo_item.sync_status = "Not Synced"
 
+			# Set flag to indicate this is an API sync operation
+			woo_item.flags.in_woo_sync = True
 			woo_item.save(ignore_permissions=True)
 			total_fetched += 1
 
