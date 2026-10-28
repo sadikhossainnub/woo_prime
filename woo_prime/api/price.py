@@ -56,9 +56,20 @@ def calculate_cart_price(cart_data=None, customer_email=None, price_list=None):
 				customer_name = str(customer_data)
 
 		if not customer_group:
-			customer_group = frappe.db.get_single_value("Selling Settings", "customer_group") or "All Customer Groups"
+			customer_group = frappe.db.get_single_value("Selling Settings", "customer_group")
+			if not customer_group or frappe.db.get_value("Customer Group", customer_group, "is_group"):
+				# Get first non-group Customer Group
+				customer_group = frappe.db.get_value("Customer Group", {"is_group": 0}, "name")
+				if not customer_group:
+					customer_group = "All Customer Groups"  # Fallback for price calculation
+		
 		if not territory:
-			territory = frappe.db.get_single_value("Selling Settings", "territory") or "All Territories"
+			territory = frappe.db.get_single_value("Selling Settings", "territory")
+			if not territory or frappe.db.get_value("Territory", territory, "is_group"):
+				# Get first non-group Territory
+				territory = frappe.db.get_value("Territory", {"is_group": 0}, "name")
+				if not territory:
+					territory = "All Territories"  # Fallback for price calculation
 
 		company = settings.default_company
 		currency = None

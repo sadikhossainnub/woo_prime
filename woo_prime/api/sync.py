@@ -482,11 +482,17 @@ def _get_or_create_customer(order_data, settings):
 	if not customer_name:
 		customer_group = getattr(settings, "default_customer_group", None)
 		if not customer_group:
-			customer_group = frappe.db.get_value("Customer Group", {"is_group": 0}, "name") or "All Customer Groups"
+			# Get first non-group Customer Group
+			customer_group = frappe.db.get_value("Customer Group", {"is_group": 0}, "name")
+			if not customer_group:
+				frappe.throw(_("No non-group Customer Group found. Please create at least one non-group Customer Group or set a default in Woo Prime Settings."))
 
 		territory = getattr(settings, "default_territory", None)
 		if not territory:
-			territory = frappe.db.get_value("Territory", {"is_group": 0}, "name") or "All Territories"
+			# Get first non-group Territory
+			territory = frappe.db.get_value("Territory", {"is_group": 0}, "name")
+			if not territory:
+				frappe.throw(_("No non-group Territory found. Please create at least one non-group Territory or set a default in Woo Prime Settings."))
 
 		customer = frappe.new_doc("Customer")
 		customer.customer_name = target_title
