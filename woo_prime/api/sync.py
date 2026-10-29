@@ -1031,7 +1031,7 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 	variation_attr_keys = set()
 
 	if getattr(woo_item, "item_attributes", None) and len(woo_item.item_attributes) > 0:
-		for row in woo_item.item_attributes:
+		for idx, row in enumerate(woo_item.item_attributes):
 			attr_name = row.attribute_name or row.attribute
 			if not attr_name:
 				continue
@@ -1047,6 +1047,7 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 			is_var = bool(getattr(row, "is_variation", 1))
 			attr_payload = {
 				"name": target_name or attr_name,
+				"position": idx,  # Maintain order from child table
 				"visible": bool(getattr(row, "is_visible", 1)),
 				"variation": is_var,
 				"options": opts if opts else [],
@@ -1062,10 +1063,13 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 				if target_name:
 					variation_attr_keys.add(clean_text(target_name).lower())
 	else:
-		for attr_name, options in attributes_dict.items():
+		# Fallback: auto-detected attributes (maintain alphabetical order as position)
+		idx = 0
+		for attr_name, options in sorted(attributes_dict.items()):
 			woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr_name, api)
 			attr_payload = {
 				"name": target_name or attr_name,
+				"position": idx,
 				"visible": True,
 				"variation": True,
 				"options": sorted(list(options))
@@ -1076,6 +1080,7 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 			variation_attr_keys.add(clean_text(attr_name).lower())
 			if target_name:
 				variation_attr_keys.add(clean_text(target_name).lower())
+			idx += 1
 
 	product_name = woo_item.item_name or item.item_name or ""
 	product_data = {
@@ -1855,7 +1860,7 @@ def _get_simple_item_attributes(item, woo_item=None, api=None):
 	"""Extract Item Attributes for simple products. Uses woo_item.item_attributes if available, else item.attributes."""
 	if woo_item and getattr(woo_item, "item_attributes", None) and len(woo_item.item_attributes) > 0:
 		woo_attrs = []
-		for row in woo_item.item_attributes:
+		for idx, row in enumerate(woo_item.item_attributes):
 			attr_name = row.attribute_name or row.attribute
 			if not attr_name:
 				continue
@@ -1863,6 +1868,7 @@ def _get_simple_item_attributes(item, woo_item=None, api=None):
 			woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr_name, api)
 			attr_payload = {
 				"name": target_name or attr_name,
+				"position": idx,  # Maintain order from child table
 				"visible": bool(getattr(row, "is_visible", 1)),
 				"variation": False,
 				"options": opts if opts else [],
@@ -1876,11 +1882,12 @@ def _get_simple_item_attributes(item, woo_item=None, api=None):
 		return []
 
 	woo_attrs = []
-	for attr in item.attributes:
+	for idx, attr in enumerate(item.attributes):
 		if attr.attribute and attr.attribute_value:
 			woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr.attribute, api)
 			attr_payload = {
 				"name": target_name or attr.attribute,
+				"position": idx,
 				"visible": True,
 				"variation": False,
 				"options": [attr.attribute_value]
@@ -3045,7 +3052,7 @@ def _publish_variant_as_new_template(woo_item, item, api, settings):
 	
 	# Use attributes from woo_item.item_attributes if available, otherwise use item.attributes
 	if getattr(woo_item, "item_attributes", None) and len(woo_item.item_attributes) > 0:
-		for row in woo_item.item_attributes:
+		for idx, row in enumerate(woo_item.item_attributes):
 			attr_name = row.attribute_name or row.attribute
 			if not attr_name:
 				continue
@@ -3057,6 +3064,7 @@ def _publish_variant_as_new_template(woo_item, item, api, settings):
 			
 			attr_payload = {
 				"name": target_name or attr_name,
+				"position": idx,  # Maintain order from child table
 				"visible": bool(getattr(row, "is_visible", 1)),
 				"variation": is_var,
 				"options": opts if opts else [],
@@ -3065,11 +3073,13 @@ def _publish_variant_as_new_template(woo_item, item, api, settings):
 				attr_payload["id"] = int(woo_attr_id)
 			woo_attributes.append(attr_payload)
 	else:
-		# Fallback to item attributes
-		for attr_name, options in attributes_dict.items():
+		# Fallback to item attributes (alphabetical order)
+		idx = 0
+		for attr_name, options in sorted(attributes_dict.items()):
 			woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr_name, api)
 			attr_payload = {
 				"name": target_name or attr_name,
+				"position": idx,
 				"visible": True,
 				"variation": True,
 				"options": sorted(list(options))
@@ -3077,6 +3087,7 @@ def _publish_variant_as_new_template(woo_item, item, api, settings):
 			if woo_attr_id:
 				attr_payload["id"] = int(woo_attr_id)
 			woo_attributes.append(attr_payload)
+			idx += 1
 	
 	# Build product data for variable product
 	product_name = woo_item.item_name or item.item_name or ""
