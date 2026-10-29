@@ -20,20 +20,29 @@ class WooItem(Document):
 				self.has_variants = cint(item_data.has_variants)
 				self.variant_of = item_data.variant_of or ""
 				
-				# Auto-set stock management based on product type (only for new docs or when item_code changes)
-				# Simple item (no variants) → manage_stock = 1 (track stock on parent)
-				# Template item (has variants) → manage_stock = 0, manage_variation_stock = 1 (track stock on variations)
-				if self.is_new() or (self.has_value_changed("item_code") and not self.has_value_changed("manage_stock")):
-					if self.has_variants:
-						# Template item: Don't manage stock on parent, manage on variations
-						self.manage_stock = 0
-						self.manage_variation_stock = 1
+				# Auto-set woo_product_type for new items based on ERPNext item type
+				if self.is_new() or self.has_value_changed("item_code"):
+					if self.has_variants and not self.woo_product_type:
+						# Template item → default to "Variant Item" (Variable Product in WooCommerce)
+						self.woo_product_type = "Variant Item"
+					elif not self.has_variants and not self.variant_of and not self.woo_product_type:
+						# Simple item → default to "Simple Item"
+						self.woo_product_type = "Simple Item"
+				
+				# Auto-set stock management based on woo_product_type
+				# This determines how stock syncs to WooCommerce
+				if self.is_new() or self.has_value_changed("woo_product_type") or \
+				   (self.has_value_changed("item_code") and not self.has_value_changed("manage_stock")):
+					
+					if self.woo_product_type == "Variant Item":
+						# Variable Product (WooCommerce): Stock managed at variation level
+						self.manage_stock = 0  # Don't track on parent
+						self.manage_variation_stock = 1  # Track on each variation
 					else:
-						# Simple item or Variant: Manage stock on parent product
-						self.manage_stock = 1
-						# Only unset manage_variation_stock if it's not a template
-						if not self.variant_of:
-							self.manage_variation_stock = 0
+						# Simple Product (WooCommerce): Stock managed at product level
+						# woo_product_type = "Simple Item" or blank
+						self.manage_stock = 1  # Track on parent/product
+						self.manage_variation_stock = 0  # No variations
 
 			# Fetch item_name if not set
 			if not self.item_name:

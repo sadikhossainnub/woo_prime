@@ -74,7 +74,7 @@ Convert synchronous WooCommerce product and category fetch operations to backgro
 		- Save Woo Item with `ignore_permissions=True`
 		- _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7, 10.1, 10.2, 10.3_
 	
-	- [-] 2.6 Implement per-page commit and progress notifications
+	- [ ] 2.6 Implement per-page commit and progress notifications
 		- After processing all products in page, call `frappe.db.commit()`
 		- Wrap commit in try/except: on failure, log error, rollback, send error notification, break pagination
 		- Log commit success with page number and counters
@@ -262,55 +262,55 @@ Convert synchronous WooCommerce product and category fetch operations to backgro
 	- Ensure all tests pass, ask the user if questions arise
 
 - [ ] 8. Test skip_empty_products functionality
-	- [~] 8.1 Test skipping products with empty name
+	- [ ] 8.1 Test skipping products with empty name
 		- Create test with mock WooCommerce API response containing product with empty name
 		- Call `fetch_items_from_woocommerce_background()` with `skip_empty_products=True`
 		- Verify product is skipped and `skipped_empty` counter incremented
 		- Verify skip is logged at "info" level
 		- _Requirements: 12.1, 12.5_
 	
-	- [~] 8.2 Test skipping products with empty SKU
+	- [ ] 8.2 Test skipping products with empty SKU
 		- Create test with mock response containing product with empty SKU
 		- Call worker function with `skip_empty_products=True`
 		- Verify product is skipped
 		- Verify log entry includes product ID and reason
 		- _Requirements: 12.1, 12.5_
 	
-	- [~] 8.3 Test processing empty products when flag is disabled
+	- [ ] 8.3 Test processing empty products when flag is disabled
 		- Create test with empty-name product and `skip_empty_products=False`
 		- Verify product is processed and Fake_SKU is generated
 		- Verify Woo Item is created/updated
 		- _Requirements: 8.7, 12.4_
 
 - [ ] 9. Verify backward compatibility and existing behavior preservation
-	- [~] 9.1 Test synchronous execution mode
+	- [ ] 9.1 Test synchronous execution mode
 		- Call `fetch_items_from_woocommerce(background=False)` directly
 		- Verify it executes synchronously (no enqueue)
 		- Verify return value contains `{"fetched": ..., "linked": ..., "created": ...}`
 		- Verify msgprint displays with green indicator and "Fetch Complete" title
 		- _Requirements: 11.1, 11.2, 11.3_
 	
-	- [~] 9.2 Test string parameter parsing
+	- [ ] 9.2 Test string parameter parsing
 		- Call entry points with `background="true"`, `background="1"`, `background="false"`, `background="0"`
 		- Verify correct boolean interpretation
 		- Test `auto_create_missing="true"` and other string values
 		- _Requirements: 11.2_
 	
-	- [~] 9.3 Test duplicate prevention for products
+	- [ ] 9.3 Test duplicate prevention for products
 		- Run fetch twice for same products
 		- Verify Woo Items are updated, not duplicated
 		- Verify ERPNext Items are not duplicated
 		- Check by `woo_product_id`, `sku`, and `item_code` matching
 		- _Requirements: 10.1, 10.2, 10.3_
 	
-	- [~] 9.4 Test duplicate prevention for categories
+	- [ ] 9.4 Test duplicate prevention for categories
 		- Run category sync twice
 		- Verify Woo Categories are updated, not duplicated
 		- Check by `woo_category_id` and `category_name` matching
 		- Verify tree structure remains correct
 		- _Requirements: 10.4, 10.5_
 	
-	- [~] 9.5 Test matching logic preservation for products
+	- [ ] 9.5 Test matching logic preservation for products
 		- Create ERPNext Items with specific `item_code` and `item_name`
 		- Run product fetch
 		- Verify auto-linking uses correct precedence: `item_code` match, then `name` match, then `item_name` match
@@ -318,7 +318,7 @@ Convert synchronous WooCommerce product and category fetch operations to backgro
 		- Verify Fake_SKU generation for products without SKU
 		- _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7_
 	
-	- [~] 9.6 Test category hierarchy preservation
+	- [ ] 9.6 Test category hierarchy preservation
 		- Fetch categories with multi-level parent-child relationships
 		- Verify `is_group` is set correctly for parent categories
 		- Verify `parent_woo_category` links are correct
@@ -327,7 +327,7 @@ Convert synchronous WooCommerce product and category fetch operations to backgro
 		- _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 9.6_
 
 - [ ] 10. Integration testing with realistic data
-	- [~] 10.1 Test large product fetch (1000+ products)
+	- [ ] 10.1 Test large product fetch (1000+ products)
 		- Use test WooCommerce instance with large product catalog
 		- Monitor memory usage during fetch
 		- Verify per-page commits occur every 100 products (or batch_size)
@@ -335,14 +335,14 @@ Convert synchronous WooCommerce product and category fetch operations to backgro
 		- Verify final statistics are accurate
 		- _Requirements: 1.1, 3.1, 3.4, 5.4, 5.5_
 	
-	- [~] 10.2 Test category fetch with deep hierarchy
+	- [ ] 10.2 Test category fetch with deep hierarchy
 		- Use test instance with nested categories (5+ levels deep)
 		- Verify topological sort handles cycles gracefully
 		- Verify all parent-child links are correct
 		- Verify tree rebuild completes successfully
 		- _Requirements: 9.3, 9.4, 9.5, 9.6_
 	
-	- [~] 10.3 Test error resilience
+	- [ ] 10.3 Test error resilience
 		- Inject errors in individual products (invalid data)
 		- Verify other products in same page are processed successfully
 		- Verify Individual_Error_Log entries are created
@@ -350,7 +350,7 @@ Convert synchronous WooCommerce product and category fetch operations to backgro
 		- Verify page commit succeeds despite individual failures
 		- _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7_
 	
-	- [~] 10.4 Test API error handling
+	- [ ] 10.4 Test API error handling
 		- Simulate API errors: 401 (auth), 429 (rate limit), 500 (server error), 503 (unavailable)
 		- Verify 4xx errors stop pagination and raise exception
 		- Verify 5xx errors on first page raise exception
@@ -358,7 +358,7 @@ Convert synchronous WooCommerce product and category fetch operations to backgro
 		- Verify Woo Sync Log captures error details
 		- _Requirements: 15.1, 15.2, 15.3, 15.4, 15.5, 15.6_
 	
-	- [~] 10.5 Test realtime notifications in browser
+	- [ ] 10.5 Test realtime notifications in browser
 		- Open Woo Settings form in browser
 		- Click "Fetch Items" button with progress dialog
 		- Verify progress bar updates during fetch
@@ -368,7 +368,7 @@ Convert synchronous WooCommerce product and category fetch operations to backgro
 		- Repeat for "Fetch Categories" button
 		- _Requirements: 1.4_
 
-- [~] 11. Final checkpoint - Ensure all tests pass and requirements are met
+- [ ] 11. Final checkpoint - Ensure all tests pass and requirements are met
 	- Run full test suite for product fetch background jobs
 	- Run full test suite for category fetch background jobs
 	- Verify all 16 requirements from requirements.md are satisfied

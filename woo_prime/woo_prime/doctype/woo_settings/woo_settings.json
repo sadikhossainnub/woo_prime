@@ -388,11 +388,26 @@
    "label": "Media & Image Settings"
   },
   {
+   "fieldname": "auto_copy_private_images",
+   "fieldtype": "Check",
+   "label": "Auto-Copy Private Images to Public",
+   "default": "1",
+   "description": "Automatically copy private images (/private/files/) to public (/public/files/) when publishing to WooCommerce. This allows WooCommerce to fetch the images without authentication."
+  },
+  {
+   "fieldname": "media_upload_note",
+   "fieldtype": "HTML",
+   "options": "<div class='alert alert-info'><b>How Image Sync Works:</b><br>• WooCommerce fetches images from public URLs automatically<br>• Private images are auto-copied to public folder (if enabled above)<br>• No authentication needed - simple and fast!</div>"
+  },
+  {
+   "fieldtype": "Column Break"
+  },
+  {
    "fieldname": "allow_private_images",
    "fieldtype": "Check",
-   "label": "Allow Private Images to be Pushed to WooCommerce",
+   "label": "Warn About Private Images",
    "default": "0",
-   "description": "By default, only public files (/files/) are pushed to WooCommerce. Enable this to also allow private files (/private/files/) to be uploaded."
+   "description": "Show warning when syncing private images (useful for security-conscious setups)"
   },
   {
    "fieldname": "sync_features_section",

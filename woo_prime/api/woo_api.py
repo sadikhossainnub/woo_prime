@@ -664,7 +664,28 @@ class WooAPI:
 
 			url = f"{self.site_url}/wp-json/wp/v2/media"
 			req_params = {}
-			auth = self.auth
+			
+			# WordPress Media API requires WordPress username + Application Password
+			# NOT WooCommerce Consumer Key/Secret!
+			try:
+				settings = frappe.get_single("Woo Settings")
+				wp_username = getattr(settings, "wordpress_username", None)
+				wp_app_password = getattr(settings, "wordpress_app_password", None)
+				
+				if wp_username and wp_app_password:
+					# Use WordPress Application Password authentication
+					from requests.auth import HTTPBasicAuth
+					auth = HTTPBasicAuth(wp_username, wp_app_password)
+				else:
+					# Fallback: try WooCommerce auth (might not work for media upload)
+					auth = self.auth
+					frappe.logger("woo_prime").warning(
+						"WordPress username/app password not configured. Media upload may fail. "
+						"Please add 'WordPress Username' and 'WordPress Application Password' in Woo Settings."
+					)
+			except Exception as e:
+				frappe.logger("woo_prime").warning(f"Could not load WordPress credentials: {e}")
+				auth = self.auth
 
 			if self.use_query_auth:
 				req_params["consumer_key"] = self.consumer_key

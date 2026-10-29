@@ -1454,47 +1454,88 @@ def _get_item_images(item, woo_item=None, api=None):
 
 		is_private = path.startswith("/private/files/") or path.startswith("private/files/")
 
-		# 1. Check if WordPress Media ID is cached
-		cached_id = _get_cached_wp_media_id(path)
-		if cached_id:
-			img_dict = {"id": int(cached_id)}
-			if caption:
-				img_dict["alt"] = caption
-			images.append(img_dict)
-			return
-
-		# 2. For private files, direct binary upload to WordPress Media REST API is required
-		if is_private and api:
+		# For private files, automatically copy to public for WooCommerce access
+		if is_private:
 			try:
-				uploaded = api.upload_media(path)
-				if uploaded and uploaded.get("id"):
-					media_id = uploaded.get("id")
-					_cache_wp_media_id(path, media_id)
-					img_dict = {"id": media_id}
-					if caption:
-						img_dict["alt"] = caption
-					images.append(img_dict)
+				# Check if auto-copy is enabled
+				settings = frappe.get_single("Woo Settings")
+				auto_copy = getattr(settings, "auto_copy_private_images", 1)
+				
+				if not auto_copy:
+					# Skip private images if auto-copy disabled
+					frappe.log_error(
+						title="Private Image Skipped",
+						message=f"Private image {path} skipped. Enable 'Auto-Copy Private Images to Public' in Woo Settings to sync."
+					)
 					return
+				
+				import os
+				import shutil
+				
+				# Get absolute paths
+				clean_path = path.lstrip("/")
+				private_path = frappe.get_site_path(clean_path)
+				
+				# Create public path (same filename in public/files/)
+				filename = os.path.basename(private_path)
+				public_path = frappe.get_site_path("public", "files", filename)
+				
+				# Check if file exists in private
+				if os.path.exists(private_path):
+					# Copy to public if not already there or if newer
+					if not os.path.exists(public_path) or os.path.getmtime(private_path) > os.path.getmtime(public_path):
+						# Create public/files directory if it doesn't exist
+						os.makedirs(os.path.dirname(public_path), exist_ok=True)
+						
+						# Copy file to public
+						shutil.copy2(private_path, public_path)
+						
+						frappe.logger("woo_prime").info(
+							f"Auto-copied private image to public: {filename}"
+						)
+					
+					# Use the public path for URL generation
+					path = f"/files/{filename}"
+					is_private = False
+				else:
+					frappe.log_error(
+						title="Private Image File Not Found",
+						message=f"Private image file does not exist: {private_path}"
+					)
+					return
+					
 			except Exception as e:
 				frappe.log_error(
-					title="WooCommerce Image Upload Failed",
-					message=f"Direct upload failed for private file {path}: {e}"
+					title="Failed to Copy Private Image to Public",
+					message=f"Error copying {path} to public: {str(e)}\n\n{frappe.get_traceback()}"
 				)
+				# Show user-friendly message
+				if frappe.request:
+					frappe.msgprint(
+						f"⚠️ Could not prepare private image <b>{os.path.basename(path)}</b> for WooCommerce sync.<br>"
+						"Please check Error Log for details.",
+						indicator="orange",
+						alert=True,
+					)
+				return
 
-			frappe.msgprint(
-				f"Could not upload private image <b>{path}</b> to WooCommerce. "
-				"Please move the file to public files or re-attach it.",
-				indicator="orange",
-				alert=True,
-			)
-			return
-
-		# 3. For public files (or as fallback), send public URL payload to WooCommerce (WooCommerce fetches image natively)
+		# Generate public URL for WooCommerce
 		if path.startswith("http://") or path.startswith("https://"):
 			url = path
 		else:
 			url = frappe.utils.get_url(path)
-
+		
+		# Validate URL is publicly accessible
+		if "localhost" in url or "127.0.0.1" in url:
+			frappe.log_error(
+				title="Image URL Not Publicly Accessible",
+				message=f"Image URL contains localhost/127.0.0.1: {url}\n\n"
+				        "WooCommerce server cannot reach this URL from the internet.\n"
+				        "Please configure a public domain name in site_config.json:\n"
+				        '  "host_name": "https://yourdomain.com"'
+			)
+			# Still send it - might work if same network/VPN
+		
 		img_dict = {"src": url}
 		if caption:
 			img_dict["alt"] = caption
