@@ -1929,23 +1929,50 @@ def sync_stock_to_woo(woo_item):
 
 	manage_stock = bool(getattr(woo_item, "manage_stock", 1))
 
-	# Check if item is a Variant of a Template product
-	variant_of = frappe.db.get_value("Item", woo_item.item_code, "variant_of")
+	# Check if item is a Variant that should be synced as a variation
+	# Respect woo_product_type: "Simple Item" means standalone product, not variation
+	variant_of = frappe.db.get_value("Item", woo_item.item_code, "variant_of") if woo_item.item_code else None
 	parent_woo_id = None
-	if variant_of:
+	woo_product_type = getattr(woo_item, "woo_product_type", "")
+	
+	# Only treat as variation if variant_of exists AND woo_product_type is NOT "Simple Item" or "Variant Item"
+	if variant_of and woo_product_type not in ("Simple Item", "Variant Item"):
 		parent_woo_id = frappe.db.get_value("Woo Item", {"item_code": variant_of}, "woo_product_id")
 
 	try:
 		if parent_woo_id:
+			# Sync as variation under parent product
 			api.update_variation_stock(parent_woo_id, woo_item.woo_product_id, stock_qty, manage_stock=manage_stock)
 		else:
+			# Sync as standalone product (simple or variable)
 			api.update_stock(woo_item.woo_product_id, stock_qty, manage_stock=manage_stock)
 	except frappe.ValidationError as e:
-		# 404 — product gone from WooCommerce
+		# 404 — product gone from WooCommerce or wrong sync method (variation vs product)
 		err_msg = str(e)
 		if "404" in err_msg or "not found" in err_msg.lower():
+			# Mark as unpublished
 			woo_item.published = 0
 			woo_item.db_set("published", 0)
+			
+			# Provide helpful message
+			if parent_woo_id:
+				frappe.msgprint(
+					f"⚠️ WooCommerce variation #{woo_item.woo_product_id} (parent #{parent_woo_id}) not found (404) — marked as unpublished.<br><br>"
+					f"<b>Possible reasons:</b><br>"
+					f"• Variation was deleted from WooCommerce<br>"
+					f"• Product type mismatch (published as Simple but trying to sync as Variation)<br><br>"
+					f"<b>Solution:</b> Click 'Publish to WooCommerce' to recreate the product.",
+					indicator="orange",
+					title="Stock Sync Failed"
+				)
+			else:
+				frappe.msgprint(
+					f"⚠️ WooCommerce product #{woo_item.woo_product_id} not found (404) — marked as unpublished.<br><br>"
+					f"<b>Solution:</b> Click 'Publish to WooCommerce' to recreate the product.",
+					indicator="orange",
+					title="Stock Sync Failed"
+				)
+		
 		woo_item.sync_status = "Error"
 		woo_item.db_set("sync_status", "Error")
 		from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
@@ -2009,10 +2036,14 @@ def sync_price_to_woo(woo_item):
 	sale_price = flt(raw_sale) if raw_sale else 0.0
 	clear_sale = sale_price <= 0  # True → send sale_price="" to WooCommerce
 
-	# Check if item is a Variant of a Template product
-	variant_of = frappe.db.get_value("Item", woo_item.item_code, "variant_of")
+	# Check if item is a Variant that should be synced as a variation
+	# Respect woo_product_type: "Simple Item" means standalone product, not variation
+	variant_of = frappe.db.get_value("Item", woo_item.item_code, "variant_of") if woo_item.item_code else None
 	parent_woo_id = None
-	if variant_of:
+	woo_product_type = getattr(woo_item, "woo_product_type", "")
+	
+	# Only treat as variation if variant_of exists AND woo_product_type is NOT "Simple Item" or "Variant Item"
+	if variant_of and woo_product_type not in ("Simple Item", "Variant Item"):
 		parent_woo_id = (
 			frappe.db.get_value("Woo Item", {"item_code": variant_of}, "woo_product_id")
 			or frappe.db.get_value("Woo Item", {"sku": variant_of}, "woo_product_id")
