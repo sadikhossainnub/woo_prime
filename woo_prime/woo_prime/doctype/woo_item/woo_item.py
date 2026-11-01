@@ -382,12 +382,10 @@ class WooItem(Document):
 			frappe.throw(_("This item has not been published to WooCommerce yet."))
 
 		try:
-			# If this is a template item, sync stock for all its variants
+			# If this is a template item, sync stock for all its variants ONLY
 			has_variants = frappe.db.get_value("Item", self.item_code, "has_variants")
 			if has_variants:
-				if self.woo_product_id:
-					sync_stock_to_woo(self)
-
+				# Template items: sync variants only (stock is managed at variation level)
 				manage_var_stock = getattr(self, "manage_variation_stock", None)
 				variant_names = frappe.get_all("Item", filters={"variant_of": self.item_code, "disabled": 0}, pluck="name")
 				count = 0
@@ -407,12 +405,13 @@ class WooItem(Document):
 				self.sync_status = "Synced"
 				self.save()
 				frappe.msgprint(
-					_("✅ Stock synced to WooCommerce successfully for template and {0} variant(s)!").format(count),
+					_("✅ Stock synced to WooCommerce for {0} variant(s)!").format(count),
 					title=_("Stock Synced"),
 					indicator="green",
 				)
 				return
 
+			# Simple or Variant items: sync own stock
 			sync_stock_to_woo(self)
 			self.last_synced = now_datetime()
 			self.sync_status = "Synced"
@@ -445,9 +444,10 @@ class WooItem(Document):
 			frappe.throw(_("This item has not been published to WooCommerce yet."))
 
 		try:
-			# If this is a template item, sync prices for all its variants
+			# If this is a template item, sync prices for all its variants ONLY
 			has_variants = frappe.db.get_value("Item", self.item_code, "has_variants")
 			if has_variants:
+				# Template items: sync variant prices only (price is managed at variation level)
 				variant_names = frappe.get_all("Item", filters={"variant_of": self.item_code, "disabled": 0}, pluck="name")
 				count = 0
 				for v_name in variant_names:
@@ -463,12 +463,13 @@ class WooItem(Document):
 				self.sync_status = "Synced"
 				self.save()
 				frappe.msgprint(
-					_("✅ Price synced to WooCommerce successfully for template and {0} variant(s)!").format(count),
+					_("✅ Price synced to WooCommerce for {0} variant(s)!").format(count),
 					title=_("Price Synced"),
 					indicator="green",
 				)
 				return
 
+			# Simple or Variant items: sync own price
 			sync_price_to_woo(self)
 			self.last_synced = now_datetime()
 			self.sync_status = "Synced"

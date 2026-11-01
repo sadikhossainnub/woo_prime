@@ -16,6 +16,7 @@
   "sync_status",
   "woo_product_type",
   "woo_product_id",
+  "menu_order",
   "published",
   "woo_product_url",
   "woo_section",
@@ -104,6 +105,13 @@
    "in_list_view": 1,
    "label": "WooCommerce Product ID",
    "read_only": 1
+  },
+  {
+   "description": "Custom ordering position used to sort products on WooCommerce frontend (lower values appear first)",
+   "fieldname": "menu_order",
+   "fieldtype": "Int",
+   "label": "Menu Order",
+   "default": "0"
   },
   {
    "default": "0",
@@ -236,7 +244,8 @@
    "fieldname": "woo_product_type",
    "fieldtype": "Select",
    "label": "WooCommerce Product Type",
-   "options": "\nSimple Item\nVariant Item"
+   "options": "\nSimple Item\nVariant Item",
+   "depends_on": "eval:!doc.has_variants"
   },
   {
    "depends_on": "eval:doc.has_variants",

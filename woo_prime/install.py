@@ -34,7 +34,7 @@ def create_custom_fields():
 	"""
 	from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
-	all_fields = [
+	sales_order_fields = [
 		{
 			"fieldname": "woo_order_id",
 			"fieldtype": "Data",
@@ -67,16 +67,14 @@ def create_custom_fields():
 	]
 
 	# Skip any field that already exists on the doctype (standard or custom)
-	fields_to_create = [
-		f for f in all_fields
+	sales_order_fields_to_create = [
+		f for f in sales_order_fields
 		if not _field_exists_on_doctype("Sales Order", f["fieldname"])
 	]
 
-	if not fields_to_create:
-		return
-
-	custom_fields = {"Sales Order": fields_to_create}
-	create_custom_fields(custom_fields, update=True)
+	if sales_order_fields_to_create:
+		custom_fields = {"Sales Order": sales_order_fields_to_create}
+		create_custom_fields(custom_fields, update=True)
 
 
 
