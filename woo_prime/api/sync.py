@@ -2037,32 +2037,38 @@ def sync_price_to_woo(woo_item):
 	if regular_price > 0 and (not woo_item.regular_price or flt(woo_item.regular_price) != regular_price):
 		woo_item.db_set("regular_price", regular_price)
 
-	# Determine sale_price: evaluate Pricing Rule if enabled, else use Woo Item sale_price
+	# Determine sale_price: preserve existing woo_item.sale_price or evaluate Pricing Rule
+	raw_sale = getattr(woo_item, "sale_price", None)
+	sale_price = flt(raw_sale) if raw_sale and flt(raw_sale) > 0 else 0.0
+
+	date_on_sale_from = ""
+	date_on_sale_to = ""
+
 	if getattr(settings, "enable_sale_price_sync", 1) and woo_item.item_code and regular_price > 0:
 		try:
-			from woo_prime.api.sale_price_sync import _get_sale_price_for_item
-			calc_sale, _, _ = _get_sale_price_for_item(woo_item.item_code, regular_price, settings)
-			if calc_sale is not None:
-				woo_item.sale_price = flt(calc_sale)
-				woo_item.db_set("sale_price", flt(calc_sale))
-			elif getattr(woo_item, "sale_price", None):
-				woo_item.sale_price = 0.0
-				woo_item.db_set("sale_price", 0.0)
+			from woo_prime.api.sale_price_sync import _get_sale_price_for_item, _format_woo_sale_dates
+			calc_sale, matched_rule, reason = _get_sale_price_for_item(woo_item.item_code, regular_price, settings)
+			if calc_sale is not None and flt(calc_sale) > 0:
+				sale_price = flt(calc_sale)
+				woo_item.sale_price = sale_price
+				woo_item.db_set("sale_price", sale_price)
+				if matched_rule:
+					date_on_sale_from, date_on_sale_to = _format_woo_sale_dates(matched_rule)
 		except Exception as e:
 			frappe.logger("woo_prime").debug(f"Pricing rule re-eval error for {woo_item.item_code}: {e}")
 
-	raw_sale = getattr(woo_item, "sale_price", None)
-	sale_price = flt(raw_sale) if raw_sale else 0.0
-	clear_sale = sale_price <= 0  # True → send sale_price="" to WooCommerce
+	# Sale price must be strictly less than regular price and > 0
+	if sale_price >= regular_price or sale_price <= 0:
+		sale_price = 0.0
+
+	clear_sale = (sale_price <= 0)
 
 	# Check if item is a Variant that should be synced as a variation
-	# Respect woo_product_type: "Simple Item" means standalone product, not variation
 	variant_of = frappe.db.get_value("Item", woo_item.item_code, "variant_of") if woo_item.item_code else None
 	parent_woo_id = None
 	woo_product_type = getattr(woo_item, "woo_product_type", "")
-	
-	# Only treat as variation if variant_of exists AND woo_product_type is NOT "Simple Item" or "Variant Item"
-	if variant_of and woo_product_type not in ("Simple Item", "Variant Item"):
+
+	if variant_of and woo_product_type != "Simple Item":
 		parent_woo_id = (
 			frappe.db.get_value("Woo Item", {"item_code": variant_of}, "woo_product_id")
 			or frappe.db.get_value("Woo Item", {"sku": variant_of}, "woo_product_id")
@@ -2075,12 +2081,16 @@ def sync_price_to_woo(woo_item):
 				parent_woo_id, woo_item.woo_product_id, regular_price,
 				sale_price=flt(sale_price) if not clear_sale else None,
 				clear_sale=clear_sale,
+				date_from=date_on_sale_from,
+				date_to=date_on_sale_to,
 			)
 		else:
 			api.update_price(
 				woo_item.woo_product_id, regular_price,
 				sale_price=flt(sale_price) if not clear_sale else None,
 				clear_sale=clear_sale,
+				date_from=date_on_sale_from,
+				date_to=date_on_sale_to,
 			)
 	except frappe.ValidationError as e:
 		err_msg = str(e)

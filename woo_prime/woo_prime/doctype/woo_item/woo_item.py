@@ -6,7 +6,7 @@ import html
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import now_datetime
+from frappe.utils import cint, flt, now_datetime
 from woo_prime.utils import clean_text
 
 
@@ -51,14 +51,29 @@ class WooItem(Document):
 			elif self.item_name:
 				self.item_name = html.unescape(self.item_name)
 
-			# Auto-fetch regular_price if empty
-			if not self.regular_price or flt(self.regular_price) <= 0:
-				settings = frappe.get_single("Woo Settings")
-				price_list = getattr(settings, "default_price_list", None) or "Standard Selling"
-				from woo_prime.api.sync import _get_item_price
-				price = _get_item_price(self.item_code, price_list)
-				if price:
-					self.regular_price = flt(price)
+			# Auto-fetch regular_price and evaluate Pricing Rule sale_price
+			settings = frappe.get_single("Woo Settings")
+			price_list = (
+				getattr(settings, "website_price_list", None)
+				or getattr(settings, "default_price_list", None)
+				or "Standard Selling"
+			)
+			from woo_prime.api.sync import _get_item_price
+			price = _get_item_price(self.item_code, price_list)
+			if price and flt(price) > 0 and (not self.regular_price or flt(self.regular_price) <= 0):
+				self.regular_price = flt(price)
+
+			# Only update sale_price if this item has an active Pricing Rule
+			if getattr(settings, "enable_sale_price_sync", 1):
+				base_p = flt(self.regular_price) if self.regular_price else flt(price)
+				if base_p > 0:
+					try:
+						from woo_prime.api.sale_price_sync import _get_sale_price_for_item
+						calc_sale, _, _ = _get_sale_price_for_item(self.item_code, base_p, settings)
+						if calc_sale is not None and flt(calc_sale) > 0:
+							self.sale_price = flt(calc_sale)
+					except Exception as e:
+						frappe.logger("woo_prime").debug(f"Pricing rule calc notice: {e}")
 
 			# Auto-fetch description from Item Master if woo_description is empty
 			if not self.woo_description:
@@ -379,7 +394,16 @@ class WooItem(Document):
 		from woo_prime.api.sync import sync_stock_to_woo
 
 		if not self.woo_product_id:
-			frappe.throw(_("This item has not been published to WooCommerce yet."))
+			self.validate()
+			self.save(ignore_permissions=True)
+			frappe.msgprint(
+				_("✅ Regular Price ({0}) and Sale Price ({1}) refreshed from ERPNext.<br><small>(Note: Item not published to WooCommerce yet)</small>").format(
+					self.regular_price or 0, self.sale_price or 0
+				),
+				title=_("Prices Refreshed"),
+				indicator="blue",
+			)
+			return
 
 		try:
 			# If this is a template item, sync stock for all its variants ONLY
@@ -471,12 +495,16 @@ class WooItem(Document):
 
 			# Simple or Variant items: sync own price
 			sync_price_to_woo(self)
+			self.reload()
 			self.last_synced = now_datetime()
 			self.sync_status = "Synced"
 			self.save()
 
+			sale_text = f"<br>Sale Price: <b>{self.sale_price}</b>" if getattr(self, "sale_price", None) and flt(self.sale_price) > 0 else ""
 			frappe.msgprint(
-				_("✅ Price synced to WooCommerce successfully!"),
+				_("✅ Price synced to WooCommerce successfully!<br>Regular Price: <b>{0}</b>{1}").format(
+					self.regular_price or 0, sale_text
+				),
 				title=_("Price Synced"),
 				indicator="green",
 			)
@@ -491,6 +519,69 @@ class WooItem(Document):
 				error_message=str(e),
 			)
 			frappe.throw(_("Price sync failed: {0}").format(str(e)))
+
+	@frappe.whitelist()
+	def fetch_price_from_erpnext(self):
+		"""Fetch and apply regular_price and Pricing Rule sale_price directly to this Woo Item."""
+		frappe.only_for(["System Manager", "Woo Manager", "Website Manager"])
+		if not self.item_code:
+			frappe.throw(_("Please select an Item Code first."))
+
+		# If template item, also fetch prices for all active variants
+		has_variants = frappe.db.get_value("Item", self.item_code, "has_variants")
+		if has_variants:
+			variant_names = frappe.get_all("Item", filters={"variant_of": self.item_code, "disabled": 0}, pluck="name")
+			for v_name in variant_names:
+				v_woo_name = frappe.db.get_value("Woo Item", {"item_code": v_name})
+				if v_woo_name:
+					try:
+						v_doc = frappe.get_doc("Woo Item", v_woo_name)
+						v_doc.fetch_price_from_erpnext()
+					except Exception as var_fetch_err:
+						frappe.log_error(f"Error fetching price for variant {v_name}: {var_fetch_err}")
+
+		settings = frappe.get_single("Woo Settings")
+		price_list = (
+			getattr(settings, "website_price_list", None)
+			or getattr(settings, "default_price_list", None)
+			or "Standard Selling"
+		)
+		from woo_prime.api.sync import _get_item_price
+		from frappe.utils import flt
+
+		regular_price = _get_item_price(self.item_code, price_list)
+		if not regular_price or flt(regular_price) <= 0:
+			regular_price = flt(self.regular_price) if self.regular_price else 0.0
+
+		sale_price = 0.0
+		rule_name = None
+		skip_reason = None
+		if regular_price > 0:
+			try:
+				from woo_prime.api.sale_price_sync import _get_sale_price_for_item
+				calc_sale, matched_rule, reason = _get_sale_price_for_item(self.item_code, regular_price, settings)
+				if calc_sale is not None and flt(calc_sale) > 0:
+					sale_price = flt(calc_sale)
+					rule_name = getattr(matched_rule, "name", str(matched_rule)) if matched_rule else None
+				else:
+					skip_reason = reason
+			except Exception as e:
+				frappe.log_error(f"Error fetching price from ERPNext for {self.name}: {e}")
+
+		if regular_price > 0:
+			self.regular_price = flt(regular_price)
+		self.sale_price = flt(sale_price)
+
+		if not self.is_new():
+			self.db_set("regular_price", self.regular_price)
+			self.db_set("sale_price", self.sale_price)
+
+		return {
+			"regular_price": self.regular_price,
+			"sale_price": self.sale_price,
+			"pricing_rule": rule_name,
+			"reason": skip_reason,
+		}
 
 
 @frappe.whitelist()
@@ -1955,15 +2046,46 @@ def publish_item_from_item_master(item_code, background=True):
 
 
 @frappe.whitelist()
+def fetch_price_from_erpnext(item_code=None, docname=None):
+	"""Whitelisted helper callable by doc or item_code."""
+	if docname and frappe.db.exists("Woo Item", docname):
+		doc = frappe.get_doc("Woo Item", docname)
+		return doc.fetch_price_from_erpnext()
+	if item_code:
+		return get_item_price_rate(item_code)
+	return {"regular_price": 0.0, "sale_price": 0.0}
+
+
+@frappe.whitelist()
 def get_item_price_rate(item_code):
-	"""Get current ERPNext item price rate for an Item (with fallback for variant items)."""
+	"""Get current ERPNext item price rate and Pricing Rule sale price for an Item."""
 	frappe.only_for(["System Manager", "Woo Manager", "Website Manager"])
 	if not item_code:
-		return 0.0
+		return {"rate": 0.0, "regular_price": 0.0, "sale_price": 0.0}
 	settings = frappe.get_single("Woo Settings")
-	price_list = getattr(settings, "default_price_list", None) or "Standard Selling"
+	price_list = (
+		getattr(settings, "website_price_list", None)
+		or getattr(settings, "default_price_list", None)
+		or "Standard Selling"
+	)
 	from woo_prime.api.sync import _get_item_price
-	return _get_item_price(item_code, price_list)
+	regular_price = _get_item_price(item_code, price_list)
+
+	sale_price = 0.0
+	if getattr(settings, "enable_sale_price_sync", 1) and regular_price > 0:
+		try:
+			from woo_prime.api.sale_price_sync import _get_sale_price_for_item
+			calc_sale, _, _ = _get_sale_price_for_item(item_code, regular_price, settings)
+			if calc_sale is not None:
+				sale_price = flt(calc_sale)
+		except Exception as e:
+			frappe.logger("woo_prime").debug(f"Sale price error in get_item_price_rate: {e}")
+
+	return {
+		"rate": regular_price,
+		"regular_price": regular_price,
+		"sale_price": sale_price,
+	}
 
 
 @frappe.whitelist()

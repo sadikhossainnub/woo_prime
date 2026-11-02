@@ -115,6 +115,14 @@ frappe.ui.form.on("Woo Item", {
 				);
 			}
 
+			frm.add_custom_button(
+				__("Fetch Price from ERPNext"),
+				function () {
+					fetch_price_from_erpnext_handler(frm);
+				},
+				__("Actions")
+			);
+
 			// Open WooCommerce product URL
 			if (frm.doc.woo_product_url) {
 				frm.add_custom_button(
@@ -360,15 +368,21 @@ frappe.ui.form.on("Woo Item", {
 			frappe.after_ajax(render_url);
 		}
 
-		// Auto-fetch price if empty or 0
-		if (frm.doc.item_code && (!frm.doc.regular_price || flt(frm.doc.regular_price) <= 0)) {
+		// Auto-fetch regular_price and sale_price if empty
+		if (frm.doc.item_code && (!frm.doc.regular_price || flt(frm.doc.regular_price) <= 0 || (!frm.doc.sale_price && frm.doc.__islocal))) {
 			frappe.call({
 				method: "woo_prime.woo_prime.doctype.woo_item.woo_item.get_item_price_rate",
 				args: { item_code: frm.doc.item_code },
 				callback: function (r) {
-					if (r && r.message !== undefined && r.message !== null && flt(r.message) > 0) {
-						if (!frm.doc.regular_price || flt(frm.doc.regular_price) <= 0) {
-							frm.set_value("regular_price", flt(r.message));
+					if (r && r.message) {
+						let res = r.message;
+						let reg_p = typeof res === "object" ? (res.regular_price !== undefined ? res.regular_price : res.rate) : res;
+						let sale_p = typeof res === "object" ? res.sale_price : null;
+						if (flt(reg_p) > 0 && (!frm.doc.regular_price || flt(frm.doc.regular_price) <= 0)) {
+							frm.set_value("regular_price", flt(reg_p));
+						}
+						if (sale_p && flt(sale_p) > 0) {
+							frm.set_value("sale_price", flt(sale_p));
 						}
 					}
 				},
@@ -394,8 +408,14 @@ frappe.ui.form.on("Woo Item", {
 				method: "woo_prime.woo_prime.doctype.woo_item.woo_item.get_item_price_rate",
 				args: { item_code: frm.doc.item_code },
 				callback: function (r) {
-					if (r && r.message !== undefined && r.message !== null && flt(r.message) > 0) {
-						frm.set_value("regular_price", flt(r.message));
+					if (r && r.message) {
+						let res = r.message;
+						let reg_p = typeof res === "object" ? (res.regular_price !== undefined ? res.regular_price : res.rate) : res;
+						let sale_p = typeof res === "object" ? res.sale_price : 0;
+						if (flt(reg_p) > 0) {
+							frm.set_value("regular_price", flt(reg_p));
+						}
+						frm.set_value("sale_price", flt(sale_p));
 					}
 				},
 			});
@@ -426,7 +446,45 @@ frappe.ui.form.on("Woo Item", {
 			}
 		}
 	},
+
 });
+
+function fetch_price_from_erpnext_handler(frm) {
+	if (!frm.doc.item_code) {
+		frappe.msgprint(__("Please select an Item Code first."));
+		return;
+	}
+	frappe.call({
+		method: "fetch_price_from_erpnext",
+		doc: frm.doc,
+		freeze: true,
+		freeze_message: __("Fetching prices and pricing rules from ERPNext..."),
+		callback: function (r) {
+			if (r && r.message) {
+				let res = r.message;
+				let reg_p = flt(res.regular_price || 0);
+				let sale_p = flt(res.sale_price || 0);
+
+				frm.set_value("regular_price", reg_p);
+				frm.set_value("sale_price", sale_p);
+
+				let rule_info = res.pricing_rule
+					? `<br><b>🏷️ Pricing Rule Applied:</b> ${res.pricing_rule}`
+					: (sale_p > 0 ? "" : "<br><small class='text-muted'>ℹ️ No active discount Pricing Rule found for this item.</small>");
+
+				frappe.msgprint({
+					title: __("Prices Fetched from ERPNext"),
+					indicator: "green",
+					message: __("<b>Regular Price:</b> {0}<br><b>Sale Price:</b> {1}{2}", [
+						reg_p,
+						sale_p,
+						rule_info
+					])
+				});
+			}
+		}
+	});
+}
 
 // Event handlers for Woo Item Attribute child table
 frappe.ui.form.on("Woo Item Attribute", {

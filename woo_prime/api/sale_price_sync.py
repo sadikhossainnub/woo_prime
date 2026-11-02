@@ -30,7 +30,7 @@ def _get_active_price_list(settings=None):
 	)
 
 
-def _is_general_rule(pricing_rule_doc):
+def _is_general_rule(pricing_rule_doc, settings=None):
 	"""Verify if a Pricing Rule applies generally to all website visitors.
 
 	Skips rules restricted to specific customers, non-default customer groups,
@@ -39,8 +39,10 @@ def _is_general_rule(pricing_rule_doc):
 	Returns:
 		tuple: (is_general: bool, skip_reason: str or None)
 	"""
+	if not settings:
+		settings = frappe.get_single("Woo Settings")
+
 	# Check selling flag (Pricing Rule must apply to Selling)
-	rule_for = getattr(pricing_rule_doc, "applicable_for", None) or getattr(pricing_rule_doc, "rule_description", "")
 	if hasattr(pricing_rule_doc, "selling") and not pricing_rule_doc.selling:
 		return False, "Not a Selling Pricing Rule"
 
@@ -51,16 +53,25 @@ def _is_general_rule(pricing_rule_doc):
 	# Specific customer group restriction
 	customer_group = getattr(pricing_rule_doc, "customer_group", None)
 	if customer_group and customer_group not in ("All Customer Groups", ""):
-		# Check if it matches system default selling customer group
-		default_cg = frappe.db.get_single_value("Selling Settings", "customer_group")
-		if customer_group != default_cg:
+		allowed_cg = {
+			"All Customer Groups",
+			getattr(settings, "default_customer_group", None),
+			frappe.db.get_single_value("Selling Settings", "customer_group"),
+		}
+		allowed_cg = {c for c in allowed_cg if c}
+		if allowed_cg and customer_group not in allowed_cg:
 			return False, f"Restricted to customer group: {customer_group}"
 
 	# Specific territory restriction
 	territory = getattr(pricing_rule_doc, "territory", None)
 	if territory and territory not in ("All Territories", ""):
-		default_terr = frappe.db.get_single_value("Selling Settings", "territory")
-		if territory != default_terr:
+		allowed_t = {
+			"All Territories",
+			getattr(settings, "default_territory", None),
+			frappe.db.get_single_value("Selling Settings", "territory"),
+		}
+		allowed_t = {t for t in allowed_t if t}
+		if allowed_t and territory not in allowed_t:
 			return False, f"Restricted to territory: {territory}"
 
 	# Quantity threshold > 1
@@ -165,11 +176,43 @@ def _get_items_for_pricing_rule(pricing_rule_doc):
 	return list(all_item_codes)
 
 
+def _find_active_pricing_rule_doc(item_code, item_group=None, brand=None, price_list=None):
+	"""Fallback to locate an active general Pricing Rule for an item directly from DB."""
+	today_date = getdate(today())
+
+	# Fetch all active selling rules
+	candidate_rules = frappe.get_all(
+		"Pricing Rule",
+		filters={"disable": 0, "selling": 1},
+		fields=["name", "apply_on", "valid_from", "valid_upto", "for_price_list"],
+		order_by="priority desc, creation desc",
+	)
+
+	for r in candidate_rules:
+		# Check dates - only skip if expired
+		if r.valid_upto and getdate(r.valid_upto) < today_date:
+			continue
+		# Check price list
+		if r.for_price_list and price_list and r.for_price_list != price_list:
+			continue
+
+		rule_doc = frappe.get_doc("Pricing Rule", r.name)
+		is_gen, _ = _is_general_rule(rule_doc)
+		if not is_gen:
+			continue
+
+		affected_items = _get_items_for_pricing_rule(rule_doc)
+		if item_code in affected_items:
+			return rule_doc
+
+	return None
+
+
 def _get_sale_price_for_item(item_code, regular_price, settings=None):
 	"""Calculate effective sale price for an item using ERPNext's Pricing Rule engine.
 
 	Uses erpnext.accounts.doctype.pricing_rule.pricing_rule.get_pricing_rule_for_item
-	to ensure priorities, validities, UOMs, and rule conditions are evaluated by ERPNext.
+	with fallback to direct rule lookup if session args prevent rule discovery.
 
 	Args:
 		item_code (str): ERPNext Item Code
@@ -177,7 +220,7 @@ def _get_sale_price_for_item(item_code, regular_price, settings=None):
 		settings (Document, optional): Woo Settings singleton
 
 	Returns:
-		tuple: (sale_price: float or None, rule_doc_or_dict: dict or None, reason: str)
+		tuple: (sale_price: float or None, rule_doc: Document or None, reason: str)
 	"""
 	if not item_code or regular_price <= 0:
 		return None, None, "Invalid item code or regular price <= 0"
@@ -197,10 +240,38 @@ def _get_sale_price_for_item(item_code, regular_price, settings=None):
 
 	precision = _get_precision(currency)
 
+	variant_of = frappe.db.get_value("Item", item_code, "variant_of")
 	item_details = frappe.db.get_value("Item", item_code, ["item_group", "brand", "stock_uom"], as_dict=True) or {}
 	item_group = item_details.get("item_group")
 	brand = item_details.get("brand")
 	uom = item_details.get("stock_uom")
+
+	if variant_of:
+		tmpl_details = frappe.db.get_value("Item", variant_of, ["item_group", "brand", "stock_uom"], as_dict=True) or {}
+		if not item_group:
+			item_group = tmpl_details.get("item_group")
+		if not brand:
+			brand = tmpl_details.get("brand")
+		if not uom:
+			uom = tmpl_details.get("stock_uom")
+
+	customer_group = (
+		getattr(settings, "default_customer_group", None)
+		or frappe.db.get_single_value("Selling Settings", "customer_group")
+	)
+	if not customer_group or frappe.db.get_value("Customer Group", customer_group, "is_group"):
+		customer_group = frappe.db.get_value("Customer Group", {"is_group": 0}, "name")
+		if not customer_group:
+			customer_group = "All Customer Groups"
+
+	territory = (
+		getattr(settings, "default_territory", None)
+		or frappe.db.get_single_value("Selling Settings", "territory")
+	)
+	if not territory or frappe.db.get_value("Territory", territory, "is_group"):
+		territory = frappe.db.get_value("Territory", {"is_group": 0}, "name")
+		if not territory:
+			territory = "All Territories"
 
 	rule_args = frappe._dict({
 		"doctype": "Sales Order",
@@ -219,62 +290,103 @@ def _get_sale_price_for_item(item_code, regular_price, settings=None):
 		"transaction_type": "selling",
 		"ignore_pricing_rule": 0,
 		"customer": None,
-		"customer_group": None,
-		"territory": None,
+		"customer_group": customer_group,
+		"territory": territory,
 		"company": company,
 		"transaction_date": today(),
 	})
 
+	rule_res = {}
 	try:
 		from erpnext.accounts.doctype.pricing_rule.pricing_rule import (
 			get_pricing_rule_for_item,
 		)
-		rule_res = get_pricing_rule_for_item(rule_args)
-	except ImportError:
-		frappe.logger("woo_prime").error("ERPNext pricing_rule module not found")
-		return None, None, "ERPNext pricing_rule module not found"
+		rule_res = get_pricing_rule_for_item(rule_args) or {}
 	except Exception as e:
-		frappe.logger("woo_prime").error(f"Error calling get_pricing_rule_for_item for {item_code}: {e}")
-		return None, None, str(e)
+		frappe.logger("woo_prime").debug(f"get_pricing_rule_for_item notice for {item_code}: {e}")
 
-	if not rule_res:
-		return None, None, "No active rule returned"
+	rule_name = None
+	if rule_res:
+		rule_name = rule_res.get("pricing_rule")
+		if not rule_name:
+			rules = rule_res.get("pricing_rules")
+			if isinstance(rules, list) and rules:
+				rule_name = rules[0]
+			elif isinstance(rules, str) and rules:
+				try:
+					import json
+					parsed = json.loads(rules)
+					rule_name = parsed[0] if isinstance(parsed, list) and parsed else rules
+				except Exception:
+					rule_name = rules
 
-	rule_name = rule_res.get("pricing_rule")
-	if not rule_name:
-		return None, None, "No pricing_rule name in evaluation result"
+	if not rule_name and variant_of:
+		try:
+			from erpnext.accounts.doctype.pricing_rule.pricing_rule import (
+				get_pricing_rule_for_item,
+			)
+			template_args = frappe._dict(rule_args)
+			template_args["item_code"] = variant_of
+			rule_res_tmpl = get_pricing_rule_for_item(template_args) or {}
+			if rule_res_tmpl:
+				r_name = rule_res_tmpl.get("pricing_rule")
+				if not r_name:
+					rules = rule_res_tmpl.get("pricing_rules")
+					if isinstance(rules, list) and rules:
+						r_name = rules[0]
+					elif isinstance(rules, str) and rules:
+						try:
+							import json
+							parsed = json.loads(rules)
+							r_name = parsed[0] if isinstance(parsed, list) and parsed else rules
+						except Exception:
+							r_name = rules
+				if r_name:
+					rule_res = rule_res_tmpl
+					rule_name = r_name
+		except Exception as e:
+			frappe.logger("woo_prime").debug(f"Template pricing rule lookup fallback error: {e}")
 
-	# Double check rule is general (not restricted to specific customer/group/min_qty)
-	rule_doc = frappe.get_doc("Pricing Rule", rule_name)
-	is_general, skip_reason = _is_general_rule(rule_doc)
+	rule_doc = None
+	if rule_name and frappe.db.exists("Pricing Rule", rule_name):
+		rule_doc = frappe.get_doc("Pricing Rule", rule_name)
+	else:
+		# Direct DB fallback
+		rule_doc = _find_active_pricing_rule_doc(item_code, item_group, brand, price_list)
+
+	if not rule_doc:
+		return None, None, "No active pricing rule found"
+
+	is_general, skip_reason = _is_general_rule(rule_doc, settings)
 	if not is_general:
-		return None, None, f"Matched rule '{rule_name}' skipped: {skip_reason}"
+		return None, None, f"Matched rule '{rule_doc.name}' skipped: {skip_reason}"
 
-	# Check rule validity dates
 	today_date = getdate(today())
-	if rule_doc.valid_from and getdate(rule_doc.valid_from) > today_date:
-		return None, None, f"Rule '{rule_name}' not yet active (valid_from {rule_doc.valid_from})"
 	if rule_doc.valid_upto and getdate(rule_doc.valid_upto) < today_date:
-		return None, None, f"Rule '{rule_name}' expired (valid_upto {rule_doc.valid_upto})"
+		return None, None, f"Rule '{rule_doc.name}' expired"
 
-	discount_percentage = flt(rule_res.get("discount_percentage", 0))
-	discount_amount = flt(rule_res.get("discount_amount", 0))
-	rule_rate = rule_res.get("rate")
-	pricing_rule_for = rule_res.get("pricing_rule_for")
+	discount_percentage = flt(rule_res.get("discount_percentage", 0)) if rule_res else 0.0
+	if not discount_percentage:
+		discount_percentage = flt(getattr(rule_doc, "discount_percentage", 0))
+
+	discount_amount = flt(rule_res.get("discount_amount", 0)) if rule_res else 0.0
+	if not discount_amount:
+		discount_amount = flt(getattr(rule_doc, "discount_amount", 0))
+
+	rule_rate = rule_res.get("rate") if (rule_res and rule_res.get("rate") is not None) else getattr(rule_doc, "rate", None)
+	pricing_rule_for = rule_res.get("pricing_rule_for") if rule_res else None
+	if not pricing_rule_for:
+		pricing_rule_for = getattr(rule_doc, "rate_or_discount", None) or getattr(rule_doc, "price_or_product_discount", None)
 
 	effective_sale_price = None
 
-	# 1. Rate override rule
 	if rule_rate is not None and (pricing_rule_for == "Rate" or getattr(rule_doc, "rate_or_discount", None) == "Rate"):
 		effective_sale_price = flt(rule_rate)
-	# 2. Discount Percentage rule
 	elif discount_percentage > 0:
 		discount_amt = (regular_price * discount_percentage) / 100.0
 		effective_sale_price = regular_price - discount_amt
-	# 3. Discount Amount rule
 	elif discount_amount > 0:
 		effective_sale_price = regular_price - discount_amount
-	# 4. Fallback rate if rule returned a rate
 	elif rule_rate is not None and flt(rule_rate) > 0:
 		effective_sale_price = flt(rule_rate)
 
@@ -292,50 +404,60 @@ def _get_sale_price_for_item(item_code, regular_price, settings=None):
 	return effective_sale_price, rule_doc, "Success"
 
 
+def _format_iso_datetime(val, is_end=False):
+	"""Format date / datetime value into ISO 8601 format required by WooCommerce REST API (YYYY-MM-DDTHH:MM:SS)."""
+	if not val:
+		return ""
+	s = str(val).strip()
+	if not s:
+		return ""
+	if "T" in s:
+		return s
+	if " " in s:
+		d, t = s.split(" ", 1)
+		return f"{d}T{t}"
+	date_part = s[:10]
+	return f"{date_part}T23:59:59" if is_end else f"{date_part}T00:00:00"
+
+
 def _format_woo_sale_dates(rule_doc):
-	"""Format valid_from and valid_upto dates for WooCommerce product payload.
-	WooCommerce expects YYYY-MM-DD or empty string.
-	"""
+	"""Format valid_from and valid_upto dates as ISO 8601 date-time for WooCommerce API."""
 	date_from = ""
 	date_to = ""
+	if isinstance(rule_doc, str):
+		if frappe.db.exists("Pricing Rule", rule_doc):
+			rule_doc = frappe.get_doc("Pricing Rule", rule_doc)
+		else:
+			rule_doc = None
 	if rule_doc:
-		if getattr(rule_doc, "valid_from", None):
-			date_from = str(rule_doc.valid_from)
-		if getattr(rule_doc, "valid_upto", None):
-			date_to = str(rule_doc.valid_upto)
+		raw_from = getattr(rule_doc, "valid_from", None)
+		raw_to = getattr(rule_doc, "valid_upto", None)
+		if raw_from:
+			date_from = _format_iso_datetime(raw_from, is_end=False)
+		if raw_to:
+			date_to = _format_iso_datetime(raw_to, is_end=True)
 	return date_from, date_to
 
 
 def sync_pricing_rule_to_woo(pricing_rule_name, dry_run=False):
-	"""Sync all items covered by a specific Pricing Rule to WooCommerce as sale_price.
-
-	Args:
-		pricing_rule_name (str): Pricing Rule doc name
-		dry_run (bool): If True, only log planned changes without calling WooCommerce API
-
-	Returns:
-		dict: Sync summary statistics
+	"""Sync all items covered by a specific Pricing Rule:
+	1. Updates regular_price and sale_price on ERPNext Woo Item documents.
+	2. Pushes discounted sale_price to WooCommerce if item is published.
 	"""
-	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
 	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
 
 	settings = frappe.get_single("Woo Settings")
-	if not settings.enabled:
-		frappe.logger("woo_prime").info(f"Woo Settings disabled; skipping Pricing Rule {pricing_rule_name}")
-		return {"status": "skipped", "reason": "Woo Settings disabled"}
-
 	if not getattr(settings, "enable_sale_price_sync", 1):
 		frappe.logger("woo_prime").info(f"Sale price sync disabled in settings; skipping {pricing_rule_name}")
 		return {"status": "skipped", "reason": "enable_sale_price_sync disabled"}
 
 	if not frappe.db.exists("Pricing Rule", pricing_rule_name):
-		frappe.logger("woo_prime").warning(f"Pricing Rule {pricing_rule_name} not found")
 		return {"status": "skipped", "reason": "Pricing Rule not found"}
 
 	pricing_rule_doc = frappe.get_doc("Pricing Rule", pricing_rule_name)
 
 	# Check general rule eligibility
-	is_general, skip_reason = _is_general_rule(pricing_rule_doc)
+	is_general, skip_reason = _is_general_rule(pricing_rule_doc, settings)
 	if not is_general:
 		create_log(
 			sync_type="Price",
@@ -349,7 +471,6 @@ def sync_pricing_rule_to_woo(pricing_rule_name, dry_run=False):
 		)
 		return {"status": "skipped", "reason": skip_reason}
 
-	# Check if disabled or expired
 	is_disabled = cint(getattr(pricing_rule_doc, "disable", 0)) == 1
 	is_expired = False
 	today_date = getdate(today())
@@ -360,34 +481,38 @@ def sync_pricing_rule_to_woo(pricing_rule_name, dry_run=False):
 	if not affected_items:
 		return {"status": "skipped", "reason": "No items matched Pricing Rule"}
 
-	# If disabled or expired, clear sale prices for items affected by this rule
 	if is_disabled or is_expired:
 		return clear_sale_price_for_items(affected_items, dry_run=dry_run, rule_name=pricing_rule_name)
 
-	# Fetch mapped published Woo Items
+	# Fetch ALL matching Woo Items in ERPNext (both published and draft)
 	woo_items = frappe.get_all(
 		"Woo Item",
 		filters={
-			"published": 1,
-			"woo_product_id": [">", 0],
 			"item_code": ["in", affected_items],
 		},
-		fields=["name", "item_code", "woo_product_id", "regular_price", "sale_price", "last_pushed_price", "last_pushed_sale_price", "woo_product_type"],
+		fields=["name", "item_code", "woo_product_id", "published", "regular_price", "sale_price", "last_pushed_price", "last_pushed_sale_price", "woo_product_type"],
 	)
 
 	if not woo_items:
-		return {"status": "skipped", "reason": "No published Woo Items found for affected items"}
+		return {"status": "skipped", "reason": "No Woo Items found for affected items"}
 
 	from woo_prime.api.sync import _get_item_price
 	price_list = _get_active_price_list(settings)
 	date_from, date_to = _format_woo_sale_dates(pricing_rule_doc)
 
-	api = None if dry_run else get_woo_api()
+	api = None
+	if settings.enabled and not dry_run:
+		try:
+			from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
+			api = get_woo_api()
+		except Exception as api_init_err:
+			frappe.logger("woo_prime").warning(f"Could not initialize Woo API: {api_init_err}")
+
 	synced = 0
 	skipped = 0
 	errors = 0
 	batch_updates = []
-	batch_meta = []  # tuples of (woo_item_dict, regular_price, sale_price)
+	batch_meta = []
 
 	for item in woo_items:
 		try:
@@ -400,15 +525,37 @@ def sync_pricing_rule_to_woo(pricing_rule_name, dry_run=False):
 
 			# 2. Evaluate effective sale price
 			sale_price, matched_rule, reason = _get_sale_price_for_item(item.item_code, reg_price, settings)
+			if not sale_price or flt(sale_price) <= 0:
+				# Only update items that actually have an active discount rule
+				skipped += 1
+				continue
 
-			current_sale = flt(item.sale_price) if item.sale_price else None
+			sale_price_val = flt(sale_price)
+
+			# 3. Update ERPNext Woo Item record only for this discounted item
+			frappe.db.set_value(
+				"Woo Item",
+				item.name,
+				{
+					"regular_price": reg_price,
+					"sale_price": sale_price_val,
+				},
+				update_modified=False,
+			)
+
+			# 4. Check if published and API is active
+			is_published = item.published and item.woo_product_id
+			if not is_published or not api:
+				synced += 1
+				continue
+
+			# 5. Check if price changed since last push (idempotency check)
 			last_pushed_sale = flt(item.last_pushed_sale_price) if item.get("last_pushed_sale_price") else None
 			last_pushed_reg = flt(item.last_pushed_price) if item.get("last_pushed_price") else None
 
-			# 3. Check if price has changed (idempotent skip)
 			regular_unchanged = (last_pushed_reg is not None and abs(last_pushed_reg - reg_price) < 0.001)
 			sale_unchanged = (
-				(sale_price is None and (current_sale is None or current_sale <= 0) and (last_pushed_sale is None or last_pushed_sale <= 0))
+				(sale_price is None and (last_pushed_sale is None or last_pushed_sale <= 0))
 				or (sale_price is not None and last_pushed_sale is not None and abs(last_pushed_sale - sale_price) < 0.001)
 			)
 
@@ -416,14 +563,15 @@ def sync_pricing_rule_to_woo(pricing_rule_name, dry_run=False):
 				skipped += 1
 				continue
 
-			# 4. Check variation vs standalone product
+			# 6. Check variation vs standalone product
 			variant_of = frappe.db.get_value("Item", item.item_code, "variant_of")
 			woo_product_type = item.get("woo_product_type") or ""
 			parent_woo_id = None
-			if variant_of and woo_product_type not in ("Simple Item", "Variant Item"):
+			if variant_of and woo_product_type != "Simple Item":
 				parent_woo_id = (
 					frappe.db.get_value("Woo Item", {"item_code": variant_of}, "woo_product_id")
 					or frappe.db.get_value("Woo Item", {"sku": variant_of}, "woo_product_id")
+					or (frappe.db.exists("Woo Item", variant_of) and frappe.db.get_value("Woo Item", variant_of, "woo_product_id"))
 				)
 
 			if dry_run:
@@ -434,20 +582,12 @@ def sync_pricing_rule_to_woo(pricing_rule_name, dry_run=False):
 					reference_doctype="Woo Item",
 					reference_name=item.name,
 					woo_reference_id=str(item.woo_product_id),
-					request_data={
-						"dry_run": True,
-						"item_code": item.item_code,
-						"regular_price": reg_price,
-						"sale_price": sale_price if sale_price is not None else "",
-						"date_on_sale_from": date_from,
-						"date_on_sale_to": date_to,
-					},
+					request_data={"dry_run": True, "item_code": item.item_code, "regular_price": reg_price, "sale_price": sale_price_val, "date_from": date_from, "date_to": date_to},
 					response_data={"status": "Dry Run Simulation Success"},
 				)
 				synced += 1
 				continue
 
-			# Variations: update individually using single variation endpoint
 			if parent_woo_id:
 				try:
 					api.update_variation_price(
@@ -456,6 +596,8 @@ def sync_pricing_rule_to_woo(pricing_rule_name, dry_run=False):
 						reg_price,
 						sale_price=sale_price,
 						clear_sale=(sale_price is None),
+						date_from=date_from,
+						date_to=date_to,
 					)
 					_record_woo_item_price_success(item.name, reg_price, sale_price, str(item.woo_product_id))
 					synced += 1
@@ -464,7 +606,7 @@ def sync_pricing_rule_to_woo(pricing_rule_name, dry_run=False):
 					frappe.log_error(f"Sale price sync variation error for {item.name}: {var_err}")
 				continue
 
-			# Standalone products: prepare for batch update
+			# Standalone product batch
 			p_data = {
 				"id": int(item.woo_product_id),
 				"regular_price": str(reg_price),
@@ -482,77 +624,70 @@ def sync_pricing_rule_to_woo(pricing_rule_name, dry_run=False):
 			errors += 1
 			frappe.log_error(f"Error evaluating sale price for {item.name}: {item_err}")
 
+	frappe.db.commit()
+
 	# Dispatch batches (100 products per request)
-	chunk_size = 100
-	for i in range(0, len(batch_updates), chunk_size):
-		chunk_payload = batch_updates[i : i + chunk_size]
-		chunk_meta = batch_meta[i : i + chunk_size]
-		try:
-			api.batch_products({"update": chunk_payload})
-			for meta_item, reg_price, sale_price in chunk_meta:
-				_record_woo_item_price_success(
-					meta_item["name"], reg_price, sale_price, str(meta_item["woo_product_id"])
-				)
-				synced += 1
-			frappe.db.commit()
-		except Exception as batch_err:
-			frappe.log_error(f"Batch sale price update error for Pricing Rule {pricing_rule_name}: {batch_err}")
-			# Fallback to single item calls on batch failure
-			for meta_item, reg_price, sale_price in chunk_meta:
-				try:
-					api.update_price(
-						meta_item["woo_product_id"],
-						reg_price,
-						sale_price=sale_price,
-						clear_sale=(sale_price is None),
-					)
+	if api and batch_updates:
+		chunk_size = 100
+		for i in range(0, len(batch_updates), chunk_size):
+			chunk_payload = batch_updates[i : i + chunk_size]
+			chunk_meta = batch_meta[i : i + chunk_size]
+			try:
+				api.batch_products({"update": chunk_payload})
+				for meta_item, reg_price, sale_price in chunk_meta:
 					_record_woo_item_price_success(
 						meta_item["name"], reg_price, sale_price, str(meta_item["woo_product_id"])
 					)
 					synced += 1
-				except Exception as single_err:
-					errors += 1
-					frappe.log_error(f"Single sale price fallback error for {meta_item['name']}: {single_err}")
+				frappe.db.commit()
+			except Exception as batch_err:
+				frappe.log_error(f"Batch sale price update error for Pricing Rule {pricing_rule_name}: {batch_err}")
+				for meta_item, reg_price, sale_price in chunk_meta:
+					try:
+						api.update_price(
+							meta_item["woo_product_id"],
+							reg_price,
+							sale_price=sale_price,
+							clear_sale=(sale_price is None),
+						)
+						_record_woo_item_price_success(
+							meta_item["name"], reg_price, sale_price, str(meta_item["woo_product_id"])
+						)
+						synced += 1
+					except Exception as single_err:
+						errors += 1
+						frappe.log_error(f"Single sale price fallback error for {meta_item['name']}: {single_err}")
 
 	return {"status": "completed", "synced": synced, "skipped": skipped, "errors": errors}
 
 
 def clear_sale_price_for_items(item_codes, dry_run=False, rule_name=""):
-	"""Clear sale prices for items where Pricing Rule was disabled, deleted, or expired.
-	Before clearing, evaluates if another active Pricing Rule applies to the item.
-	If another rule applies, syncs that discounted price instead.
-
-	Args:
-		item_codes (list): List of item codes
-		dry_run (bool): Dry run mode
-		rule_name (str): Pricing Rule name that triggered the clear
-
-	Returns:
-		dict: Stats of operations
-	"""
-	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
+	"""Clear sale prices for items where Pricing Rule was disabled, deleted, or expired."""
 	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
 
 	if not item_codes:
 		return {"status": "skipped", "reason": "No items provided"}
 
 	settings = frappe.get_single("Woo Settings")
-	if not settings.enabled:
-		return {"status": "skipped", "reason": "Woo Settings disabled"}
 
 	woo_items = frappe.get_all(
 		"Woo Item",
 		filters={
-			"published": 1,
-			"woo_product_id": [">", 0],
 			"item_code": ["in", item_codes],
 		},
-		fields=["name", "item_code", "woo_product_id", "regular_price", "sale_price", "last_pushed_price", "last_pushed_sale_price", "woo_product_type"],
+		fields=["name", "item_code", "woo_product_id", "published", "regular_price", "sale_price", "last_pushed_price", "last_pushed_sale_price", "woo_product_type"],
 	)
 
 	from woo_prime.api.sync import _get_item_price
 	price_list = _get_active_price_list(settings)
-	api = None if dry_run else get_woo_api()
+
+	api = None
+	if settings.enabled and not dry_run:
+		try:
+			from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
+			api = get_woo_api()
+		except Exception:
+			pass
 
 	cleared = 0
 	updated = 0
@@ -569,34 +704,46 @@ def clear_sale_price_for_items(item_codes, dry_run=False, rule_name=""):
 				skipped += 1
 				continue
 
-			# Check if any OTHER active pricing rule still covers this item
-			alt_sale_price, alt_rule, _ = _get_sale_price_for_item(item.item_code, reg_price, settings)
+			# Check if another active pricing rule covers this item
+			alt_sale_price, alt_matched_rule, _ = _get_sale_price_for_item(item.item_code, reg_price, settings)
+			target_sale = alt_sale_price
+			is_clearing = (target_sale is None)
+
+			# Always update ERPNext Woo Item record
+			frappe.db.set_value(
+				"Woo Item",
+				item.name,
+				{
+					"sale_price": flt(target_sale) if target_sale is not None else 0.0,
+				},
+				update_modified=False,
+			)
+
+			if is_clearing:
+				cleared += 1
+			else:
+				updated += 1
+
+			# Only push to WooCommerce if published and API active
+			if not (item.published and item.woo_product_id) or not api:
+				continue
 
 			last_pushed_sale = flt(item.last_pushed_sale_price) if item.get("last_pushed_sale_price") else None
-			current_sale = flt(item.sale_price) if item.sale_price else None
-
-			if alt_sale_price is not None:
-				# Another rule covers it! Update to the new rule's sale price
-				if last_pushed_sale is not None and abs(last_pushed_sale - alt_sale_price) < 0.001:
-					skipped += 1
-					continue
-				target_sale = alt_sale_price
-				is_clearing = False
-			else:
-				# No active rule covers it; clear sale price
-				if (current_sale is None or current_sale <= 0) and (last_pushed_sale is None or last_pushed_sale <= 0):
-					skipped += 1
-					continue
-				target_sale = None
-				is_clearing = True
+			if is_clearing and (last_pushed_sale is None or last_pushed_sale <= 0):
+				skipped += 1
+				continue
+			if not is_clearing and last_pushed_sale is not None and abs(last_pushed_sale - target_sale) < 0.001:
+				skipped += 1
+				continue
 
 			variant_of = frappe.db.get_value("Item", item.item_code, "variant_of")
 			woo_product_type = item.get("woo_product_type") or ""
 			parent_woo_id = None
-			if variant_of and woo_product_type not in ("Simple Item", "Variant Item"):
+			if variant_of and woo_product_type != "Simple Item":
 				parent_woo_id = (
 					frappe.db.get_value("Woo Item", {"item_code": variant_of}, "woo_product_id")
 					or frappe.db.get_value("Woo Item", {"sku": variant_of}, "woo_product_id")
+					or (frappe.db.exists("Woo Item", variant_of) and frappe.db.get_value("Woo Item", variant_of, "woo_product_id"))
 				)
 
 			if dry_run:
@@ -610,26 +757,21 @@ def clear_sale_price_for_items(item_codes, dry_run=False, rule_name=""):
 					request_data={"dry_run": True, "action": "clear" if is_clearing else "update", "sale_price": "" if is_clearing else target_sale},
 					response_data={"status": "Dry Run Simulation Success"},
 				)
-				if is_clearing:
-					cleared += 1
-				else:
-					updated += 1
 				continue
 
 			if parent_woo_id:
 				try:
+					alt_date_from, alt_date_to = _format_woo_sale_dates(alt_matched_rule) if (not is_clearing and alt_matched_rule) else ("", "")
 					api.update_variation_price(
 						parent_woo_id,
 						item.woo_product_id,
 						reg_price,
 						sale_price=target_sale,
 						clear_sale=is_clearing,
+						date_from=alt_date_from,
+						date_to=alt_date_to,
 					)
 					_record_woo_item_price_success(item.name, reg_price, target_sale, str(item.woo_product_id))
-					if is_clearing:
-						cleared += 1
-					else:
-						updated += 1
 				except Exception as var_err:
 					errors += 1
 					frappe.log_error(f"Variation sale price clear/update error: {var_err}")
@@ -649,42 +791,36 @@ def clear_sale_price_for_items(item_codes, dry_run=False, rule_name=""):
 			errors += 1
 			frappe.log_error(f"Error in clear_sale_price_for_items for {item.name}: {e}")
 
-	# Batch update
-	chunk_size = 100
-	for i in range(0, len(batch_updates), chunk_size):
-		chunk_payload = batch_updates[i : i + chunk_size]
-		chunk_meta = batch_meta[i : i + chunk_size]
-		try:
-			api.batch_products({"update": chunk_payload})
-			for meta_item, reg_price, target_sale, is_clearing in chunk_meta:
-				_record_woo_item_price_success(
-					meta_item["name"], reg_price, target_sale, str(meta_item["woo_product_id"])
-				)
-				if is_clearing:
-					cleared += 1
-				else:
-					updated += 1
-			frappe.db.commit()
-		except Exception as batch_err:
-			frappe.log_error(f"Batch clear error for Pricing Rule {rule_name}: {batch_err}")
-			for meta_item, reg_price, target_sale, is_clearing in chunk_meta:
-				try:
-					api.update_price(
-						meta_item["woo_product_id"],
-						reg_price,
-						sale_price=target_sale,
-						clear_sale=is_clearing,
-					)
+	frappe.db.commit()
+
+	if api and batch_updates:
+		chunk_size = 100
+		for i in range(0, len(batch_updates), chunk_size):
+			chunk_payload = batch_updates[i : i + chunk_size]
+			chunk_meta = batch_meta[i : i + chunk_size]
+			try:
+				api.batch_products({"update": chunk_payload})
+				for meta_item, reg_price, target_sale, is_clearing in chunk_meta:
 					_record_woo_item_price_success(
 						meta_item["name"], reg_price, target_sale, str(meta_item["woo_product_id"])
 					)
-					if is_clearing:
-						cleared += 1
-					else:
-						updated += 1
-				except Exception as single_err:
-					errors += 1
-					frappe.log_error(f"Single clear fallback error for {meta_item['name']}: {single_err}")
+				frappe.db.commit()
+			except Exception as batch_err:
+				frappe.log_error(f"Batch clear error for Pricing Rule {rule_name}: {batch_err}")
+				for meta_item, reg_price, target_sale, is_clearing in chunk_meta:
+					try:
+						api.update_price(
+							meta_item["woo_product_id"],
+							reg_price,
+							sale_price=target_sale,
+							clear_sale=is_clearing,
+						)
+						_record_woo_item_price_success(
+							meta_item["name"], reg_price, target_sale, str(meta_item["woo_product_id"])
+						)
+					except Exception as single_err:
+						errors += 1
+						frappe.log_error(f"Single clear fallback error for {meta_item['name']}: {single_err}")
 
 	return {"status": "completed", "cleared": cleared, "updated": updated, "skipped": skipped, "errors": errors}
 
@@ -722,22 +858,15 @@ def _record_woo_item_price_success(woo_item_name, regular_price, sale_price, woo
 
 
 def sync_all_sale_prices_daily():
-	"""Scheduled daily job:
-	1. Re-syncs all items covered by active, general Pricing Rules.
-	2. Clears sale_price on WooCommerce for any Woo Items whose Pricing Rules have expired.
-	"""
+	"""Scheduled daily job to re-sync active rules and clear expired rules."""
 	settings = frappe.get_single("Woo Settings")
-	if not settings.enabled or not getattr(settings, "enable_sale_price_sync", 1):
+	if not getattr(settings, "enable_sale_price_sync", 1):
 		return
 
 	today_date = getdate(today())
-
-	# 1. Active general rules
 	active_rules = frappe.get_all(
 		"Pricing Rule",
-		filters={
-			"disable": 0,
-		},
+		filters={"disable": 0},
 		pluck="name",
 	)
 
@@ -746,7 +875,6 @@ def sync_all_sale_prices_daily():
 		try:
 			rule_doc = frappe.get_doc("Pricing Rule", rule_name)
 			if rule_doc.valid_upto and getdate(rule_doc.valid_upto) < today_date:
-				# Expired rule
 				clear_sale_price_for_rule(rule_name)
 				continue
 			res = sync_pricing_rule_to_woo(rule_name)
@@ -754,21 +882,7 @@ def sync_all_sale_prices_daily():
 		except Exception as e:
 			frappe.log_error(f"Daily sale price sync error for Pricing Rule {rule_name}: {e}")
 
-	# 2. Check for orphaned sale prices: Woo Items with sale_price > 0 where no active rule applies
-	woo_items_with_sale = frappe.get_all(
-		"Woo Item",
-		filters={
-			"published": 1,
-			"woo_product_id": [">", 0],
-			"sale_price": [">", 0],
-		},
-		pluck="item_code",
-	)
-
-	if woo_items_with_sale:
-		clear_sale_price_for_items(woo_items_with_sale)
-
-	frappe.logger("woo_prime").info(f"Daily sale price sync finished. Synced {synced_total} items.")
+	frappe.logger("woo_prime").info(f"Daily sale price sync finished. Processed {synced_total} items.")
 
 
 def clear_sale_price_for_rule(pricing_rule_name, dry_run=False):
@@ -784,9 +898,6 @@ def clear_sale_price_for_rule(pricing_rule_name, dry_run=False):
 def sync_sale_prices_manual(dry_run=False):
 	"""Manual entry point for syncing all sale prices via button or API."""
 	settings = frappe.get_single("Woo Settings")
-	if not settings.enabled:
-		return {"status": "error", "message": _("WooCommerce Integration is disabled in Woo Settings.")}
-
 	today_date = getdate(today())
 	active_rules = frappe.get_all(
 		"Pricing Rule",
@@ -815,20 +926,6 @@ def sync_sale_prices_manual(dry_run=False):
 			total_errors += 1
 			frappe.log_error(f"Manual sale price sync error for rule {rule_name}: {e}")
 
-	# Check orphaned sale prices
-	woo_items_with_sale = frappe.get_all(
-		"Woo Item",
-		filters={
-			"published": 1,
-			"woo_product_id": [">", 0],
-			"sale_price": [">", 0],
-		},
-		pluck="item_code",
-	)
-	if woo_items_with_sale:
-		clr_res = clear_sale_price_for_items(woo_items_with_sale, dry_run=dry_run)
-		total_cleared += clr_res.get("cleared", 0)
-
 	return {
 		"status": "success",
 		"synced": total_synced,
@@ -850,7 +947,7 @@ def on_pricing_rule_update(doc, method):
 
 	try:
 		settings = frappe.get_single("Woo Settings")
-		if not settings.enabled or not getattr(settings, "enable_sale_price_sync", 1):
+		if not getattr(settings, "enable_sale_price_sync", 1):
 			return
 
 		frappe.enqueue(
@@ -870,7 +967,7 @@ def on_pricing_rule_trash(doc, method):
 	"""Hook handler on Pricing Rule delete or cancel."""
 	try:
 		settings = frappe.get_single("Woo Settings")
-		if not settings.enabled or not getattr(settings, "enable_sale_price_sync", 1):
+		if not getattr(settings, "enable_sale_price_sync", 1):
 			return
 
 		frappe.enqueue(
@@ -884,4 +981,3 @@ def on_pricing_rule_trash(doc, method):
 		)
 	except Exception as e:
 		frappe.log_error(f"Pricing Rule trash/cancel hook error for {doc.name}: {e}")
-

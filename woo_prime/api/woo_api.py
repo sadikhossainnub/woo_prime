@@ -8,6 +8,7 @@ from requests.auth import HTTPBasicAuth
 
 import frappe
 from frappe import _
+from frappe.utils import cint, flt
 
 
 DEFAULT_USER_AGENT = "curl/8.5.0"
@@ -48,6 +49,22 @@ def is_woocommerce_json_error(response):
 	except Exception:
 		pass
 	return False
+
+
+def _format_iso_datetime(val, is_end=False):
+	"""Format date / datetime value into ISO 8601 format required by WooCommerce REST API (YYYY-MM-DDTHH:MM:SS)."""
+	if not val:
+		return ""
+	s = str(val).strip()
+	if not s:
+		return ""
+	if "T" in s:
+		return s
+	if " " in s:
+		d, t = s.split(" ", 1)
+		return f"{d}T{t}"
+	date_part = s[:10]
+	return f"{date_part}T23:59:59" if is_end else f"{date_part}T00:00:00"
 
 
 class WooAPI:
@@ -862,7 +879,7 @@ class WooAPI:
 			)
 		frappe.throw(f"WooCommerce API Error ({response.status_code}): {response.text[:500]}")
 
-	def update_price(self, product_id, regular_price, sale_price=None, clear_sale=False):
+	def update_price(self, product_id, regular_price, sale_price=None, clear_sale=False, date_from=None, date_to=None):
 		"""Update price for a product.
 
 		Args:
@@ -870,6 +887,8 @@ class WooAPI:
 			regular_price: Regular price
 			sale_price: Optional sale price
 			clear_sale: When True, explicitly send sale_price="" to clear any existing sale price
+			date_from: Optional sale start date (YYYY-MM-DD or ISO 8601)
+			date_to: Optional sale end date (YYYY-MM-DD or ISO 8601)
 
 		Returns:
 			dict: WooCommerce product response
@@ -877,11 +896,16 @@ class WooAPI:
 		Raises:
 			frappe.ValidationError: on 404 (product not found in WooCommerce)
 		"""
+		from frappe.utils import flt
 		data = {"regular_price": str(regular_price)}
-		if sale_price is not None:
+		if sale_price is not None and str(sale_price).strip() and flt(sale_price) > 0:
 			data["sale_price"] = str(sale_price)
+			data["date_on_sale_from"] = _format_iso_datetime(date_from, is_end=False) if date_from else ""
+			data["date_on_sale_to"] = _format_iso_datetime(date_to, is_end=True) if date_to else ""
 		elif clear_sale:
 			data["sale_price"] = ""
+			data["date_on_sale_from"] = ""
+			data["date_on_sale_to"] = ""
 		response = self.put(f"products/{product_id}", data=data)
 		if response.status_code == 200:
 			return response.json()
@@ -892,7 +916,7 @@ class WooAPI:
 			)
 		frappe.throw(f"WooCommerce API Error ({response.status_code}): {response.text[:500]}")
 
-	def update_variation_price(self, parent_id, variation_id, regular_price, sale_price=None, clear_sale=False):
+	def update_variation_price(self, parent_id, variation_id, regular_price, sale_price=None, clear_sale=False, date_from=None, date_to=None):
 		"""Update price for a product variation.
 
 		Args:
@@ -901,6 +925,8 @@ class WooAPI:
 			regular_price: Regular price
 			sale_price: Optional sale price
 			clear_sale: When True, explicitly send sale_price="" to clear any existing sale price
+			date_from: Optional sale start date (YYYY-MM-DD or ISO 8601)
+			date_to: Optional sale end date (YYYY-MM-DD or ISO 8601)
 
 		Returns:
 			dict: WooCommerce variation response
@@ -908,11 +934,16 @@ class WooAPI:
 		Raises:
 			frappe.ValidationError: on 404 (variation not found in WooCommerce)
 		"""
+		from frappe.utils import flt
 		data = {"regular_price": str(regular_price)}
-		if sale_price is not None:
+		if sale_price is not None and str(sale_price).strip() and flt(sale_price) > 0:
 			data["sale_price"] = str(sale_price)
+			data["date_on_sale_from"] = _format_iso_datetime(date_from, is_end=False) if date_from else ""
+			data["date_on_sale_to"] = _format_iso_datetime(date_to, is_end=True) if date_to else ""
 		elif clear_sale:
 			data["sale_price"] = ""
+			data["date_on_sale_from"] = ""
+			data["date_on_sale_to"] = ""
 		response = self.put(f"products/{parent_id}/variations/{variation_id}", data=data)
 		if response.status_code == 200:
 			return response.json()
