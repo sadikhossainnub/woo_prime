@@ -35,6 +35,7 @@
   "column_break_sync",
   "last_pushed_qty",
   "last_pushed_price",
+  "last_pushed_sale_price",
   "last_synced",
   "has_variants",
   "variant_of",
@@ -207,6 +208,12 @@
    "read_only": 1
   },
   {
+   "fieldname": "last_pushed_sale_price",
+   "fieldtype": "Float",
+   "label": "Last Pushed Sale Price",
+   "read_only": 1
+  },
+  {
    "fieldname": "last_synced",
    "fieldtype": "Datetime",
    "in_filter": 1,
@@ -240,7 +247,7 @@
    "read_only": 1
   },
   {
-   "description": "Choose how to publish this item on WooCommerce:\n\u2022 Simple Item: Publish as simple product (stock managed at product level)\n\u2022 Variant Item: Create as variable product with variations (stock managed at variation level)\n\u2022 Blank: Auto-detect based on item type",
+   "description": "Choose how to publish this item on WooCommerce:\n• Simple Item: Publish as simple product (stock managed at product level)\n• Variant Item: Create as variable product with variations (stock managed at variation level)\n• Blank: Auto-detect based on item type",
    "fieldname": "woo_product_type",
    "fieldtype": "Select",
    "label": "WooCommerce Product Type",

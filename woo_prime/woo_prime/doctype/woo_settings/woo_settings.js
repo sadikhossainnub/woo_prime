@@ -41,6 +41,9 @@ frappe.ui.form.on("Woo Settings", {
 		if (frm.fields_dict.fetch_shipping_btn) {
 			frm.fields_dict.fetch_shipping_btn.$input.addClass("btn-primary");
 		}
+		if (frm.fields_dict.sync_sale_prices_btn) {
+			frm.fields_dict.sync_sale_prices_btn.$input.addClass("btn-primary");
+		}
 
 		// Add custom button to copy Webhook Delivery URL
 		frm.add_custom_button(
@@ -177,6 +180,15 @@ frappe.ui.form.on("Woo Settings", {
 			__("Push Attributes to WooCommerce"),
 			function () {
 				frm.events.push_attributes_btn(frm);
+			},
+			__("Sync")
+		);
+
+		// Add custom button to sync sale prices to WooCommerce
+		frm.add_custom_button(
+			__("Sync Sale Prices to WooCommerce"),
+			function () {
+				frm.events.sync_sale_prices_btn(frm);
 			},
 			__("Sync")
 		);
@@ -329,6 +341,44 @@ frappe.ui.form.on("Woo Settings", {
 				}
 			}
 		});
+	},
+
+	sync_sale_prices_btn(frm) {
+		let d = new frappe.ui.Dialog({
+			title: __("Sync Sale Prices to WooCommerce"),
+			fields: [
+				{
+					fieldtype: "HTML",
+					fieldname: "info",
+					options: `<p>${__("This will evaluate all active Pricing Rules in ERPNext and sync discounted prices to WooCommerce as sale_price. Rules that are expired or disabled will have their sale_price cleared.")}</p>`
+				},
+				{
+					fieldname: "dry_run",
+					fieldtype: "Check",
+					label: __("Dry Run (Simulate only, do not push to WooCommerce)"),
+					default: 0
+				}
+			],
+			primary_action_label: __("Start Sync"),
+			primary_action: function (values) {
+				d.hide();
+				frappe.call({
+					method: "sync_sale_prices",
+					doc: frm.doc,
+					args: {
+						dry_run: values.dry_run || 0
+					},
+					freeze: true,
+					freeze_message: values.dry_run ? __("Simulating sale price sync...") : __("Syncing sale prices to WooCommerce..."),
+					callback: function (r) {
+						if (r && r.message) {
+							// Alert / msgprint handled by server
+						}
+					}
+				});
+			}
+		});
+		d.show();
 	},
 
 	test_connection_btn(frm) {

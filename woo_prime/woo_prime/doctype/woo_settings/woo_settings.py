@@ -162,6 +162,12 @@ class WooSettings(Document):
 		frappe.only_for(["System Manager", "Woo Manager"])
 		return fetch_shipping_from_woo(background=background)
 
+	@frappe.whitelist()
+	def sync_sale_prices(self, dry_run=False):
+		"""Manually sync all Pricing Rule sale prices to WooCommerce."""
+		frappe.only_for(["System Manager", "Woo Manager"])
+		return sync_sale_prices(dry_run=dry_run)
+
 
 @frappe.whitelist()
 def generate_api_shared_secret():
@@ -601,3 +607,24 @@ def _fetch_shipping_worker(user=None):
 	}
 
 
+
+
+@frappe.whitelist()
+def sync_sale_prices(dry_run=False):
+	"""Manually sync all Pricing Rule sale prices to WooCommerce."""
+	frappe.only_for(["System Manager", "Woo Manager"])
+	from woo_prime.api.sale_price_sync import sync_sale_prices_manual
+	from frappe.utils import cint
+	is_dry = bool(cint(dry_run)) if isinstance(dry_run, (int, str)) and str(dry_run).isdigit() else (str(dry_run).lower() in ("true", "1"))
+	result = sync_sale_prices_manual(dry_run=is_dry)
+	prefix = "[Dry Run] " if is_dry else ""
+	frappe.msgprint(
+		f"✅ {prefix}Sale Price Sync Completed:<br>"
+		f"Synced / Updated: <b>{result.get('synced', 0)}</b><br>"
+		f"Cleared: <b>{result.get('cleared', 0)}</b><br>"
+		f"Skipped (Unchanged/Excluded): <b>{result.get('skipped', 0)}</b><br>"
+		f"Errors: <b>{result.get('errors', 0)}</b>",
+		title=_("Sale Price Sync"),
+		indicator="green" if result.get("errors", 0) == 0 else "orange",
+	)
+	return result

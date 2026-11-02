@@ -144,6 +144,11 @@ after_install = "woo_prime.install.after_install"
 # Hook on document methods and events
 
 doc_events = {
+	"Pricing Rule": {
+		"on_update": "woo_prime.api.sale_price_sync.on_pricing_rule_update",
+		"on_trash": "woo_prime.api.sale_price_sync.on_pricing_rule_trash",
+		"on_cancel": "woo_prime.api.sale_price_sync.on_pricing_rule_trash",
+	},
 	"Bin": {
 		"on_update": "woo_prime.api.sync.on_bin_update"
 	},
@@ -175,6 +180,7 @@ scheduler_events = {
 	"daily": [
 		"woo_prime.api.sync.reconcile_orders",
 		"woo_prime.api.sync.prune_sync_logs",
+		"woo_prime.api.sale_price_sync.sync_all_sale_prices_daily",
 	],
 }
 

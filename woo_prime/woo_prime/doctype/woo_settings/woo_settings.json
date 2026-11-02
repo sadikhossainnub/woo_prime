@@ -33,6 +33,7 @@
   "default_warehouse",
   "column_break_defaults",
   "default_price_list",
+  "website_price_list",
   "default_customer_group",
   "default_territory",
   "default_item_group",
@@ -73,6 +74,8 @@
   "enable_price_sync",
   "price_sync_interval",
   "last_price_sync_time",
+  "enable_sale_price_sync",
+  "sync_sale_prices_btn",
   "enable_order_sync",
   "order_sync_interval",
   "last_order_sync_time",
@@ -251,6 +254,13 @@
    "label": "Default Price List",
    "options": "Price List",
    "reqd": 1
+  },
+  {
+   "description": "Price List used for WooCommerce regular price and Pricing Rules. Falls back to Default Price List if empty.",
+   "fieldname": "website_price_list",
+   "fieldtype": "Link",
+   "label": "Website Price List",
+   "options": "Price List"
   },
   {
    "fieldname": "default_customer_group",
@@ -502,6 +512,18 @@
    "fieldtype": "Datetime",
    "label": "Last Price Sync Time",
    "read_only": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "enable_sale_price_sync",
+   "fieldtype": "Check",
+   "label": "Enable Pricing Rule Sale Price Sync"
+  },
+  {
+   "depends_on": "eval:doc.enable_sale_price_sync==1",
+   "fieldname": "sync_sale_prices_btn",
+   "fieldtype": "Button",
+   "label": "Sync Sale Prices to WooCommerce"
   },
   {
    "default": "1",

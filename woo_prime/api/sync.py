@@ -824,6 +824,7 @@ def _map_order_items(order_data, settings, delivery_date=None):
 			"rate": rate,
 			"delivery_date": item_delivery_date,
 			"warehouse": settings.default_warehouse,
+			"ignore_pricing_rule": 1,
 		})
 
 	if unmapped:
@@ -1031,7 +1032,9 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 	variation_attr_keys = set()
 
 	if getattr(woo_item, "item_attributes", None) and len(woo_item.item_attributes) > 0:
-		for idx, row in enumerate(woo_item.item_attributes):
+		# Sort by Frappe idx to respect the row order set in the child table UI
+		sorted_attrs = sorted(woo_item.item_attributes, key=lambda r: (getattr(r, "idx", 0) or 0))
+		for pos, row in enumerate(sorted_attrs):
 			attr_name = row.attribute_name or row.attribute
 			if not attr_name:
 				continue
@@ -1047,7 +1050,7 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 			is_var = bool(getattr(row, "is_variation", 1))
 			attr_payload = {
 				"name": target_name or attr_name,
-				"position": idx,  # Maintain order from child table
+				"position": pos,  # Maintain order from child table (sorted by Frappe idx)
 				"visible": bool(getattr(row, "is_visible", 1)),
 				"variation": is_var,
 				"options": opts if opts else [],
@@ -1274,7 +1277,7 @@ def get_or_create_woo_item(item_code, sku=None):
 			changed = True
 		if not woo_item.regular_price or flt(woo_item.regular_price) <= 0:
 			settings = frappe.get_single("Woo Settings")
-			price_list = getattr(settings, "default_price_list", None) or "Standard Selling"
+			price_list = getattr(settings, "website_price_list", None) or getattr(settings, "default_price_list", None) or "Standard Selling"
 			price = _get_item_price(item_code, price_list)
 			if price:
 				woo_item.regular_price = flt(price)
@@ -1288,7 +1291,7 @@ def get_or_create_woo_item(item_code, sku=None):
 	woo_item.item_code = item_code
 	woo_item.sku = sku or item_code
 	settings = frappe.get_single("Woo Settings")
-	price_list = getattr(settings, "default_price_list", None) or "Standard Selling"
+	price_list = getattr(settings, "website_price_list", None) or getattr(settings, "default_price_list", None) or "Standard Selling"
 	price = _get_item_price(item_code, price_list)
 	if price:
 		woo_item.regular_price = flt(price)
@@ -1860,7 +1863,9 @@ def _get_simple_item_attributes(item, woo_item=None, api=None):
 	"""Extract Item Attributes for simple products. Uses woo_item.item_attributes if available, else item.attributes."""
 	if woo_item and getattr(woo_item, "item_attributes", None) and len(woo_item.item_attributes) > 0:
 		woo_attrs = []
-		for idx, row in enumerate(woo_item.item_attributes):
+		# Sort by Frappe idx to respect the row order set in the child table UI
+		sorted_attrs = sorted(woo_item.item_attributes, key=lambda r: (getattr(r, "idx", 0) or 0))
+		for pos, row in enumerate(sorted_attrs):
 			attr_name = row.attribute_name or row.attribute
 			if not attr_name:
 				continue
@@ -1868,7 +1873,7 @@ def _get_simple_item_attributes(item, woo_item=None, api=None):
 			woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr_name, api)
 			attr_payload = {
 				"name": target_name or attr_name,
-				"position": idx,  # Maintain order from child table
+				"position": pos,  # Maintain order from child table (sorted by Frappe idx)
 				"visible": bool(getattr(row, "is_visible", 1)),
 				"variation": False,
 				"options": opts if opts else [],
@@ -2017,7 +2022,8 @@ def sync_price_to_woo(woo_item):
 	api = get_woo_api()
 	settings = frappe.get_single("Woo Settings")
 
-	price = _get_item_price(woo_item.item_code, settings.default_price_list)
+	active_pl = getattr(settings, "website_price_list", None) or getattr(settings, "default_price_list", None)
+	price = _get_item_price(woo_item.item_code, active_pl)
 	regular_price = flt(price) if price > 0 else (flt(woo_item.regular_price) if getattr(woo_item, "regular_price", None) else 0.0)
 
 	# Guard: never send price 0 when Woo Item has no regular_price configured
@@ -2031,7 +2037,20 @@ def sync_price_to_woo(woo_item):
 	if regular_price > 0 and (not woo_item.regular_price or flt(woo_item.regular_price) != regular_price):
 		woo_item.db_set("regular_price", regular_price)
 
-	# Determine sale_price: clear when empty/0, else send the value
+	# Determine sale_price: evaluate Pricing Rule if enabled, else use Woo Item sale_price
+	if getattr(settings, "enable_sale_price_sync", 1) and woo_item.item_code and regular_price > 0:
+		try:
+			from woo_prime.api.sale_price_sync import _get_sale_price_for_item
+			calc_sale, _, _ = _get_sale_price_for_item(woo_item.item_code, regular_price, settings)
+			if calc_sale is not None:
+				woo_item.sale_price = flt(calc_sale)
+				woo_item.db_set("sale_price", flt(calc_sale))
+			elif getattr(woo_item, "sale_price", None):
+				woo_item.sale_price = 0.0
+				woo_item.db_set("sale_price", 0.0)
+		except Exception as e:
+			frappe.logger("woo_prime").debug(f"Pricing rule re-eval error for {woo_item.item_code}: {e}")
+
 	raw_sale = getattr(woo_item, "sale_price", None)
 	sale_price = flt(raw_sale) if raw_sale else 0.0
 	clear_sale = sale_price <= 0  # True → send sale_price="" to WooCommerce
@@ -2088,6 +2107,7 @@ def sync_price_to_woo(woo_item):
 	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
 
 	woo_item.db_set("last_pushed_price", flt(regular_price))
+	woo_item.db_set("last_pushed_sale_price", flt(sale_price) if not clear_sale else 0.0)
 
 	create_log(
 		sync_type="Price",
@@ -2120,7 +2140,7 @@ def _get_item_price(item_code, price_list=None):
 
 	if not price_list:
 		settings = frappe.get_single("Woo Settings")
-		price_list = getattr(settings, "default_price_list", None) or "Standard Selling"
+		price_list = getattr(settings, "website_price_list", None) or getattr(settings, "default_price_list", None) or "Standard Selling"
 
 	price = frappe.db.get_value(
 		"Item Price",
@@ -2751,7 +2771,8 @@ def on_item_price_update(doc, method):
 		if not settings.enabled or not settings.enable_price_sync:
 			return
 
-		if settings.default_price_list and doc.price_list != settings.default_price_list:
+		active_price_list = getattr(settings, "website_price_list", None) or getattr(settings, "default_price_list", None)
+		if active_price_list and doc.price_list != active_price_list:
 			return
 
 		frappe.enqueue(
@@ -2903,13 +2924,35 @@ def on_item_update(doc, method):
 			woo_item = frappe.get_doc("Woo Item", woo_item_name)
 			if woo_item.published:
 				woo_item.flags.in_woo_sync = True
+
+				# Always sync item_name changes from ERP
 				if doc.item_name:
 					woo_item.item_name = html.unescape(doc.item_name)
-				if doc.description and not woo_item.woo_description:
-					woo_item.woo_description = doc.description
-				if getattr(doc, "image", None) and not woo_item.image:
-					woo_item.image = doc.image
+
+				# Sync description: always update if ERP description is set
+				# (only skip if woo_description was manually customized — detected by comparing
+				# current woo_description with what ERP had BEFORE this save, i.e. old value)
+				if doc.description:
+					if not woo_item.woo_description:
+						# Empty — always populate from ERP
+						woo_item.woo_description = doc.description
+					else:
+						# Already has description — update only if it was auto-synced from ERP
+						# (i.e. not manually edited in Woo Item)
+						old_erp_desc = frappe.db.get_value("Item", doc.name, "description")
+						if not old_erp_desc or woo_item.woo_description.strip() == old_erp_desc.strip():
+							woo_item.woo_description = doc.description
+
+				# Sync image: always propagate ERP item image to Woo Item
+				new_image = getattr(doc, "image", None)
+				if new_image:
+					woo_item.image = new_image
+				elif woo_item.image and not new_image:
+					# Image removed from ERP — clear it on Woo Item too
+					woo_item.image = None
+
 				woo_item.save(ignore_permissions=True)
+				frappe.db.commit()
 
 				frappe.enqueue(
 					"woo_prime.woo_prime.doctype.woo_item.woo_item._publish_single_woo_item_worker",
@@ -2917,7 +2960,6 @@ def on_item_update(doc, method):
 					user=frappe.session.user,
 					queue="long",
 					timeout=1800,
-					enqueue_after_commit=True,
 					job_id=f"woo_publish_{woo_item.name}",
 					deduplicate=True,
 				)
@@ -3083,7 +3125,9 @@ def _publish_variant_as_new_template(woo_item, item, api, settings):
 	
 	# Use attributes from woo_item.item_attributes if available, otherwise use item.attributes
 	if getattr(woo_item, "item_attributes", None) and len(woo_item.item_attributes) > 0:
-		for idx, row in enumerate(woo_item.item_attributes):
+		# Sort by Frappe idx to respect the row order set in the child table UI
+		sorted_attrs = sorted(woo_item.item_attributes, key=lambda r: (getattr(r, "idx", 0) or 0))
+		for pos, row in enumerate(sorted_attrs):
 			attr_name = row.attribute_name or row.attribute
 			if not attr_name:
 				continue
@@ -3095,7 +3139,7 @@ def _publish_variant_as_new_template(woo_item, item, api, settings):
 			
 			attr_payload = {
 				"name": target_name or attr_name,
-				"position": idx,  # Maintain order from child table
+				"position": pos,  # Maintain order from child table (sorted by Frappe idx)
 				"visible": bool(getattr(row, "is_visible", 1)),
 				"variation": is_var,
 				"options": opts if opts else [],
