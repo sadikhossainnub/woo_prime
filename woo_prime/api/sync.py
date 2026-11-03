@@ -1194,13 +1194,52 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 				update_results = batch_res.get("update", [])
 
 				for r in create_results + update_results:
-					if isinstance(r, dict):
+					if isinstance(r, dict) and not r.get("error"):
 						if r.get("id"):
 							res_by_id[r.get("id")] = r
 						if r.get("sku"):
 							res_by_sku[r.get("sku")] = r
 
-				# Auto-recover variations that returned product_invalid_sku in batch
+				# Auto-recover variations that failed in update (e.g. invalid / deleted variation ID)
+				for idx, r in enumerate(update_results):
+					if isinstance(r, dict) and r.get("error"):
+						v_payload = dict(update_list[idx])
+						stale_id = v_payload.pop("id", None)
+						child_item = None
+						for meta in meta_list:
+							if meta["child_woo_item"].woo_product_id and int(meta["child_woo_item"].woo_product_id) == stale_id:
+								child_item = meta["child_woo_item"]
+								break
+							elif meta.get("sku") and meta.get("sku") == v_payload.get("sku"):
+								child_item = meta["child_woo_item"]
+								break
+						try:
+							new_var = api.create_product_variation(parent_woo_id, v_payload)
+							if new_var and new_var.get("id"):
+								res_by_id[new_var.get("id")] = new_var
+								if new_var.get("sku"):
+									res_by_sku[new_var.get("sku")] = new_var
+								if child_item:
+									child_item.woo_product_id = new_var.get("id")
+									child_item.db_set("woo_product_id", new_var.get("id"))
+						except Exception as rec_err:
+							err_str = str(rec_err).lower()
+							if "product_invalid_sku" in err_str:
+								try:
+									found = api.get(f"products/{parent_woo_id}/variations", params={"sku": v_payload.get("sku")})
+									if found.status_code == 200 and found.json():
+										var_match = found.json()[0]
+										res_by_id[var_match.get("id")] = var_match
+										if var_match.get("sku"):
+											res_by_sku[var_match.get("sku")] = var_match
+										if child_item:
+											child_item.woo_product_id = var_match.get("id")
+											child_item.db_set("woo_product_id", var_match.get("id"))
+								except Exception:
+									pass
+							frappe.logger("woo_prime").warning(f"Variation update recovery: {rec_err}")
+
+				# Auto-recover variations that returned product_invalid_sku in create batch
 				if len(create_results) == len(create_list):
 					for idx, r in enumerate(create_results):
 						if isinstance(r, dict) and r.get("error"):
@@ -1228,7 +1267,16 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 					elif sku and sku in res_by_sku:
 						r_data = res_by_sku[sku]
 
-					if r_data:
+					if not r_data:
+						try:
+							v_item = variant_docs[meta["v_name"]]
+							indiv_res = _publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings)
+							if indiv_res and indiv_res.get("id"):
+								r_data = indiv_res
+						except Exception as indiv_err:
+							frappe.log_error(f"Failed individual variation creation for {meta['v_name']}: {indiv_err}")
+
+					if r_data and r_data.get("id") and not r_data.get("error"):
 						child_woo_item.woo_product_id = r_data.get("id")
 						child_woo_item.published = 1
 						v_permalink = r_data.get("permalink", "")
@@ -1414,8 +1462,18 @@ def _publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings
 	"""Publish a single variation to WooCommerce under parent variable product."""
 	var_data = _prepare_variation_payload(child_woo_item, v_item, api, settings)
 
+	res = None
 	if child_woo_item.woo_product_id:
-		res = api.update_product_variation(parent_woo_id, child_woo_item.woo_product_id, var_data)
+		try:
+			res = api.update_product_variation(parent_woo_id, child_woo_item.woo_product_id, var_data)
+		except Exception as e:
+			err_str = str(e).lower()
+			if "404" in err_str or "not found" in err_str or "invalid id" in err_str:
+				# Variation ID was deleted or invalid in WooCommerce; reset and recreate
+				child_woo_item.woo_product_id = 0
+				res = api.create_product_variation(parent_woo_id, var_data)
+			else:
+				raise
 	else:
 		res = api.create_product_variation(parent_woo_id, var_data)
 
@@ -1940,46 +1998,57 @@ def sync_stock_to_woo(woo_item):
 	parent_woo_id = None
 	woo_product_type = getattr(woo_item, "woo_product_type", "")
 	
-	# Only treat as variation if variant_of exists AND woo_product_type is NOT "Simple Item" or "Variant Item"
-	if variant_of and woo_product_type not in ("Simple Item", "Variant Item"):
-		parent_woo_id = frappe.db.get_value("Woo Item", {"item_code": variant_of}, "woo_product_id")
+	# Only treat as variation if variant_of exists AND woo_product_type is NOT "Simple Item"
+	if variant_of and woo_product_type != "Simple Item":
+		parent_woo_id = (
+			frappe.db.get_value("Woo Item", {"item_code": variant_of}, "woo_product_id")
+			or frappe.db.get_value("Woo Item", {"sku": variant_of}, "woo_product_id")
+			or (frappe.db.exists("Woo Item", variant_of) and frappe.db.get_value("Woo Item", variant_of, "woo_product_id"))
+		)
 
 	try:
 		if parent_woo_id:
+			if not woo_item.woo_product_id:
+				v_item = frappe.get_doc("Item", woo_item.item_code)
+				res = _publish_variation_data(parent_woo_id, woo_item, v_item, api, settings)
+				if res and res.get("id"):
+					woo_item.woo_product_id = res.get("id")
+					woo_item.published = 1
+					woo_item.db_set("woo_product_id", res.get("id"))
+					woo_item.db_set("published", 1)
 			# Sync as variation under parent product
 			api.update_variation_stock(parent_woo_id, woo_item.woo_product_id, stock_qty, manage_stock=manage_stock)
 		else:
 			# Sync as standalone product (simple or variable)
 			api.update_stock(woo_item.woo_product_id, stock_qty, manage_stock=manage_stock)
 	except frappe.ValidationError as e:
-		# 404 — product gone from WooCommerce or wrong sync method (variation vs product)
 		err_msg = str(e)
-		if "404" in err_msg or "not found" in err_msg.lower():
-			# Mark as unpublished
-			woo_item.published = 0
-			woo_item.db_set("published", 0)
-			
-			# Provide helpful message
-			if parent_woo_id:
-				frappe.msgprint(
-					f"⚠️ WooCommerce variation #{woo_item.woo_product_id} (parent #{parent_woo_id}) not found (404) — marked as unpublished.<br><br>"
-					f"<b>Possible reasons:</b><br>"
-					f"• Variation was deleted from WooCommerce<br>"
-					f"• Product type mismatch (published as Simple but trying to sync as Variation)<br><br>"
-					f"<b>Solution:</b> Click 'Publish to WooCommerce' to recreate the product.",
-					indicator="orange",
-					title="Stock Sync Failed"
-				)
-			else:
-				frappe.msgprint(
-					f"⚠️ WooCommerce product #{woo_item.woo_product_id} not found (404) — marked as unpublished.<br><br>"
-					f"<b>Solution:</b> Click 'Publish to WooCommerce' to recreate the product.",
-					indicator="orange",
-					title="Stock Sync Failed"
-				)
-		
+		if ("404" in err_msg or "not found" in err_msg.lower()) and parent_woo_id:
+			try:
+				woo_item.woo_product_id = 0
+				v_item = frappe.get_doc("Item", woo_item.item_code)
+				res = _publish_variation_data(parent_woo_id, woo_item, v_item, api, settings)
+				if res and res.get("id"):
+					woo_item.woo_product_id = res.get("id")
+					woo_item.published = 1
+					woo_item.sync_status = "Synced"
+					woo_item.db_set("woo_product_id", res.get("id"))
+					woo_item.db_set("published", 1)
+					woo_item.db_set("sync_status", "Synced")
+					api.update_variation_stock(parent_woo_id, res.get("id"), stock_qty, manage_stock=manage_stock)
+					woo_item.db_set("last_pushed_qty", int(stock_qty))
+					return
+			except Exception as rec_err:
+				frappe.log_error(f"Stock sync variation recovery failed for {woo_item.name}: {rec_err}")
+
+		# If recovery failed or not a variation, mark as unpublished
+		woo_item.published = 0
+		woo_item.woo_product_id = 0
+		woo_item.db_set("published", 0)
+		woo_item.db_set("woo_product_id", 0)
 		woo_item.sync_status = "Error"
 		woo_item.db_set("sync_status", "Error")
+
 		from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
 		create_log(
 			sync_type="Stock",
@@ -1987,15 +2056,13 @@ def sync_stock_to_woo(woo_item):
 			status="Failed",
 			reference_doctype="Woo Item",
 			reference_name=woo_item.name,
-			woo_reference_id=str(woo_item.woo_product_id),
+			woo_reference_id=str(woo_item.woo_product_id or ""),
 			request_data={"item_code": woo_item.item_code, "stock_quantity": stock_qty, "warehouse": settings.default_warehouse},
 			response_data={"error": err_msg},
 			error_message=err_msg,
 		)
 		frappe.logger("woo_prime").error(f"[sync_stock_to_woo] 404/error for {woo_item.name}: {err_msg}")
-		return
-
-	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
+		frappe.throw(err_msg)
 
 	woo_item.db_set("last_pushed_qty", int(stock_qty))
 
@@ -2077,6 +2144,14 @@ def sync_price_to_woo(woo_item):
 
 	try:
 		if parent_woo_id:
+			if not woo_item.woo_product_id:
+				v_item = frappe.get_doc("Item", woo_item.item_code)
+				res = _publish_variation_data(parent_woo_id, woo_item, v_item, api, settings)
+				if res and res.get("id"):
+					woo_item.woo_product_id = res.get("id")
+					woo_item.published = 1
+					woo_item.db_set("woo_product_id", res.get("id"))
+					woo_item.db_set("published", 1)
 			api.update_variation_price(
 				parent_woo_id, woo_item.woo_product_id, regular_price,
 				sale_price=flt(sale_price) if not clear_sale else None,
@@ -2094,9 +2169,33 @@ def sync_price_to_woo(woo_item):
 			)
 	except frappe.ValidationError as e:
 		err_msg = str(e)
-		if "404" in err_msg or "not found" in err_msg.lower():
-			woo_item.published = 0
-			woo_item.db_set("published", 0)
+		if ("404" in err_msg or "not found" in err_msg.lower()) and parent_woo_id:
+			try:
+				woo_item.woo_product_id = 0
+				v_item = frappe.get_doc("Item", woo_item.item_code)
+				res = _publish_variation_data(parent_woo_id, woo_item, v_item, api, settings)
+				if res and res.get("id"):
+					woo_item.woo_product_id = res.get("id")
+					woo_item.published = 1
+					woo_item.sync_status = "Synced"
+					woo_item.db_set("woo_product_id", res.get("id"))
+					woo_item.db_set("published", 1)
+					woo_item.db_set("sync_status", "Synced")
+					api.update_variation_price(
+						parent_woo_id, res.get("id"), regular_price,
+						sale_price=flt(sale_price) if not clear_sale else None,
+						clear_sale=clear_sale,
+						date_from=date_on_sale_from,
+						date_to=date_on_sale_to,
+					)
+					return
+			except Exception as rec_err:
+				frappe.log_error(f"Price sync variation recovery failed for {woo_item.name}: {rec_err}")
+
+		woo_item.published = 0
+		woo_item.woo_product_id = 0
+		woo_item.db_set("published", 0)
+		woo_item.db_set("woo_product_id", 0)
 		woo_item.sync_status = "Error"
 		woo_item.db_set("sync_status", "Error")
 		from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
@@ -3069,7 +3168,7 @@ def _publish_variant_as_simple_item(woo_item, item, api, settings):
 			)
 		
 		# Reset woo_product_id so it creates a new simple product
-		woo_item.woo_product_id = None
+		woo_item.woo_product_id = 0
 	
 	# Now publish as a simple product using the existing function
 	return _publish_simple_item_to_woo(woo_item, item, api, settings)
@@ -3121,7 +3220,7 @@ def _publish_variant_as_new_template(woo_item, item, api, settings):
 			)
 		
 		# Reset woo_product_id so it creates a new variable product
-		woo_item.woo_product_id = None
+		woo_item.woo_product_id = 0
 	
 	# Get attributes from the variant item to create as variable product attributes
 	attributes_dict = {}

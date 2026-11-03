@@ -420,11 +420,15 @@ class WooItem(Document):
 						if manage_var_stock is not None and v_woo_doc.manage_stock != manage_var_stock:
 							v_woo_doc.manage_stock = int(manage_var_stock)
 							v_woo_doc.db_set("manage_stock", int(manage_var_stock))
-						if v_woo_doc.woo_product_id:
+						try:
 							sync_stock_to_woo(v_woo_doc)
-							v_woo_doc.db_set("last_synced", now_datetime())
-							v_woo_doc.db_set("sync_status", "Synced")
-							count += 1
+							v_woo_doc.reload()
+							if v_woo_doc.woo_product_id:
+								v_woo_doc.db_set("last_synced", now_datetime())
+								v_woo_doc.db_set("sync_status", "Synced")
+								count += 1
+						except Exception as var_stock_err:
+							frappe.log_error(f"Error syncing stock for variant {v_name}: {var_stock_err}")
 				self.last_synced = now_datetime()
 				self.sync_status = "Synced"
 				self.save()
@@ -478,11 +482,15 @@ class WooItem(Document):
 					v_woo_name = frappe.db.get_value("Woo Item", {"item_code": v_name})
 					if v_woo_name:
 						v_woo_doc = frappe.get_doc("Woo Item", v_woo_name)
-						if v_woo_doc.woo_product_id:
+						try:
 							sync_price_to_woo(v_woo_doc)
-							v_woo_doc.db_set("last_synced", now_datetime())
-							v_woo_doc.db_set("sync_status", "Synced")
-							count += 1
+							v_woo_doc.reload()
+							if v_woo_doc.woo_product_id:
+								v_woo_doc.db_set("last_synced", now_datetime())
+								v_woo_doc.db_set("sync_status", "Synced")
+								count += 1
+						except Exception as var_price_err:
+							frappe.log_error(f"Error syncing price for variant {v_name}: {var_price_err}")
 				self.last_synced = now_datetime()
 				self.sync_status = "Synced"
 				self.save()
