@@ -106,10 +106,8 @@ def get_items_for_sync(start=0, limit=100, item_group=None, search=None, item_co
 
 			image_url = None
 			if item.image:
-				if item.image.startswith("http://") or item.image.startswith("https://"):
-					image_url = item.image
-				else:
-					image_url = frappe.utils.get_url(item.image)
+				from woo_prime.api.sync import get_clean_public_image_url
+				image_url = get_clean_public_image_url(item.image)
 
 			result.append({
 				"item_code": item.item_code,

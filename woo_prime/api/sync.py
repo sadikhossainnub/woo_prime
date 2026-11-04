@@ -964,7 +964,7 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings):
 	if simple_attrs:
 		product_data["attributes"] = simple_attrs
 
-	images = _get_item_images(item, woo_item, api)
+	images = _get_item_images(item, woo_item, api, settings)
 	if images:
 		product_data["images"] = images
 
@@ -1101,7 +1101,7 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 	if category_ids:
 		product_data["categories"] = category_ids
 
-	images = _get_item_images(item, woo_item, api)
+	images = _get_item_images(item, woo_item, api, settings)
 	if images:
 		product_data["images"] = images
 
@@ -1451,7 +1451,7 @@ def _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_
 		var_data["weight"] = str(flt(v_item.weight_per_unit))
 
 
-	images = _get_item_images(v_item, child_woo_item, api)
+	images = _get_item_images(v_item, child_woo_item, api, settings)
 	if images:
 		var_data["image"] = images[0]
 
@@ -1508,7 +1508,51 @@ def _cache_wp_media_id(path, media_id):
 	frappe.cache().set_value(cache_key, media_id)
 
 
-def _get_item_images(item, woo_item=None, api=None):
+def get_clean_public_image_url(path):
+	"""Generate a clean, publicly accessible image URL for WooCommerce.
+	Strips internal/development ports (like :8000) and normalizes to the public host_name."""
+	if not path:
+		return ""
+
+	import urllib.parse
+
+	host_name = (frappe.conf.get("host_name") or "").rstrip("/")
+	if host_name:
+		parsed_path = urllib.parse.urlparse(path)
+		if parsed_path.path.startswith("/files/") or parsed_path.path.startswith("/private/files/"):
+			clean_path = parsed_path.path
+			url = f"{host_name}{clean_path}"
+		elif path.startswith("http://") or path.startswith("https://"):
+			url = path
+		else:
+			clean_path = path if path.startswith("/") else f"/{path}"
+			url = f"{host_name}{clean_path}"
+	else:
+		if path.startswith("http://") or path.startswith("https://"):
+			url = path
+		else:
+			url = frappe.utils.get_url(path)
+
+	try:
+		parsed = urllib.parse.urlparse(url)
+		netloc = parsed.netloc
+		if ":" in netloc:
+			host, port = netloc.split(":", 1)
+			if host not in ("localhost", "127.0.0.1"):
+				# Strip port (e.g. :8000) for tunnel or public domain
+				netloc = host
+		scheme = parsed.scheme or "https"
+		if netloc not in ("localhost", "127.0.0.1") and not netloc.startswith("192.168.") and not netloc.startswith("10."):
+			scheme = "https"
+		clean_path = urllib.parse.quote(urllib.parse.unquote(parsed.path), safe="/")
+		url = urllib.parse.urlunparse((scheme, netloc, clean_path, parsed.params, parsed.query, parsed.fragment))
+	except Exception:
+		pass
+
+	return url
+
+
+def _get_item_images(item, woo_item=None, api=None, settings=None):
 	"""Get image payload for WooCommerce (attempts direct media upload to WordPress API first, with caching)."""
 	images = []
 	seen_paths = set()
@@ -1586,10 +1630,7 @@ def _get_item_images(item, woo_item=None, api=None):
 				return
 
 		# Generate public URL for WooCommerce
-		if path.startswith("http://") or path.startswith("https://"):
-			url = path
-		else:
-			url = frappe.utils.get_url(path)
+		url = get_clean_public_image_url(path)
 		
 		# Validate URL is publicly accessible
 		if "localhost" in url or "127.0.0.1" in url:
@@ -3292,7 +3333,7 @@ def _publish_variant_as_new_template(woo_item, item, api, settings):
 		product_data["categories"] = category_ids
 	
 	# Add images
-	images = _get_item_images(item, woo_item, api)
+	images = _get_item_images(item, woo_item, api, settings)
 	if images:
 		product_data["images"] = images
 	
