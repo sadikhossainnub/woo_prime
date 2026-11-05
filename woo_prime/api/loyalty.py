@@ -2,8 +2,7 @@
 # For license information, please see license.txt
 
 import frappe
-from frappe import _
-from frappe.utils import flt, today
+from frappe.utils import flt
 
 
 from woo_prime.api.auth import verify_api_secret

@@ -2,7 +2,7 @@
 # See license.txt
 
 import unittest
-from datetime import datetime, time, timedelta
+from datetime import time, timedelta
 
 try:
 	from frappe.tests.utils import FrappeTestCase

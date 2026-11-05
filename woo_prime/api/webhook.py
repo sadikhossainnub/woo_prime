@@ -181,7 +181,12 @@ def handle_product():
 			if woo_id:
 				woo_item_name = frappe.db.get_value("Woo Item", {"woo_product_id": woo_id})
 				if woo_item_name:
-					frappe.db.set_value("Woo Item", woo_item_name, "published", 0)
+					woo_item = frappe.get_doc("Woo Item", woo_item_name)
+					woo_item.published = 0
+					woo_item.save(ignore_permissions=True)
+					# Create tombstone to prevent re-sync (Task 3)
+					from woo_prime.woo_prime.doctype.woo_ignored_item.woo_ignored_item import create_tombstone
+					create_tombstone(woo_item.sku or woo_item.item_code)
 			return {"status": "ok", "message": "Product deletion noted"}
 
 		# Log incoming product webhook

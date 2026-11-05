@@ -97,7 +97,7 @@ class UnitTestWooSettings(FrappeTestCase):
 	def test_calculate_cart_price_rate_rule(self):
 		import frappe
 		import json
-		from unittest.mock import patch, MagicMock
+		from unittest.mock import patch
 		from woo_prime.api.price import calculate_cart_price
 
 		passed_rule_args = {}
@@ -148,7 +148,7 @@ class UnitTestWooSettings(FrappeTestCase):
 
 	def test_sync_order_status_filtering(self):
 		import frappe
-		from unittest.mock import patch, MagicMock
+		from unittest.mock import patch
 		from woo_prime.api.sync import sync_order
 
 		with patch.object(frappe, "get_single") as mock_settings, \

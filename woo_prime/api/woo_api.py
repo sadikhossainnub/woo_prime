@@ -1,14 +1,13 @@
 # Copyright (c) 2026, prime tech bd and contributors
 # For license information, please see license.txt
 
-import json
 
 import requests
 from requests.auth import HTTPBasicAuth
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt
+from frappe.utils import flt
 
 
 DEFAULT_USER_AGENT = "curl/8.5.0"
@@ -98,6 +97,10 @@ class WooAPI:
 		self.use_query_auth = _cached.get("use_query_auth", False)
 
 		self.session = requests.Session()
+
+	def __repr__(self):
+		"""Task 4: Safe repr that never exposes secrets."""
+		return f"<WooAPI site_url={self.site_url!r} consumer_key=***REDACTED*** consumer_secret=***REDACTED***>"
 
 	def _persist_route_flags(self):
 		"""Persist current use_query_auth / use_rest_route to site cache."""
@@ -603,8 +606,84 @@ class WooAPI:
 				f"WooCommerce API Batch Variations Error ({response.status_code}): {response.text[:500]}"
 			)
 
+	def upload_media_via_wc(self, file_path, woo_item_doc=None):
+		"""Upload/sync image using WooCommerce product API (Task 2: no WordPress auth needed).
+		
+		Instead of uploading to WordPress Media Library, this returns a public URL that
+		WooCommerce will automatically fetch and store when the product is updated.
+		
+		Args:
+			file_path: Local file path or Frappe file URL string (e.g. /files/image.jpg)
+			woo_item_doc: Optional Woo Item doc to check auto_copy_private_images setting
+		
+		Returns:
+			str: Public URL that WooCommerce can fetch, or None if unavailable
+		"""
+		import os
+		import shutil
+		
+		if not file_path or file_path.startswith("http://") or file_path.startswith("https://"):
+			# Already a full URL, WooCommerce can fetch it directly if public
+			if file_path and file_path.startswith("https://"):
+				return file_path
+			return None
+		
+		# Normalize path
+		clean_url = file_path.lstrip("/")
+		is_private = clean_url.startswith("private/files/")
+		
+		if is_private:
+			# Task 2: Auto-copy private images to public if enabled
+			try:
+				settings = frappe.get_single("Woo Settings")
+				auto_copy = getattr(settings, "auto_copy_private_images", 1)
+				warn_private = getattr(settings, "allow_private_images", 0)
+				
+				if warn_private:
+					frappe.logger("woo_prime").warning(
+						f"Private image detected: {file_path}"
+					)
+				
+				if auto_copy:
+					# Copy to public folder
+					private_path = frappe.get_site_path(clean_url)
+					if os.path.exists(private_path):
+						filename = os.path.basename(private_path)
+						public_path = frappe.get_site_path("public", "files", filename)
+						
+						# Create public/files if needed
+						os.makedirs(os.path.dirname(public_path), exist_ok=True)
+						
+						# Copy file
+						shutil.copy2(private_path, public_path)
+						
+						# Return public URL
+						from woo_prime.api.sync import get_clean_public_image_url
+						return get_clean_public_image_url(f"/files/{filename}")
+					else:
+						frappe.logger("woo_prime").warning(
+							f"Private file not found: {private_path}"
+						)
+						return None
+				else:
+					# Private images not allowed without auto-copy
+					frappe.logger("woo_prime").info(
+						f"Skipping private image (auto_copy disabled): {file_path}"
+					)
+					return None
+			except Exception as e:
+				frappe.logger("woo_prime").error(f"Error handling private image: {e}")
+				return None
+		
+		# Public file - generate clean URL
+		from woo_prime.api.sync import get_clean_public_image_url
+		return get_clean_public_image_url(file_path)
+	
 	def upload_media(self, file_path, filename=None):
 		"""Directly upload an image file binary to WordPress Media REST API (/wp-json/wp/v2/media).
+		
+		NOTE: This method uses WordPress authentication (username/password).
+		Consider using upload_media_via_wc() instead, which only needs WooCommerce API keys.
 
 		Args:
 			file_path: Local file path or Frappe file URL string (e.g. /files/image.jpg)
@@ -896,7 +975,6 @@ class WooAPI:
 		Raises:
 			frappe.ValidationError: on 404 (product not found in WooCommerce)
 		"""
-		from frappe.utils import flt
 		data = {"regular_price": str(regular_price)}
 		if sale_price is not None and str(sale_price).strip() and flt(sale_price) > 0:
 			data["sale_price"] = str(sale_price)
@@ -934,7 +1012,6 @@ class WooAPI:
 		Raises:
 			frappe.ValidationError: on 404 (variation not found in WooCommerce)
 		"""
-		from frappe.utils import flt
 		data = {"regular_price": str(regular_price)}
 		if sale_price is not None and str(sale_price).strip() and flt(sale_price) > 0:
 			data["sale_price"] = str(sale_price)

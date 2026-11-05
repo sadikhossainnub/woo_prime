@@ -10,9 +10,24 @@ from frappe.utils import cint, flt, now_datetime
 from woo_prime.utils import clean_text
 
 
+def _should_skip_variant(woo_item, item):
+	"""Check if a variant should be skipped during template publish."""
+	from woo_prime.woo_prime.doctype.woo_ignored_item.woo_ignored_item import has_tombstone
+	
+	# Skip if Item is disabled
+	if item and getattr(item, "disabled", 0):
+		return True
+	
+	# Skip if tombstone exists
+	if has_tombstone(item_code=woo_item.item_code, sku=woo_item.sku):
+		return True
+	
+	return False
+
+
 class WooItem(Document):
 	def validate(self):
-		from frappe.utils import flt, cint
+		from frappe.utils import flt
 		if self.item_code:
 			# Cache has_variants and variant_of for UI visibility and stock handling
 			item_data = frappe.db.get_value("Item", self.item_code, ["has_variants", "variant_of"], as_dict=True)
@@ -229,7 +244,6 @@ class WooItem(Document):
 	def populate_attributes_from_erpnext(self, overwrite=False):
 		"""Whitelisted method to reload attributes from ERPNext."""
 		frappe.only_for(["System Manager", "Woo Manager", "Website Manager"])
-		from frappe.utils import cint
 		overwrite = bool(cint(overwrite))
 		self._load_attributes_from_erpnext(overwrite=overwrite)
 		self.flags.ignore_permissions = True
@@ -2202,14 +2216,34 @@ def delete_woo_item(woo_item_name, delete_item_master=False, delete_from_woocomm
 				api.delete_product(woo_product_id)
 			else:
 				# Resolve the real parent from Woo instead of trusting the stored ID
-				real = api.get_product(woo_product_id) or {}
-				real_parent = real.get("parent_id") or frappe.db.get_value(
-					"Woo Item", {"item_code": variant_of}, "woo_product_id"
-				)
+				real = None
+				try:
+					real = api.get_product(woo_product_id) or {}
+				except Exception as exc:
+					frappe.logger("woo_prime").debug(f"Could not fetch product {woo_product_id} for parent resolution: {exc}")
+				
+				# Use _real_parent_id helper (from Task 1)
+				real_parent = None
+				if real:
+					from woo_prime.api.sync import _real_parent_id
+					real_parent = _real_parent_id(real)
+				
+				# Fallback to stored parent
+				if not real_parent:
+					real_parent = frappe.db.get_value(
+						"Woo Item", {"item_code": variant_of}, "woo_product_id"
+					)
+				
 				api.delete_variation(real_parent, woo_product_id)
 		except frappe.ValidationError as exc:
 			# 404 only counts as "gone" if the product itself is really absent
-			if api.get_product(woo_product_id):
+			# Wrap get_product to avoid exceptions
+			try:
+				still_exists = api.get_product(woo_product_id)
+			except Exception:
+				still_exists = None
+			
+			if still_exists:
 				errors.append(f"WooCommerce: still exists after 404 ({exc})")
 			else:
 				frappe.log_error(title=f"WooCommerce already gone: {woo_item_name}", message=str(exc))
@@ -2241,6 +2275,7 @@ def delete_woo_item(woo_item_name, delete_item_master=False, delete_from_woocomm
 			)
 
 	# --- Woo Item doc deletion (always) ---
+	success_deleted_items = []
 	try:
 		if is_template:
 			# Delete all variant Woo Items linked to variants of this template
@@ -2252,13 +2287,23 @@ def delete_woo_item(woo_item_name, delete_item_master=False, delete_from_woocomm
 					variant_woo_items = frappe.get_all(
 						"Woo Item",
 						filters={"item_code": ["in", variant_codes]},
-						pluck="name",
+						fields=["name", "item_code", "sku", "woo_product_id"]
 					)
 					for v_wi in variant_woo_items:
-						_delete_linked_sync_logs("Woo Item", v_wi)
-						frappe.delete_doc("Woo Item", v_wi, ignore_permissions=True, force=True)
+						_delete_linked_sync_logs("Woo Item", v_wi.name)
+						success_deleted_items.append(v_wi)
+						frappe.delete_doc("Woo Item", v_wi.name, ignore_permissions=True, force=True)
+		
+		# Store info before deleting
+		deleted_item_info = {
+			"item_code": woo_item.item_code,
+			"sku": woo_item.sku,
+			"woo_product_id": woo_item.woo_product_id
+		}
+		
 		_delete_linked_sync_logs("Woo Item", woo_item_name)
 		frappe.delete_doc("Woo Item", woo_item_name, ignore_permissions=True, force=True)
+		success_deleted_items.append(deleted_item_info)
 	except Exception as exc:
 		errors.append(f"Woo Item doc: {exc}")
 		frappe.log_error(
@@ -2297,6 +2342,18 @@ def delete_woo_item(woo_item_name, delete_item_master=False, delete_from_woocomm
 		response_data={"status": status, "errors": errors} if errors else {"status": "Success", "deleted": True},
 		error_message=error_msg or None,
 	)
+
+	# Create tombstones for successfully deleted items
+	if not errors and success_deleted_items:
+		from woo_prime.woo_prime.doctype.woo_ignored_item.woo_ignored_item import create_tombstone
+		for item_info in success_deleted_items:
+			if isinstance(item_info, dict):
+				create_tombstone(
+					item_code=item_info.get("item_code"),
+					sku=item_info.get("sku"),
+					woo_product_id=item_info.get("woo_product_id"),
+					reason="User deleted"
+				)
 
 	if errors:
 		frappe.throw(

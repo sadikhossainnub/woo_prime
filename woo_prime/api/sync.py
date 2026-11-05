@@ -6,7 +6,7 @@ import json
 
 import frappe
 from frappe import _
-from frappe.utils import now_datetime, flt, cstr, today, add_days
+from frappe.utils import now_datetime, flt, today, add_days
 from woo_prime.utils import safe_log_error, clean_text
 
 
@@ -263,8 +263,9 @@ def sync_order(order_data):
 		# Recalculate taxes and totals to ensure line items, shipping and fee additions are accurately computed
 		try:
 			so.calculate_taxes_and_totals()
-		except Exception:
-			pass
+		except Exception as calc_err:
+			# Calculation errors are non-fatal; order still syncs with original totals
+			frappe.logger("woo_prime").debug(f"Order {woo_order_id} tax calculation skipped: {calc_err}")
 
 		# Compare so.grand_total with WooCommerce order total
 		woo_total = flt(order_data.get("total", 0))
@@ -1159,17 +1160,10 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 			v_item = variant_docs[v_name]
 			child_woo_item = get_or_create_woo_item(v_name, v_item.item_code)
 			
-			# Skip auto-recreation if Woo Item was manually deleted
-			# Only sync if:
-			# 1. Woo Item has woo_product_id (already published, needs update)
-			# 2. Woo Item is marked as published=1 (user wants to publish)
-			# 3. Woo Item is new (just created, no history of deletion)
-			if not child_woo_item.woo_product_id and not child_woo_item.published and not child_woo_item.is_new():
-				# This Woo Item was previously deleted/unpublished
-				# Skip auto-recreation to respect user's deletion intent
+			# Skip if variant was explicitly deleted (tombstone exists) or Item is disabled
+			if _should_skip_variant(child_woo_item, v_item):
 				frappe.logger("woo_prime").info(
-					f"Skipping auto-recreation of {v_name} - was previously deleted. "
-					f"Manually publish the Woo Item if you want to restore it."
+					f"Skipping {v_name} - explicitly deleted or disabled."
 				)
 				continue
 			
@@ -1312,11 +1306,44 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 	return result
 
 
+def _real_parent_id(product_dict):
+	"""Extract the real parent product ID from a WooCommerce product/variation object.
+	
+	Task 1: Fixes stale parent_id issue by always using the live parent_id from WooCommerce API.
+	
+	Args:
+		product_dict: dict from api.get_product()
+	
+	Returns:
+		int: parent product ID, or None if not a variation
+	"""
+	if not product_dict:
+		return None
+	return product_dict.get("parent_id") or None
+
+
+def _should_skip_variant(woo_item, item):
+	"""Check if a variant should be skipped during template publish."""
+	from woo_prime.woo_prime.doctype.woo_ignored_item.woo_ignored_item import has_tombstone
+	
+	# Skip if Item is disabled
+	if item and getattr(item, "disabled", 0):
+		return True
+	
+	# Skip if tombstone exists
+	if has_tombstone(item_code=woo_item.item_code, sku=woo_item.sku):
+		return True
+	
+	return False
+
+
 def get_or_create_woo_item(item_code, sku=None):
 	"""Get existing Woo Item by item_code, sku, or primary key name, or create a new one safely.
 
-	Prevents IntegrityError (Duplicate entry for PRIMARY key).
+	Prevents IntegrityError (Duplicate entry for PRIMARY key). Check tombstone before auto-creating.
 	"""
+	from woo_prime.woo_prime.doctype.woo_ignored_item.woo_ignored_item import has_tombstone
+	
 	if not sku:
 		sku = frappe.db.get_value("Item", item_code, "item_code") or item_code
 
@@ -1351,6 +1378,16 @@ def get_or_create_woo_item(item_code, sku=None):
 			woo_item.save(ignore_permissions=True)
 		return woo_item
 
+	# Check tombstone before auto-creating (Task 3: prevent re-sync of deleted variants)
+	if has_tombstone(sku or item_code):
+		# Return a minimal unpublished Woo Item without inserting
+		# This prevents triggering sync loops for intentionally deleted items
+		woo_item = frappe.new_doc("Woo Item")
+		woo_item.item_code = item_code
+		woo_item.sku = sku or item_code
+		woo_item.published = 0
+		return woo_item
+	
 	# Create new Woo Item doc safely
 	# Note: published=0 by default to prevent auto-recreation of deleted items
 	# User must manually publish if they want to restore a deleted variation
@@ -2086,9 +2123,21 @@ def sync_stock_to_woo(woo_item):
 		err_msg = str(e)
 		if ("404" in err_msg or "not found" in err_msg.lower()) and parent_woo_id:
 			try:
+				# Task 1: Resolve real parent_id from WooCommerce to avoid stale parent issues
+				real_parent = parent_woo_id  # fallback
+				if woo_item.woo_product_id:
+					try:
+						live_product = api.get_product(woo_item.woo_product_id)
+						resolved = _real_parent_id(live_product)
+						if resolved:
+							real_parent = resolved
+					except Exception as exc:
+						# 404 means product is gone, will recreate below
+						frappe.logger("woo_prime").debug(f"Could not fetch live parent: {exc}")
+				
 				woo_item.woo_product_id = 0
 				v_item = frappe.get_doc("Item", woo_item.item_code)
-				res = _publish_variation_data(parent_woo_id, woo_item, v_item, api, settings)
+				res = _publish_variation_data(real_parent, woo_item, v_item, api, settings)
 				if res and res.get("id"):
 					woo_item.woo_product_id = res.get("id")
 					woo_item.published = 1
@@ -2096,7 +2145,7 @@ def sync_stock_to_woo(woo_item):
 					woo_item.db_set("woo_product_id", res.get("id"))
 					woo_item.db_set("published", 1)
 					woo_item.db_set("sync_status", "Synced")
-					api.update_variation_stock(parent_woo_id, res.get("id"), stock_qty, manage_stock=manage_stock)
+					api.update_variation_stock(real_parent, res.get("id"), stock_qty, manage_stock=manage_stock)
 					woo_item.db_set("last_pushed_qty", int(stock_qty))
 					return
 			except Exception as rec_err:
@@ -2232,9 +2281,21 @@ def sync_price_to_woo(woo_item):
 		err_msg = str(e)
 		if ("404" in err_msg or "not found" in err_msg.lower()) and parent_woo_id:
 			try:
+				# Task 1: Resolve real parent_id from WooCommerce to avoid stale parent issues
+				real_parent = parent_woo_id  # fallback
+				if woo_item.woo_product_id:
+					try:
+						live_product = api.get_product(woo_item.woo_product_id)
+						resolved = _real_parent_id(live_product)
+						if resolved:
+							real_parent = resolved
+					except Exception as exc:
+						# 404 means product is gone, will recreate below
+						frappe.logger("woo_prime").debug(f"Could not fetch live parent: {exc}")
+				
 				woo_item.woo_product_id = 0
 				v_item = frappe.get_doc("Item", woo_item.item_code)
-				res = _publish_variation_data(parent_woo_id, woo_item, v_item, api, settings)
+				res = _publish_variation_data(real_parent, woo_item, v_item, api, settings)
 				if res and res.get("id"):
 					woo_item.woo_product_id = res.get("id")
 					woo_item.published = 1
@@ -2243,7 +2304,7 @@ def sync_price_to_woo(woo_item):
 					woo_item.db_set("published", 1)
 					woo_item.db_set("sync_status", "Synced")
 					api.update_variation_price(
-						parent_woo_id, res.get("id"), regular_price,
+						real_parent, res.get("id"), regular_price,
 						sale_price=flt(sale_price) if not clear_sale else None,
 						clear_sale=clear_sale,
 						date_from=date_on_sale_from,
@@ -3198,7 +3259,6 @@ def _publish_variant_as_simple_item(woo_item, item, api, settings):
 	Returns:
 		dict: WooCommerce product response
 	"""
-	import html
 	
 	# If this variant was previously published, delete it from WooCommerce
 	# (could be a variation under parent OR a variable product)

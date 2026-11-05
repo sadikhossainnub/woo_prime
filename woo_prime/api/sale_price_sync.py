@@ -2,7 +2,6 @@
 # For license information, please see license.txt
 
 import frappe
-from frappe import _
 from frappe.utils import cint, flt, getdate, now_datetime, today
 
 
@@ -197,7 +196,7 @@ def _find_active_pricing_rule_doc(item_code, item_group=None, brand=None, price_
 			continue
 
 		rule_doc = frappe.get_doc("Pricing Rule", r.name)
-		is_gen, _ = _is_general_rule(rule_doc)
+		is_gen, _reason = _is_general_rule(rule_doc)
 		if not is_gen:
 			continue
 

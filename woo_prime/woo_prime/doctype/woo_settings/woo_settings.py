@@ -4,7 +4,6 @@
 import os
 
 import frappe
-import requests
 from frappe import _
 from frappe.model.document import Document
 from woo_prime.utils import repair_crashed_tables, safe_log_error

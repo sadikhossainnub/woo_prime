@@ -109,7 +109,7 @@ def _is_within_sync_window():
 	if not start_time or not end_time:
 		return True
 	
-	from datetime import datetime, time as dt_time
+	from datetime import datetime
 	
 	# Get current time
 	now = datetime.now().time()
