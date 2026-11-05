@@ -218,7 +218,7 @@ frappe.ui.form.on("Woo Item", {
 								fieldname: "delete_from_woocommerce",
 								label: __("Also delete from WooCommerce"),
 								fieldtype: "Check",
-								default: 0,
+								default: 1,
 								description: frm.doc.woo_product_id
 									? __("Product ID: {0}", [frm.doc.woo_product_id])
 									: __("No WooCommerce product linked"),
@@ -227,7 +227,7 @@ frappe.ui.form.on("Woo Item", {
 								fieldname: "delete_item_master",
 								label: __("Also delete from ERPNext Item Master"),
 								fieldtype: "Check",
-								default: 0,
+								default: 1,
 								description: frm.doc.item_code
 									? __("Item Code: {0}", [frm.doc.item_code])
 									: __("No ERPNext Item linked"),

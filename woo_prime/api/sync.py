@@ -943,6 +943,7 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings):
 		"short_description": html.unescape(getattr(woo_item, "woo_short_description", None) or item.description or ""),
 		"manage_stock": manage_stock,
 		"status": "publish",
+		"menu_order": int(getattr(woo_item, "menu_order", 0) or 0),
 	}
 	if manage_stock:
 		product_data["stock_quantity"] = int(stock_qty)
@@ -1095,6 +1096,7 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 		"status": "publish",
 		"attributes": woo_attributes,
 		"manage_stock": bool(getattr(woo_item, "manage_stock", 0)),
+		"menu_order": int(getattr(woo_item, "menu_order", 0) or 0),
 	}
 
 	category_ids = _get_woo_category_ids(woo_item, api)
@@ -1156,6 +1158,21 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 		for v_name in variant_item_names:
 			v_item = variant_docs[v_name]
 			child_woo_item = get_or_create_woo_item(v_name, v_item.item_code)
+			
+			# Skip auto-recreation if Woo Item was manually deleted
+			# Only sync if:
+			# 1. Woo Item has woo_product_id (already published, needs update)
+			# 2. Woo Item is marked as published=1 (user wants to publish)
+			# 3. Woo Item is new (just created, no history of deletion)
+			if not child_woo_item.woo_product_id and not child_woo_item.published and not child_woo_item.is_new():
+				# This Woo Item was previously deleted/unpublished
+				# Skip auto-recreation to respect user's deletion intent
+				frappe.logger("woo_prime").info(
+					f"Skipping auto-recreation of {v_name} - was previously deleted. "
+					f"Manually publish the Woo Item if you want to restore it."
+				)
+				continue
+			
 			if manage_var_stock is not None:
 				child_woo_item.manage_stock = int(manage_var_stock)
 				try:
@@ -1335,6 +1352,8 @@ def get_or_create_woo_item(item_code, sku=None):
 		return woo_item
 
 	# Create new Woo Item doc safely
+	# Note: published=0 by default to prevent auto-recreation of deleted items
+	# User must manually publish if they want to restore a deleted variation
 	woo_item = frappe.new_doc("Woo Item")
 	woo_item.item_code = item_code
 	woo_item.sku = sku or item_code
@@ -1438,6 +1457,7 @@ def _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_
 		"status": "publish",
 		"attributes": var_attributes,
 		"description": html.unescape(child_woo_item.woo_description or v_item.description or ""),
+		"menu_order": int(getattr(child_woo_item, "menu_order", 0) or 0),
 	}
 	if manage_stock:
 		var_data["stock_quantity"] = int(stock_qty)
@@ -3180,11 +3200,14 @@ def _publish_variant_as_simple_item(woo_item, item, api, settings):
 	"""
 	import html
 	
-	# If this variant was previously published as a variation, delete it from WooCommerce
+	# If this variant was previously published, delete it from WooCommerce
+	# (could be a variation under parent OR a variable product)
 	if woo_item.woo_product_id:
 		try:
-			# Check if it's a variation by trying to get parent
+			# First, try to check if it's a variation by getting parent
 			parent_item_name = item.variant_of
+			is_variation = False
+			
 			if parent_item_name:
 				parent_woo_item = frappe.db.get_value(
 					"Woo Item",
@@ -3194,18 +3217,26 @@ def _publish_variant_as_simple_item(woo_item, item, api, settings):
 				)
 				
 				if parent_woo_item and parent_woo_item.woo_product_id:
-					# Delete the variation from parent product
+					# Try to delete as variation from parent product
 					try:
 						api.delete(f"products/{parent_woo_item.woo_product_id}/variations/{woo_item.woo_product_id}", params={"force": True})
-					except Exception as e:
-						frappe.log_error(
-							title=f"Failed to delete variation {woo_item.woo_product_id} from parent {parent_woo_item.woo_product_id}",
-							message=str(e)
-						)
+						is_variation = True
+						frappe.logger("woo_prime").info(f"Deleted variation {woo_item.woo_product_id} from parent {parent_woo_item.woo_product_id}")
+					except Exception as var_err:
+						frappe.logger("woo_prime").debug(f"Not a variation or already deleted: {var_err}")
+			
+			# If not deleted as variation, delete as standalone product (could be variable product)
+			if not is_variation:
+				try:
+					api.delete_product(woo_item.woo_product_id)
+					frappe.logger("woo_prime").info(f"Deleted standalone product {woo_item.woo_product_id}")
+				except Exception as prod_err:
+					frappe.logger("woo_prime").debug(f"Product already deleted or not found: {prod_err}")
+		
 		except Exception as e:
 			frappe.log_error(
-				title=f"Error checking/deleting previous variation for {woo_item.name}",
-				message=str(e)
+				title=f"Error checking/deleting previous product for {woo_item.name}",
+				message=frappe.get_traceback()
 			)
 		
 		# Reset woo_product_id so it creates a new simple product
@@ -3232,11 +3263,14 @@ def _publish_variant_as_new_template(woo_item, item, api, settings):
 	"""
 	import html
 	
-	# If this variant was previously published as a variation, delete it from WooCommerce
+	# If this variant was previously published, delete it from WooCommerce
+	# (could be a variation under parent OR a standalone simple product)
 	if woo_item.woo_product_id:
 		try:
-			# Check if it's a variation by trying to get parent
+			# First, try to check if it's a variation by getting parent
 			parent_item_name = item.variant_of
+			is_variation = False
+			
 			if parent_item_name:
 				parent_woo_item = frappe.db.get_value(
 					"Woo Item",
@@ -3246,18 +3280,26 @@ def _publish_variant_as_new_template(woo_item, item, api, settings):
 				)
 				
 				if parent_woo_item and parent_woo_item.woo_product_id:
-					# Delete the variation from parent product
+					# Try to delete as variation from parent product
 					try:
 						api.delete(f"products/{parent_woo_item.woo_product_id}/variations/{woo_item.woo_product_id}", params={"force": True})
-					except Exception as e:
-						frappe.log_error(
-							title=f"Failed to delete variation {woo_item.woo_product_id} from parent {parent_woo_item.woo_product_id}",
-							message=str(e)
-						)
+						is_variation = True
+						frappe.logger("woo_prime").info(f"Deleted variation {woo_item.woo_product_id} from parent {parent_woo_item.woo_product_id}")
+					except Exception as var_err:
+						frappe.logger("woo_prime").debug(f"Not a variation or already deleted: {var_err}")
+			
+			# If not deleted as variation, delete as standalone product (simple or variable)
+			if not is_variation:
+				try:
+					api.delete_product(woo_item.woo_product_id)
+					frappe.logger("woo_prime").info(f"Deleted standalone product {woo_item.woo_product_id}")
+				except Exception as prod_err:
+					frappe.logger("woo_prime").debug(f"Product already deleted or not found: {prod_err}")
+		
 		except Exception as e:
 			frappe.log_error(
-				title=f"Error checking/deleting previous variation for {woo_item.name}",
-				message=str(e)
+				title=f"Error checking/deleting previous product for {woo_item.name}",
+				message=frappe.get_traceback()
 			)
 		
 		# Reset woo_product_id so it creates a new variable product
@@ -3325,6 +3367,7 @@ def _publish_variant_as_new_template(woo_item, item, api, settings):
 		"status": "publish",
 		"attributes": woo_attributes,
 		"manage_stock": bool(getattr(woo_item, "manage_stock", 0)),
+		"menu_order": int(getattr(woo_item, "menu_order", 0) or 0),
 	}
 	
 	# Add categories

@@ -2195,39 +2195,31 @@ def delete_woo_item(woo_item_name, delete_item_master=False, delete_from_woocomm
 
 	# --- WooCommerce deletion ---
 	if delete_from_woocommerce and woo_product_id:
+		from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
+		api = get_woo_api()
 		try:
-			from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
-			api = get_woo_api()
-
-			if is_template:
-				# Deleting the WC variable product also removes all WC variations
+			if is_template or not is_variant:
 				api.delete_product(woo_product_id)
-			elif is_variant:
-				# Find the parent Woo Item to get the parent's woo_product_id
-				parent_woo_item = frappe.db.get_value(
-					"Woo Item", {"item_code": variant_of}, ["woo_product_id"], as_dict=True
-				)
-				if parent_woo_item and parent_woo_item.woo_product_id:
-					api.delete_variation(parent_woo_item.woo_product_id, woo_product_id)
-				else:
-					# Fallback: try deleting as a top-level product
-					api.delete_product(woo_product_id)
 			else:
-				# Simple product
-				api.delete_product(woo_product_id)
-
+				# Resolve the real parent from Woo instead of trusting the stored ID
+				real = api.get_product(woo_product_id) or {}
+				real_parent = real.get("parent_id") or frappe.db.get_value(
+					"Woo Item", {"item_code": variant_of}, "woo_product_id"
+				)
+				api.delete_variation(real_parent, woo_product_id)
 		except frappe.ValidationError as exc:
-			# 404 — product already gone in WooCommerce; treat as success
-			frappe.log_error(
-				title=f"WooCommerce delete (404 – already gone): {woo_item_name}",
-				message=str(exc),
-			)
+			# 404 only counts as "gone" if the product itself is really absent
+			if api.get_product(woo_product_id):
+				errors.append(f"WooCommerce: still exists after 404 ({exc})")
+			else:
+				frappe.log_error(title=f"WooCommerce already gone: {woo_item_name}", message=str(exc))
 		except Exception as exc:
 			errors.append(f"WooCommerce: {exc}")
-			frappe.log_error(
-				title=f"WooCommerce delete failed: {woo_item_name}",
-				message=frappe.get_traceback(),
-			)
+			frappe.log_error(title=f"WooCommerce delete failed: {woo_item_name}", message=frappe.get_traceback())
+
+	# WooCommerce delete failed হলে Woo Item মুছবেন না
+	if errors and delete_from_woocommerce:
+		frappe.throw(_("Not deleted, WooCommerce error:\n{0}").format("\n".join(errors)))
 
 	# --- ERPNext Item Master deletion ---
 	if delete_item_master and item_code:
