@@ -247,7 +247,7 @@
    "read_only": 1
   },
   {
-   "description": "Choose how to publish this item on WooCommerce:\n• Simple Item: Publish as simple product (stock managed at product level)\n• Variant Item: Create as variable product with variations (stock managed at variation level)\n• Blank: Auto-detect based on item type",
+   "description": "Choose how to publish this item on WooCommerce:\n\u2022 Simple Item: Publish as simple product (stock managed at product level)\n\u2022 Variant Item: Create as variable product with variations (stock managed at variation level)\n\u2022 Blank: Auto-detect based on item type",
    "fieldname": "woo_product_type",
    "fieldtype": "Select",
    "label": "WooCommerce Product Type",
@@ -325,7 +325,7 @@
   },
   {
    "create": 1,
-   "delete": 0,
+   "delete": 1,
    "email": 1,
    "export": 1,
    "print": 1,
