@@ -201,9 +201,10 @@ class WooItem(Document):
 				val_str = ", ".join(sorted(list(vals)))
 				if woo_attr in existing_attrs or attr_name in existing_attrs:
 					row = existing_attrs.get(woo_attr) or existing_attrs.get(attr_name)
-					row.attribute = woo_attr
-					if not row.options and val_str:
-						row.options = val_str
+					if row:
+						row.attribute = woo_attr
+						if not row.options and val_str:
+							row.options = val_str
 				else:
 					self.append("item_attributes", {
 						"attribute": woo_attr,
@@ -228,9 +229,10 @@ class WooItem(Document):
 				val = clean_text(a.attribute_value) if a.attribute_value else ""
 				if woo_attr in existing_attrs or a.attribute in existing_attrs:
 					row = existing_attrs.get(woo_attr) or existing_attrs.get(a.attribute)
-					row.attribute = woo_attr
-					if not row.options and val:
-						row.options = val
+					if row:
+						row.attribute = woo_attr
+						if not row.options and val:
+							row.options = val
 				else:
 					self.append("item_attributes", {
 						"attribute": woo_attr,
@@ -1069,7 +1071,7 @@ def _is_within_sync_window(now_val=None, start_val=None, end_val=None):
 	from datetime import datetime, timedelta, time as dt_time
 	from frappe.utils import get_time, now_datetime
 
-	def _normalize_time(val):
+	def _normalize_time(val) -> dt_time | None:
 		if val is None:
 			return None
 		if isinstance(val, dt_time):
@@ -1083,11 +1085,16 @@ def _is_within_sync_window(now_val=None, start_val=None, end_val=None):
 				return datetime.strptime(str(val), "%H:%M:%S").time()
 			except Exception:
 				return None
+		if isinstance(t, dt_time):
+			return t
 		if isinstance(t, timedelta):
-			t = (datetime.min + t).time()
-		elif hasattr(t, "time") and callable(t.time):
-			t = t.time()
-		return t
+			return (datetime.min + t).time()
+		if isinstance(t, datetime):
+			return t.time()
+		try:
+			return datetime.strptime(str(t), "%H:%M:%S").time()
+		except Exception:
+			return None
 
 	if start_val is not None and end_val is not None:
 		start_time = _normalize_time(start_val)
@@ -1109,13 +1116,16 @@ def _is_within_sync_window(now_val=None, start_val=None, end_val=None):
 		start_time = _normalize_time(raw_start)
 		end_time = _normalize_time(raw_end)
 
-	if not start_time or not end_time:
+	if start_time is None or end_time is None:
 		return True
 
 	if now_val is not None:
 		now = _normalize_time(now_val)
 	else:
 		now = now_datetime().time()
+
+	if now is None:
+		return True
 
 	# Handle overnight windows (e.g., 22:00 to 06:00)
 	if start_time <= end_time:
@@ -2216,44 +2226,20 @@ def delete_woo_item(woo_item_name, delete_item_master=False, delete_from_woocomm
 				api.delete_product(woo_product_id)
 			else:
 				# Resolve the real parent from Woo instead of trusting the stored ID
-				real = None
-				try:
-					real = api.get_product(woo_product_id) or {}
-				except Exception as exc:
-					frappe.logger("woo_prime").debug(f"Could not fetch product {woo_product_id} for parent resolution: {exc}")
-				
-				# Use _real_parent_id helper (from Task 1)
-				real_parent = None
-				if real:
-					from woo_prime.api.sync import _real_parent_id
-					real_parent = _real_parent_id(real)
-				
-				# Fallback to stored parent
-				if not real_parent:
-					real_parent = frappe.db.get_value(
-						"Woo Item", {"item_code": variant_of}, "woo_product_id"
-					)
-				
+				real = api.get_product(woo_product_id) or {}
+				real_parent = real.get("parent_id") or frappe.db.get_value(
+					"Woo Item", {"item_code": variant_of}, "woo_product_id"
+				)
 				api.delete_variation(real_parent, woo_product_id)
 		except frappe.ValidationError as exc:
 			# 404 only counts as "gone" if the product itself is really absent
-			# Wrap get_product to avoid exceptions
-			try:
-				still_exists = api.get_product(woo_product_id)
-			except Exception:
-				still_exists = None
-			
-			if still_exists:
+			if api.get_product(woo_product_id):
 				errors.append(f"WooCommerce: still exists after 404 ({exc})")
 			else:
 				frappe.log_error(title=f"WooCommerce already gone: {woo_item_name}", message=str(exc))
 		except Exception as exc:
 			errors.append(f"WooCommerce: {exc}")
 			frappe.log_error(title=f"WooCommerce delete failed: {woo_item_name}", message=frappe.get_traceback())
-
-	# WooCommerce delete failed হলে Woo Item মুছবেন না
-	if errors and delete_from_woocommerce:
-		frappe.throw(_("Not deleted, WooCommerce error:\n{0}").format("\n".join(errors)))
 
 	# --- ERPNext Item Master deletion ---
 	if delete_item_master and item_code:
@@ -2273,6 +2259,10 @@ def delete_woo_item(woo_item_name, delete_item_master=False, delete_from_woocomm
 				title=f"ERPNext Item delete failed: {woo_item_name}",
 				message=frappe.get_traceback(),
 			)
+
+	# WooCommerce delete failed হলে Woo Item মুছবেন না
+	if errors and delete_from_woocommerce:
+		frappe.throw(_("Not deleted, WooCommerce error:\n{0}").format("\n".join(errors)))
 
 	# --- Woo Item doc deletion (always) ---
 	success_deleted_items = []

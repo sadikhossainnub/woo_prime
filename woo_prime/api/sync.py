@@ -3,6 +3,8 @@
 
 import html
 import json
+import os
+import shutil
 
 import frappe
 from frappe import _
@@ -145,7 +147,7 @@ def sync_order(order_data):
 			so.po_no = f"WC-{woo_order_id}"
 
 		# Add line items
-		for item in items:
+		for item in (items or []):
 			so.append("items", item)
 
 		# Shipping details from WooCommerce payload
@@ -758,7 +760,7 @@ def _create_contact(customer_name, first_name, last_name, email, phone):
 		frappe.log_error("Contact creation failed for customer: " + customer_name)
 
 
-def _map_order_items(order_data, settings, delivery_date=None):
+def _map_order_items(order_data, settings, delivery_date=None) -> tuple[list, list]:
 	"""Map WooCommerce line items to ERPNext Sales Order items.
 
 	Looks up each item by woo_product_id, SKU, or item_code.
@@ -770,7 +772,7 @@ def _map_order_items(order_data, settings, delivery_date=None):
 		delivery_date: str — Delivery date for items
 
 	Returns:
-		tuple: (items: list or None, unmapped: list)
+		tuple: (items: list, unmapped: list)
 	"""
 	items = []
 	unmapped = []
@@ -829,7 +831,7 @@ def _map_order_items(order_data, settings, delivery_date=None):
 		})
 
 	if unmapped:
-		return None, unmapped
+		return [], unmapped
 	return items, []
 
 
@@ -1636,9 +1638,6 @@ def _get_item_images(item, woo_item=None, api=None, settings=None):
 					)
 					return
 				
-				import os
-				import shutil
-				
 				# Get absolute paths
 				clean_path = path.lstrip("/")
 				private_path = frappe.get_site_path(clean_path)
@@ -1811,7 +1810,7 @@ def _get_woo_tag_ids(woo_item, api):
 				if search_resp.status_code == 200:
 					for t in search_resp.json():
 						if t.get("name", "").strip().lower() == tag_name.lower():
-							woo_tag_id = int(t.get("id"))
+							woo_tag_id = int(t.get("id") or 0)
 							# Save back to DocType
 							if frappe.db.exists("Woo Tag", tag_name):
 								frappe.db.set_value("Woo Tag", tag_name, "woo_tag_id", woo_tag_id)
@@ -1858,7 +1857,7 @@ def _get_or_create_woo_category_id(cat_name, api):
 			from woo_prime.woo_prime.doctype.woo_category.woo_category import push_category_to_woo
 			res = push_category_to_woo(cat_name)
 			if res and isinstance(res, dict) and res.get("id"):
-				cid = int(res.get("id"))
+				cid = int(res.get("id") or 0)
 				_cat_cache[cat_key] = cid
 				return cid
 
@@ -1867,7 +1866,7 @@ def _get_or_create_woo_category_id(cat_name, api):
 			categories = response.json()
 			for cat in categories:
 				if cat.get("name", "").strip().lower() == cat_key:
-					cid = int(cat.get("id"))
+					cid = int(cat.get("id") or 0)
 					_save_woo_category_loc(cat_name, cid, cat.get("slug"))
 					_cat_cache[cat_key] = cid
 					return cid
@@ -1875,7 +1874,7 @@ def _get_or_create_woo_category_id(cat_name, api):
 		create_resp = api.post("products/categories", data={"name": cat_name})
 		if create_resp.status_code in (200, 201):
 			new_cat = create_resp.json()
-			cat_id = int(new_cat.get("id"))
+			cat_id = int(new_cat.get("id") or 0)
 			_save_woo_category_loc(cat_name, cat_id, new_cat.get("slug"))
 			_cat_cache[cat_key] = cat_id
 			return cat_id
@@ -1949,7 +1948,7 @@ def _get_or_create_woo_attribute_id(attr_name, api=None):
 					a_name = (a.get("name") or "").strip()
 					a_slug = (a.get("slug") or "").strip().lower()
 					clean_slug = a_slug.replace("pa_", "")
-					aid = int(a.get("id"))
+					aid = int(a.get("id") or 0)
 					entry = (aid, a_name)
 					_cache[a_name.lower()] = entry
 					_cache[a_slug] = entry
@@ -1985,7 +1984,7 @@ def _get_or_create_woo_attribute_id(attr_name, api=None):
 			create_res = api.post("products/attributes", data=create_payload)
 			if create_res.status_code in (200, 201):
 				created_data = create_res.json()
-				new_id = int(created_data.get("id"))
+				new_id = int(created_data.get("id") or 0)
 				new_name = created_data.get("name") or attr_name
 				new_slug = (created_data.get("slug") or "").strip().lower()
 				clean_slug = new_slug.replace("pa_", "")
@@ -2176,6 +2175,7 @@ def sync_stock_to_woo(woo_item):
 
 	woo_item.db_set("last_pushed_qty", int(stock_qty))
 
+	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
 	create_log(
 		sync_type="Stock",
 		direction="Outgoing",
