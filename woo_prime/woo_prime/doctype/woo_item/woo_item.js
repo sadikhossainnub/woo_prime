@@ -8,13 +8,13 @@ frappe.ui.form.on("Woo Item", {
 			frm.add_custom_button(
 				__("Publish to WooCommerce"),
 				function () {
-					let do_publish = function (sync_images = 0) {
+					let proceed = function () {
 						frappe.call({
 							method: "woo_prime.woo_prime.doctype.woo_item.woo_item.publish_single_item",
 							args: {
 								woo_item_name: frm.doc.name,
 								background: false,
-								sync_images: sync_images
+								sync_images: 1
 							},
 							freeze: true,
 							freeze_message: __("Publishing to WooCommerce..."),
@@ -24,40 +24,6 @@ frappe.ui.form.on("Woo Item", {
 								}
 							}
 						});
-					};
-
-					let proceed = function () {
-						if (frm.doc.woo_product_id) {
-							// Item is already published — allow user to choose whether to sync images
-							let d = new frappe.ui.Dialog({
-								title: __("Publish to WooCommerce"),
-								fields: [
-									{
-										fieldtype: "HTML",
-										fieldname: "info_html",
-										options: `<div class="text-muted" style="margin-bottom: 12px; font-size: 13px;">
-											${__("This item is already published to WooCommerce (ID: <b>{0}</b>).", [frm.doc.woo_product_id])}
-										</div>`
-									},
-									{
-										label: __("Update / Push Images to WooCommerce"),
-										fieldname: "sync_images",
-										fieldtype: "Check",
-										default: 0,
-										description: __("Check this box if you changed or added product images and want to upload them to WooCommerce.")
-									}
-								],
-								primary_action_label: __("Publish"),
-								primary_action(values) {
-									d.hide();
-									do_publish(values.sync_images ? 1 : 0);
-								}
-							});
-							d.show();
-						} else {
-							// First time publish — always push images
-							do_publish(1);
-						}
 					};
 
 					if (frm.is_dirty()) {
@@ -150,30 +116,6 @@ frappe.ui.form.on("Woo Item", {
 					__("Actions")
 				);
 
-				frm.add_custom_button(
-					__("Sync Images"),
-					function () {
-						frappe.confirm(
-							__("Do you want to push current product images to WooCommerce?"),
-							function () {
-								frappe.call({
-									method: "woo_prime.woo_prime.doctype.woo_item.woo_item.publish_single_item",
-									args: {
-										woo_item_name: frm.doc.name,
-										background: false,
-										sync_images: 1
-									},
-									freeze: true,
-									freeze_message: __("Syncing images to WooCommerce..."),
-									callback: function (r) {
-										frm.reload_doc();
-									}
-								});
-							}
-						);
-					},
-					__("Actions")
-				);
 			}
 
 			frm.add_custom_button(
