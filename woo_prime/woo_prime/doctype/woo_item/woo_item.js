@@ -8,12 +8,13 @@ frappe.ui.form.on("Woo Item", {
 			frm.add_custom_button(
 				__("Publish to WooCommerce"),
 				function () {
-					let do_publish = function () {
+					let do_publish = function (sync_images = 0) {
 						frappe.call({
 							method: "woo_prime.woo_prime.doctype.woo_item.woo_item.publish_single_item",
 							args: {
 								woo_item_name: frm.doc.name,
-								background: false
+								background: false,
+								sync_images: sync_images
 							},
 							freeze: true,
 							freeze_message: __("Publishing to WooCommerce..."),
@@ -24,10 +25,45 @@ frappe.ui.form.on("Woo Item", {
 							}
 						});
 					};
+
+					let proceed = function () {
+						if (frm.doc.woo_product_id) {
+							// Item is already published — allow user to choose whether to sync images
+							let d = new frappe.ui.Dialog({
+								title: __("Publish to WooCommerce"),
+								fields: [
+									{
+										fieldtype: "HTML",
+										fieldname: "info_html",
+										options: `<div class="text-muted" style="margin-bottom: 12px; font-size: 13px;">
+											${__("This item is already published to WooCommerce (ID: <b>{0}</b>).", [frm.doc.woo_product_id])}
+										</div>`
+									},
+									{
+										label: __("Update / Push Images to WooCommerce"),
+										fieldname: "sync_images",
+										fieldtype: "Check",
+										default: 0,
+										description: __("Check this box if you changed or added product images and want to upload them to WooCommerce.")
+									}
+								],
+								primary_action_label: __("Publish"),
+								primary_action(values) {
+									d.hide();
+									do_publish(values.sync_images ? 1 : 0);
+								}
+							});
+							d.show();
+						} else {
+							// First time publish — always push images
+							do_publish(1);
+						}
+					};
+
 					if (frm.is_dirty()) {
-						frm.save().then(do_publish);
+						frm.save().then(proceed);
 					} else {
-						do_publish();
+						proceed();
 					}
 				},
 				__("Actions")
@@ -110,6 +146,31 @@ frappe.ui.form.on("Woo Item", {
 								frm.reload_doc();
 							},
 						});
+					},
+					__("Actions")
+				);
+
+				frm.add_custom_button(
+					__("Sync Images"),
+					function () {
+						frappe.confirm(
+							__("Do you want to push current product images to WooCommerce?"),
+							function () {
+								frappe.call({
+									method: "woo_prime.woo_prime.doctype.woo_item.woo_item.publish_single_item",
+									args: {
+										woo_item_name: frm.doc.name,
+										background: false,
+										sync_images: 1
+									},
+									freeze: true,
+									freeze_message: __("Syncing images to WooCommerce..."),
+									callback: function (r) {
+										frm.reload_doc();
+									}
+								});
+							}
+						);
 					},
 					__("Actions")
 				);
@@ -391,10 +452,21 @@ frappe.ui.form.on("Woo Item", {
 
 		// Initialize Multi-Select Dropdown for Product Attributes table
 		_setup_attributes_multiselect(frm);
+
+		// Render Image Preview & Child Table Gallery Formatter
+		render_image_preview(frm);
+		_setup_gallery_grid_formatter(frm);
+	},
+
+	image(frm) {
+		render_image_preview(frm);
 	},
 
 	item_code(frm) {
 		if (frm.doc.item_code) {
+			setTimeout(() => {
+				render_image_preview(frm);
+			}, 600);
 			// Auto-fill item_name from Item Master only if item_name is currently empty
 			if (!frm.doc.item_name) {
 				frappe.db.get_value("Item", frm.doc.item_code, "item_name", function (r) {
@@ -990,7 +1062,7 @@ function _normalize_table_html(content) {
 
 // List View: Bulk Publish action
 frappe.listview_settings["Woo Item"] = {
-	add_fields: ["sync_status", "published", "woo_product_id"],
+	add_fields: ["sync_status", "published", "woo_product_id", "image"],
 	get_indicator: function (doc) {
 		if (doc.sync_status === "Synced") {
 			return [__("Synced"), "green", "sync_status,=,Synced"];
@@ -1268,5 +1340,231 @@ function show_bulk_publish_dialog(listview, total_count) {
 	};
 
 	frappe.realtime.on("woo_publish_progress", bulk_publish_subscription);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Child Table Handler & Image Preview Feature
+// ─────────────────────────────────────────────────────────────────────────────
+
+frappe.ui.form.on("Woo Item Image", {
+	image(frm, cdt, cdn) {
+		render_image_preview(frm);
+	},
+	caption(frm, cdt, cdn) {
+		render_image_preview(frm);
+	},
+	images_add(frm) {
+		render_image_preview(frm);
+	},
+	images_remove(frm) {
+		render_image_preview(frm);
+	}
+});
+
+function _setup_gallery_grid_formatter(frm) {
+	if (!frm.fields_dict.images || !frm.fields_dict.images.grid) return;
+	let grid = frm.fields_dict.images.grid;
+	if (grid._woo_img_formatted) return;
+	grid._woo_img_formatted = true;
+
+	let docfield = (grid.docfields || []).find(df => df.fieldname === "image");
+	if (docfield) {
+		docfield.formatter = function (value) {
+			if (!value) return "";
+			return `<div style="display: flex; align-items: center; gap: 8px;">
+				<img src="${encodeURI(value)}" style="width: 32px; height: 32px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border-color, #d1d8dd); background: #fff;" onerror="this.style.display='none';">
+				<span style="font-size: 11px; word-break: break-all;">${frappe.utils.escape_html(value)}</span>
+			</div>`;
+		};
+	}
+}
+
+function render_image_preview(frm) {
+	if (!frm.fields_dict["image_preview_html"]) return;
+	let $wrapper = frm.fields_dict["image_preview_html"].$wrapper;
+	if (!$wrapper) return;
+
+	let main_image = frm.doc.image;
+	let gallery = (frm.doc.images || []).filter(r => r && r.image);
+
+	// If no images at all
+	if (!main_image && gallery.length === 0) {
+		$wrapper.html(`
+			<div class="woo-image-preview-empty" style="
+				border: 1px dashed var(--border-color, #d1d8dd);
+				border-radius: 8px;
+				padding: 18px 14px;
+				text-align: center;
+				background: var(--bg-light-gray, #fafbfc);
+				margin: 6px 0 14px 0;
+			">
+				<div style="font-size: 26px; line-height: 1; margin-bottom: 6px; opacity: 0.65;">🖼️</div>
+				<div style="font-weight: 500; font-size: 12px; color: var(--text-color, #1f272e);">
+					${__("No Product Image Attached")}
+				</div>
+				<div style="font-size: 11px; color: var(--text-muted, #8d99a6); margin-top: 2px;">
+					${__("Upload a Main Image above or select an Item Code to preview.")}
+				</div>
+			</div>
+		`);
+		return;
+	}
+
+	// Prepare array of all images
+	let all_images = [];
+	if (main_image) {
+		all_images.push({
+			url: main_image,
+			label: __("Main Image"),
+			is_main: true,
+			caption: frm.doc.item_name || ""
+		});
+	}
+	gallery.forEach((g, idx) => {
+		all_images.push({
+			url: g.image,
+			label: __("Gallery #{0}", [idx + 1]),
+			is_main: false,
+			caption: g.caption || ""
+		});
+	});
+
+	let active_idx = frm._active_preview_idx || 0;
+	if (active_idx >= all_images.length) active_idx = 0;
+	let active_img = all_images[active_idx];
+
+	let count_label = all_images.length === 1
+		? __("1 Image")
+		: __("{0} Images ({1} Gallery)", [all_images.length, gallery.length]);
+
+	let thumbs_html = "";
+	if (all_images.length > 1) {
+		thumbs_html = `
+			<div class="woo-preview-thumbs-strip" style="
+				display: flex;
+				gap: 8px;
+				overflow-x: auto;
+				padding: 8px 2px 2px 2px;
+				margin-top: 10px;
+				border-top: 1px solid var(--border-color, #f0f1f3);
+			">
+				${all_images.map((img, idx) => `
+					<div class="woo-preview-thumb-btn ${idx === active_idx ? 'active' : ''}" data-idx="${idx}" style="
+						position: relative;
+						flex: 0 0 52px;
+						height: 52px;
+						border-radius: 6px;
+						border: ${idx === active_idx ? '2px solid var(--primary, #171717)' : '1px solid var(--border-color, #d1d8dd)'};
+						box-shadow: ${idx === active_idx ? '0 0 0 2px rgba(0,0,0,0.1)' : 'none'};
+						overflow: hidden;
+						cursor: pointer;
+						background: var(--bg-light-gray, #fff);
+						transition: all 0.15s ease;
+					" title="${frappe.utils.escape_html(img.label + (img.caption ? ': ' + img.caption : ''))}">
+						<img src="${encodeURI(img.url)}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.src='/assets/frappe/images/default-avatar.png';">
+						${img.is_main ? `<span style="position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,0.7); color: #fff; font-size: 8px; text-align: center; padding: 1px 0; font-weight: 600; text-transform: uppercase;">Main</span>` : ''}
+					</div>
+				`).join("")}
+			</div>
+		`;
+	}
+
+	let html = `
+		<div class="woo-image-preview-card" style="
+			border: 1px solid var(--border-color, #d1d8dd);
+			border-radius: 8px;
+			background: var(--card-bg, #ffffff);
+			padding: 10px;
+			margin: 6px 0 14px 0;
+			box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+		">
+			<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+				<div style="display: flex; align-items: center; gap: 6px;">
+					<span style="font-weight: 600; font-size: 12px; color: var(--text-color, #1f272e);">
+						🖼️ ${__("Image Preview")}
+					</span>
+					<span class="badge ${active_img.is_main ? 'badge-primary' : 'badge-default'}" style="font-size: 10px; font-weight: 500;">
+						${active_img.label}
+					</span>
+					<span style="font-size: 10px; color: var(--text-muted, #8d99a6);">
+						(${count_label})
+					</span>
+				</div>
+				<div style="display: flex; gap: 5px;">
+					<button type="button" class="btn btn-xs btn-default btn-preview-zoom" style="font-size: 11px; padding: 2px 7px;" title="${__("View Full Resolution in Lightbox")}">
+						🔍 ${__("Zoom")}
+					</button>
+					<a href="${encodeURI(active_img.url)}" target="_blank" class="btn btn-xs btn-default" style="font-size: 11px; padding: 2px 7px;" title="${__("Open in New Tab")}">
+						↗
+					</a>
+				</div>
+			</div>
+
+			<!-- Main Preview Display -->
+			<div class="woo-preview-stage" style="
+				position: relative;
+				width: 100%;
+				height: 220px;
+				border-radius: 6px;
+				background: var(--bg-light-gray, #f8f9fa);
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				overflow: hidden;
+				cursor: zoom-in;
+				border: 1px solid var(--border-color, #f0f1f3);
+			" title="${__("Click to Zoom / Expand")}">
+				<img src="${encodeURI(active_img.url)}" style="
+					max-width: 100%;
+					max-height: 100%;
+					object-fit: contain;
+					transition: transform 0.2s ease;
+				" onerror="this.onerror=null; this.src='/assets/frappe/images/default-avatar.png';">
+			</div>
+
+			${active_img.caption ? `
+				<div style="font-size: 11px; color: var(--text-muted, #6c757d); margin-top: 5px; text-align: center; font-style: italic;">
+					${frappe.utils.escape_html(active_img.caption)}
+				</div>
+			` : ''}
+
+			${thumbs_html}
+		</div>
+	`;
+
+	$wrapper.html(html);
+
+	// Thumbnail click to switch preview
+	$wrapper.find(".woo-preview-thumb-btn").on("click", function () {
+		let idx = parseInt($(this).data("idx"));
+		frm._active_preview_idx = idx;
+		render_image_preview(frm);
+	});
+
+	// Zoom click handler -> Lightbox dialog
+	$wrapper.find(".woo-preview-stage, .btn-preview-zoom").on("click", function (e) {
+		e.stopPropagation();
+		let img_url = active_img.url;
+		let d = new frappe.ui.Dialog({
+			title: active_img.label + (active_img.caption ? ` - ${active_img.caption}` : ''),
+			size: "large",
+			fields: [
+				{
+					fieldtype: "HTML",
+					fieldname: "lightbox_view",
+					options: `
+						<div style="text-align: center; padding: 10px; background: #121212; border-radius: 6px; overflow: auto; max-height: 75vh;">
+							<img src="${encodeURI(img_url)}" style="max-width: 100%; max-height: 68vh; object-fit: contain; border-radius: 4px; box-shadow: 0 4px 16px rgba(0,0,0,0.5);">
+							<div style="margin-top: 12px; display: flex; justify-content: center; gap: 8px;">
+								<a href="${encodeURI(img_url)}" target="_blank" class="btn btn-xs btn-primary">${__("Open Original File ↗")}</a>
+								<a href="${encodeURI(img_url)}" download class="btn btn-xs btn-default" style="background: #2a2a2a; color: #fff; border-color: #444;">${__("Download")}</a>
+							</div>
+						</div>
+					`
+				}
+			]
+		});
+		d.show();
+	});
 }
 

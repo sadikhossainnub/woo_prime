@@ -894,11 +894,15 @@ def _log_error(woo_order_id, order_data, error_message):
 # ═══════════════════════════════════════════════════
 
 
-def publish_item_to_woo(woo_item):
+def publish_item_to_woo(woo_item, sync_images=None):
 	"""Publish an ERPNext item (Simple, Template, or Variant) to WooCommerce.
 
 	Args:
 		woo_item: Woo Item document
+		sync_images: Optional bool. If True, always push images.
+		             If False, never push images for existing products.
+		             If None, checks woo_item.flags.sync_images, defaulting to
+		             True for new products and False for already published products.
 
 	Returns:
 		dict: WooCommerce product response
@@ -909,26 +913,33 @@ def publish_item_to_woo(woo_item):
 	settings = frappe.get_single("Woo Settings")
 	item = frappe.get_doc("Item", woo_item.item_code)
 
+	if sync_images is None:
+		sync_images = getattr(woo_item.flags, "sync_images", None)
+
+	# For new products (no woo_product_id), always push images.
+	# For already published products, only push images if sync_images is explicitly requested.
+	should_sync_images = True if (not woo_item.woo_product_id or bool(sync_images)) else False
+
 	# Handle variant items with custom product type
 	if item.variant_of:
 		woo_product_type = getattr(woo_item, "woo_product_type", "")
 		
 		if woo_product_type == "Simple Item":
 			# Publish as independent simple product
-			return _publish_variant_as_simple_item(woo_item, item, api, settings)
+			return _publish_variant_as_simple_item(woo_item, item, api, settings, sync_images=should_sync_images)
 		elif woo_product_type == "Variant Item":
 			# Create as new variant product (template with its own variations)
 			return _publish_variant_as_new_template(woo_item, item, api, settings)
 		else:
 			# Default: publish as variation under parent template
-			return _publish_variant_item_to_woo(woo_item, item, api, settings)
+			return _publish_variant_item_to_woo(woo_item, item, api, settings, sync_images=should_sync_images)
 	elif item.has_variants:
-		return _publish_template_item_to_woo(woo_item, item, api, settings)
+		return _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=should_sync_images)
 	else:
-		return _publish_simple_item_to_woo(woo_item, item, api, settings)
+		return _publish_simple_item_to_woo(woo_item, item, api, settings, sync_images=should_sync_images)
 
 
-def _publish_simple_item_to_woo(woo_item, item, api, settings):
+def _publish_simple_item_to_woo(woo_item, item, api, settings, sync_images=True):
 	"""Publish a simple item to WooCommerce."""
 	import html
 	price = _get_item_price(woo_item.item_code, settings.default_price_list)
@@ -968,9 +979,10 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings):
 	if simple_attrs:
 		product_data["attributes"] = simple_attrs
 
-	images = _get_item_images(item, woo_item, api, settings)
-	if images:
-		product_data["images"] = images
+	if sync_images or not woo_item.woo_product_id:
+		images = _get_item_images(item, woo_item, api, settings)
+		if images:
+			product_data["images"] = images
 
 	# Tags: prefer woo_tags Table MultiSelect, fallback to ERPNext _user_tags
 	woo_tag_ids = _get_woo_tag_ids(woo_item, api)
@@ -1012,7 +1024,7 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings):
 	return result
 
 
-def _publish_template_item_to_woo(woo_item, item, api, settings):
+def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=True):
 	"""Publish an ERPNext Template Item and all its variants as a WooCommerce Variable Product using batch API."""
 	import html
 	variant_item_names = frappe.get_all(
@@ -1106,9 +1118,10 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 	if category_ids:
 		product_data["categories"] = category_ids
 
-	images = _get_item_images(item, woo_item, api, settings)
-	if images:
-		product_data["images"] = images
+	if sync_images or not woo_item.woo_product_id:
+		images = _get_item_images(item, woo_item, api, settings)
+		if images:
+			product_data["images"] = images
 
 	# Tags: prefer woo_tags Table MultiSelect, fallback to ERPNext _user_tags
 	woo_tag_ids = _get_woo_tag_ids(woo_item, api)
@@ -1175,7 +1188,7 @@ def _publish_template_item_to_woo(woo_item, item, api, settings):
 					child_woo_item.db_set("manage_stock", int(manage_var_stock))
 				except Exception:
 					pass
-			var_payload = _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_attr_keys=variation_attr_keys)
+			var_payload = _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_attr_keys=variation_attr_keys, sync_images=sync_images)
 
 			if child_woo_item.woo_product_id:
 				var_payload["id"] = int(child_woo_item.woo_product_id)
@@ -1424,7 +1437,7 @@ def get_or_create_woo_item(item_code, sku=None):
 	return woo_item
 
 
-def _publish_variant_item_to_woo(woo_item, item, api, settings):
+def _publish_variant_item_to_woo(woo_item, item, api, settings, sync_images=True):
 	"""Publish a child Variant item directly by ensuring its parent template is published first."""
 	parent_item_name = item.variant_of
 	parent_item = frappe.get_doc("Item", parent_item_name)
@@ -1432,17 +1445,17 @@ def _publish_variant_item_to_woo(woo_item, item, api, settings):
 	parent_woo_item = get_or_create_woo_item(parent_item_name, parent_item.item_code)
 
 	if not parent_woo_item.woo_product_id:
-		parent_res = _publish_template_item_to_woo(parent_woo_item, parent_item, api, settings)
+		parent_res = _publish_template_item_to_woo(parent_woo_item, parent_item, api, settings, sync_images=sync_images)
 		parent_woo_item.woo_product_id = parent_res.get("id")
 		parent_woo_item.published = 1
 		parent_woo_item.sync_status = "Synced"
 		parent_woo_item.last_synced = now_datetime()
 		parent_woo_item.save(ignore_permissions=True)
 
-	return _publish_variation_data(parent_woo_item.woo_product_id, woo_item, item, api, settings)
+	return _publish_variation_data(parent_woo_item.woo_product_id, woo_item, item, api, settings, sync_images=sync_images)
 
 
-def _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_attr_keys=None):
+def _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_attr_keys=None, sync_images=False):
 	"""Prepare variation payload dictionary for WooCommerce."""
 	import html
 	price = _get_item_price(v_item.name, settings.default_price_list)
@@ -1510,16 +1523,17 @@ def _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_
 		var_data["weight"] = str(flt(v_item.weight_per_unit))
 
 
-	images = _get_item_images(v_item, child_woo_item, api, settings)
-	if images:
-		var_data["image"] = images[0]
+	if sync_images or not child_woo_item.woo_product_id:
+		images = _get_item_images(v_item, child_woo_item, api, settings)
+		if images:
+			var_data["image"] = images[0]
 
 	return var_data
 
 
-def _publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings):
+def _publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings, sync_images=False):
 	"""Publish a single variation to WooCommerce under parent variable product."""
-	var_data = _prepare_variation_payload(child_woo_item, v_item, api, settings)
+	var_data = _prepare_variation_payload(child_woo_item, v_item, api, settings, sync_images=sync_images)
 
 	res = None
 	if child_woo_item.woo_product_id:
@@ -3174,13 +3188,17 @@ def on_item_update(doc, method):
 						if not old_erp_desc or woo_item.woo_description.strip() == old_erp_desc.strip():
 							woo_item.woo_description = doc.description
 
-				# Sync image: always propagate ERP item image to Woo Item
+				# Sync image: propagate ERP item image to Woo Item and check if it changed
 				new_image = getattr(doc, "image", None)
-				if new_image:
+				old_image = woo_item.image
+				image_changed = False
+				if new_image and new_image != old_image:
 					woo_item.image = new_image
-				elif woo_item.image and not new_image:
+					image_changed = True
+				elif old_image and not new_image:
 					# Image removed from ERP — clear it on Woo Item too
 					woo_item.image = None
+					image_changed = True
 
 				woo_item.save(ignore_permissions=True)
 				frappe.db.commit()
@@ -3193,6 +3211,7 @@ def on_item_update(doc, method):
 					timeout=1800,
 					job_id=f"woo_publish_{woo_item.name}",
 					deduplicate=True,
+					sync_images=image_changed,
 				)
 		elif getattr(settings, "auto_publish_new_items", 0):
 			from woo_prime.woo_prime.doctype.woo_item.woo_item import publish_item_from_item_master
@@ -3233,7 +3252,8 @@ def sync_all_items():
 		try:
 			doc = frappe.get_doc("Woo Item", item.name)
 			doc.flags.in_woo_sync = True
-			doc._execute_publish_sync()
+			doc.flags.sync_images = False
+			doc._execute_publish_sync(sync_images=False)
 			frappe.db.commit()
 		except Exception as e:
 			frappe.log_error(f"Scheduled item sync failed for {item.name}: {e}")

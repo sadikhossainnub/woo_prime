@@ -12,6 +12,7 @@
   "regular_price",
   "sale_price",
   "image",
+  "image_preview_html",
   "column_break_item",
   "sync_status",
   "woo_product_type",
@@ -94,6 +95,11 @@
    "fieldname": "image",
    "fieldtype": "Attach Image",
    "label": "Main Image"
+  },
+  {
+   "fieldname": "image_preview_html",
+   "fieldtype": "HTML",
+   "label": "Image Preview"
   },
   {
    "fieldname": "column_break_item",
@@ -336,6 +342,7 @@
    "write": 1
   }
  ],
+ "image_field": "image",
  "row_format": "Dynamic",
  "search_fields": "item_code,item_name,woo_product_id",
  "sort_field": "creation",

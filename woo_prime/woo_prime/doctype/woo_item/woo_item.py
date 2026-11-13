@@ -278,10 +278,12 @@ class WooItem(Document):
 			pass
 
 	@frappe.whitelist()
-	def publish_to_woocommerce(self, background=True):
+	def publish_to_woocommerce(self, background=True, sync_images=None):
 		"""Create or update product on WooCommerce."""
 		frappe.only_for(["System Manager", "Woo Manager", "Website Manager"])
 		background = _parse_bool(background)
+		if sync_images is not None:
+			sync_images = _parse_bool(sync_images)
 
 		if background:
 			frappe.enqueue(
@@ -293,20 +295,24 @@ class WooItem(Document):
 				enqueue_after_commit=True,
 				job_id=f"woo_publish_{self.name}",
 				deduplicate=True,
+				sync_images=sync_images,
 			)
 			msg = _("Publishing '{0}' to WooCommerce in the background...").format(self.item_name or self.name)
 			if frappe.request:
 				frappe.msgprint(msg, title=_("Publish Queued"), indicator="blue")
 			return {"status": "queued", "message": msg, "woo_item_name": self.name}
 		else:
-			return self._execute_publish_sync(user=frappe.session.user)
+			return self._execute_publish_sync(user=frappe.session.user, sync_images=sync_images)
 
-	def _execute_publish_sync(self, user=None):
+	def _execute_publish_sync(self, user=None, sync_images=None):
 		from woo_prime.api.sync import publish_item_to_woo
 		from woo_prime.utils import safe_log_error
 
+		if sync_images is not None:
+			self.flags.sync_images = _parse_bool(sync_images)
+
 		try:
-			result = publish_item_to_woo(self)
+			result = publish_item_to_woo(self, sync_images=getattr(self.flags, "sync_images", None))
 			try:
 				self.reload()
 			except Exception:
@@ -399,9 +405,9 @@ class WooItem(Document):
 
 	@frappe.whitelist()
 	def sync_item_now(self):
-		"""Manually re-sync this item (details, stock, price) to WooCommerce."""
+		"""Manually re-sync this item (details, stock, price) to WooCommerce without re-uploading images."""
 		frappe.only_for(["System Manager", "Woo Manager", "Website Manager"])
-		return self._execute_publish_sync(user=frappe.session.user)
+		return self._execute_publish_sync(user=frappe.session.user, sync_images=False)
 
 	@frappe.whitelist()
 	def sync_stock_now(self):
@@ -609,15 +615,17 @@ class WooItem(Document):
 
 
 @frappe.whitelist()
-def publish_single_item(woo_item_name, background=False):
+def publish_single_item(woo_item_name, background=False, sync_images=None):
 	"""Standalone whitelist method to publish a Woo Item without for_update lock."""
 	frappe.only_for(["System Manager", "Woo Manager", "Website Manager"])
 	background = _parse_bool(background)
+	if sync_images is not None:
+		sync_images = _parse_bool(sync_images)
 	if not woo_item_name or not frappe.db.exists("Woo Item", woo_item_name):
 		frappe.throw(_("Woo Item {0} not found.").format(woo_item_name))
 
 	doc = frappe.get_doc("Woo Item", woo_item_name)
-	return doc.publish_to_woocommerce(background=background)
+	return doc.publish_to_woocommerce(background=background, sync_images=sync_images)
 
 
 @frappe.whitelist()
@@ -892,12 +900,14 @@ def bulk_publish(items, background=True):
 		return _bulk_publish_worker(items=items, user=frappe.session.user)
 
 
-def _publish_single_woo_item_worker(woo_item_name, user=None):
+def _publish_single_woo_item_worker(woo_item_name, user=None, sync_images=None):
 	"""Background worker: publish a single Woo Item to WooCommerce."""
 	try:
 		if not frappe.db.exists("Woo Item", woo_item_name):
 			return
 		woo_item = frappe.get_doc("Woo Item", woo_item_name)
+		if sync_images is not None:
+			woo_item.flags.sync_images = _parse_bool(sync_images)
 		_publish_item_progress(
 			user=user,
 			operation="publish_item",
@@ -907,7 +917,7 @@ def _publish_single_woo_item_worker(woo_item_name, user=None):
 			item_code=woo_item.item_code,
 			item_name=woo_item.item_name,
 		)
-		woo_item._execute_publish_sync(user=user)
+		woo_item._execute_publish_sync(user=user, sync_images=sync_images)
 		frappe.db.commit()
 	except Exception as e:
 		frappe.db.rollback()
