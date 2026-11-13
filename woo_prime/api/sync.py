@@ -929,7 +929,7 @@ def publish_item_to_woo(woo_item, sync_images=None):
 			return _publish_variant_as_simple_item(woo_item, item, api, settings, sync_images=should_sync_images)
 		elif woo_product_type == "Variant Item":
 			# Create as new variant product (template with its own variations)
-			return _publish_variant_as_new_template(woo_item, item, api, settings)
+			return _publish_variant_as_new_template(woo_item, item, api, settings, sync_images=should_sync_images)
 		else:
 			# Default: publish as variation under parent template
 			return _publish_variant_item_to_woo(woo_item, item, api, settings, sync_images=should_sync_images)
@@ -3264,7 +3264,7 @@ def sync_all_items():
 
 
 
-def _publish_variant_as_simple_item(woo_item, item, api, settings):
+def _publish_variant_as_simple_item(woo_item, item, api, settings, sync_images=True):
 	"""Publish a variant item as an independent simple product on WooCommerce.
 	
 	This is used when woo_product_type is set to 'Simple Item' for a variant.
@@ -3275,6 +3275,7 @@ def _publish_variant_as_simple_item(woo_item, item, api, settings):
 		item: ERPNext Item document (variant item)
 		api: WooCommerce API instance
 		settings: Woo Settings document
+		sync_images: Whether to include images in the product payload
 		
 	Returns:
 		dict: WooCommerce product response
@@ -3323,10 +3324,10 @@ def _publish_variant_as_simple_item(woo_item, item, api, settings):
 		woo_item.woo_product_id = 0
 	
 	# Now publish as a simple product using the existing function
-	return _publish_simple_item_to_woo(woo_item, item, api, settings)
+	return _publish_simple_item_to_woo(woo_item, item, api, settings, sync_images=sync_images)
 
 
-def _publish_variant_as_new_template(woo_item, item, api, settings):
+def _publish_variant_as_new_template(woo_item, item, api, settings, sync_images=True):
 	"""Publish a variant item as a new template/variable product on WooCommerce.
 	
 	This is used when woo_product_type is set to 'Variant Item' for a variant.
@@ -3456,9 +3457,10 @@ def _publish_variant_as_new_template(woo_item, item, api, settings):
 		product_data["categories"] = category_ids
 	
 	# Add images
-	images = _get_item_images(item, woo_item, api, settings)
-	if images:
-		product_data["images"] = images
+	if sync_images or not woo_item.woo_product_id:
+		images = _get_item_images(item, woo_item, api, settings)
+		if images:
+			product_data["images"] = images
 	
 	# Add tags
 	woo_tag_ids = _get_woo_tag_ids(woo_item, api)
