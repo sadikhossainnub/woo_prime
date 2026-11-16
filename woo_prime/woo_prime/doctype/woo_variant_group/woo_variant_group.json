@@ -1,0 +1,150 @@
+{
+ "actions": [],
+ "autoname": "field:group_sku",
+ "creation": "2026-11-16 23:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "group_sku",
+  "template_item",
+  "leader",
+  "item_name",
+  "column_break_1",
+  "woo_product_id",
+  "published",
+  "woo_product_url",
+  "last_synced",
+  "members_section",
+  "members_html"
+ ],
+ "fields": [
+  {
+   "fieldname": "group_sku",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Group SKU",
+   "no_copy": 1,
+   "reqd": 1,
+   "set_only_once": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "template_item",
+   "fieldtype": "Link",
+   "in_filter": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Template Item",
+   "options": "Item"
+  },
+  {
+   "fieldname": "leader",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Leader Variant",
+   "options": "Woo Item",
+   "reqd": 1
+  },
+  {
+   "description": "Product Title on WooCommerce. Auto-fetched from leader if empty.",
+   "fieldname": "item_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Item Name"
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "woo_product_id",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "WooCommerce Product ID",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "published",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Published to WooCommerce",
+   "read_only": 1
+  },
+  {
+   "fieldname": "woo_product_url",
+   "fieldtype": "Small Text",
+   "label": "WooCommerce Product URL",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_synced",
+   "fieldtype": "Datetime",
+   "label": "Last Synced",
+   "read_only": 1
+  },
+  {
+   "fieldname": "members_section",
+   "fieldtype": "Section Break",
+   "label": "Group Members"
+  },
+  {
+   "fieldname": "members_html",
+   "fieldtype": "HTML",
+   "label": "Members List"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-11-16 23:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Woo Prime",
+ "name": "Woo Variant Group",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Stock Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Website Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "search_fields": "group_sku,item_name,template_item,leader",
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "group_sku",
+ "track_changes": 1
+}

@@ -40,6 +40,9 @@
   "last_synced",
   "has_variants",
   "variant_of",
+  "variant_publish_mode",
+  "woo_variant_group",
+  "published_as",
   "variants_section",
   "variants_html"
  ],
@@ -234,7 +237,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Sync Status",
-   "options": "Not Synced\nSynced\nError",
+   "options": "Not Synced\nSynced\nError\nPartial",
    "read_only": 1
   },
   {
@@ -253,12 +256,36 @@
    "read_only": 1
   },
   {
-   "description": "Choose how to publish this item on WooCommerce:\n\u2022 Simple Item: Publish as simple product (stock managed at product level)\n\u2022 Variant Item: Create as variable product with variations (stock managed at variation level)\n\u2022 Blank: Auto-detect based on item type",
+   "default": "With Template",
+   "depends_on": "eval:doc.variant_of",
+   "description": "Choose where to publish this variant: With Template, Not Published, or Separate Product (grouped)",
+   "fieldname": "variant_publish_mode",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Variant Publish Mode",
+   "options": "\nWith Template\nNot Published\nSeparate Product"
+  },
+  {
+   "depends_on": "eval:doc.variant_publish_mode == 'Separate Product'",
+   "fieldname": "woo_variant_group",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Woo Variant Group",
+   "options": "Woo Variant Group"
+  },
+  {
+   "fieldname": "published_as",
+   "fieldtype": "Data",
+   "label": "Published As",
+   "read_only": 1
+  },
+  {
+   "description": "Choose how to publish this item on WooCommerce:\n\u2022 Simple Item: Publish as simple product\n\u2022 Blank: Auto-detect based on item type. (Note: To publish variants as separate products, use 'Separate Product' mode and Woo Variant Group).",
    "fieldname": "woo_product_type",
    "fieldtype": "Select",
    "label": "WooCommerce Product Type",
    "options": "\nSimple Item\nVariant Item",
-   "depends_on": "eval:!doc.has_variants"
+   "depends_on": "eval:!doc.has_variants && !doc.variant_of"
   },
   {
    "depends_on": "eval:doc.has_variants",

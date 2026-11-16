@@ -894,6 +894,38 @@ def _log_error(woo_order_id, order_data, error_message):
 # ═══════════════════════════════════════════════════
 
 
+def _resolve_parent_woo_id(variant_of, woo_product_type=None, woo_variant_group=None):
+	"""Resolve WooCommerce parent product ID for a variant item.
+
+	Priority:
+	1. If woo_product_type is "Simple Item", return None (standalone product).
+	2. If woo_variant_group is set, return the group's woo_product_id.
+	3. If variant_of is set, return the template's woo_product_id.
+	4. Otherwise return None.
+
+	Returns:
+		int or None: parent WooCommerce product ID.
+	"""
+	if woo_product_type == "Simple Item":
+		return None
+
+	if woo_variant_group:
+		group_id = frappe.db.get_value("Woo Variant Group", woo_variant_group, "woo_product_id")
+		if group_id:
+			return int(group_id)
+
+	if variant_of:
+		parent_id = (
+			frappe.db.get_value("Woo Item", {"item_code": variant_of}, "woo_product_id")
+			or frappe.db.get_value("Woo Item", {"sku": variant_of}, "woo_product_id")
+			or (frappe.db.exists("Woo Item", variant_of) and frappe.db.get_value("Woo Item", variant_of, "woo_product_id"))
+		)
+		if parent_id:
+			return int(parent_id)
+
+	return None
+
+
 def publish_item_to_woo(woo_item, sync_images=None):
 	"""Publish an ERPNext item (Simple, Template, or Variant) to WooCommerce.
 
@@ -919,6 +951,19 @@ def publish_item_to_woo(woo_item, sync_images=None):
 	# For new products (no woo_product_id), always push images.
 	# For already published products, only push images if sync_images is explicitly requested.
 	should_sync_images = True if (not woo_item.woo_product_id or bool(sync_images)) else False
+
+	# Guard: Cannot publish variant if marked "Not Published"
+	if getattr(woo_item, "variant_publish_mode", "") == "Not Published":
+		frappe.throw(
+			_("Cannot publish variant '{0}' because its publish mode is 'Not Published'. "
+			  "Change publish mode to 'With Template' or assign to a 'Separate Product' group first.").format(
+				woo_item.item_name or woo_item.name
+			)
+		)
+
+	# If belongs to a Woo Variant Group, publish via group member publisher
+	if getattr(woo_item, "woo_variant_group", None) and getattr(woo_item, "variant_publish_mode", "") == "Separate Product":
+		return _publish_variant_group_member(woo_item, item, api, settings, sync_images=should_sync_images)
 
 	# Handle variant items with custom product type
 	if item.variant_of:
@@ -1020,6 +1065,7 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings, sync_images=True)
 		woo_item.last_synced = now_datetime()
 		woo_item.flags.in_woo_sync = True
 		woo_item.save(ignore_permissions=True)
+		_cache_product_images_from_response(item, woo_item, result)
 
 	return result
 
@@ -1027,17 +1073,29 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings, sync_images=True)
 def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=True):
 	"""Publish an ERPNext Template Item and all its variants as a WooCommerce Variable Product using batch API."""
 	import html
-	variant_item_names = frappe.get_all(
+	all_variant_item_names = frappe.get_all(
 		"Item",
 		filters={"variant_of": item.name, "disabled": 0},
 		pluck="name"
 	)
 
-	attributes_dict = {}
+	included_variants = []
+	excluded_variants = []
 	variant_docs = {}
-	for v_name in variant_item_names:
+
+	for v_name in all_variant_item_names:
 		v_item = frappe.get_doc("Item", v_name)
 		variant_docs[v_name] = v_item
+		child_woo = get_or_create_woo_item(v_name, v_item.item_code)
+		mode = getattr(child_woo, "variant_publish_mode", "") or "With Template"
+		if mode == "With Template" and not _should_skip_variant(child_woo, v_item, context="template"):
+			included_variants.append(v_name)
+		else:
+			excluded_variants.append(v_name)
+
+	attributes_dict = {}
+	for v_name in included_variants:
+		v_item = variant_docs[v_name]
 		for attr in v_item.attributes:
 			if attr.attribute not in attributes_dict:
 				attributes_dict[attr.attribute] = set()
@@ -1110,7 +1168,7 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 		"short_description": html.unescape(getattr(woo_item, "woo_short_description", None) or item.description or ""),
 		"status": "publish",
 		"attributes": woo_attributes,
-		"manage_stock": bool(getattr(woo_item, "manage_stock", 0)),
+		"manage_stock": False,
 		"menu_order": int(getattr(woo_item, "menu_order", 0) or 0),
 	}
 
@@ -1157,29 +1215,33 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 	parent_woo_id = result.get("id")
 	woo_item.woo_product_id = parent_woo_id
 	woo_item.published = 1
+	woo_item.published_as = "template"
 	permalink = result.get("permalink", "")
 	woo_item.woo_product_url = html.unescape(permalink) if permalink else ""
-	woo_item.sync_status = "Synced"
-	woo_item.last_synced = now_datetime()
 	woo_item.flags.in_woo_sync = True
 	woo_item.save(ignore_permissions=True)
 
+	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
+
 	# --- BATCH VARIATIONS PUBLISH ---
-	if variant_item_names:
+	expected_variants = []
+	failed_variants = []
+	success_count = 0
+
+	if included_variants:
 		create_list = []
 		update_list = []
 		meta_list = []
 
 		manage_var_stock = getattr(woo_item, "manage_variation_stock", None)
-		for v_name in variant_item_names:
+		for v_name in included_variants:
 			v_item = variant_docs[v_name]
 			child_woo_item = get_or_create_woo_item(v_name, v_item.item_code)
 			
 			# Skip if variant was explicitly deleted (tombstone exists) or Item is disabled
-			if _should_skip_variant(child_woo_item, v_item):
-				frappe.logger("woo_prime").info(
-					f"Skipping {v_name} - explicitly deleted or disabled."
-				)
+			should_skip, skip_reason = _should_skip_variant(child_woo_item, v_item, context="template", return_reason=True)
+			if should_skip:
+				frappe.logger("woo_prime").info(f"Skipping {v_name}: {skip_reason}")
 				continue
 			
 			if manage_var_stock is not None:
@@ -1190,6 +1252,27 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 					pass
 			var_payload = _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_attr_keys=variation_attr_keys, sync_images=sync_images)
 
+			# Guard against zero/negative price
+			var_price = flt(var_payload.get("regular_price") or 0)
+			var_sku = var_payload.get("sku") or v_item.item_code
+			if var_price <= 0:
+				price_warn = f"Variant '{v_name}' (SKU: {var_sku}) regular price is {var_payload.get('regular_price')} (<= 0). Skipped pushing variation."
+				frappe.logger("woo_prime").warning(price_warn)
+				create_log(
+					sync_type="Item",
+					direction="Outgoing",
+					status="Failed",
+					reference_doctype="Woo Item",
+					reference_name=child_woo_item.name,
+					woo_reference_id=str(parent_woo_id),
+					request_data=var_payload,
+					error_message=price_warn,
+				)
+				failed_variants.append((var_sku, "Price is 0 or negative"))
+				continue
+
+			expected_variants.append(v_name)
+
 			if child_woo_item.woo_product_id:
 				var_payload["id"] = int(child_woo_item.woo_product_id)
 				update_list.append(var_payload)
@@ -1198,7 +1281,7 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 
 			meta_list.append({
 				"child_woo_item": child_woo_item,
-				"sku": var_payload.get("sku"),
+				"sku": var_sku,
 				"v_name": v_name
 			})
 
@@ -1220,11 +1303,31 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 				update_results = batch_res.get("update", [])
 
 				for r in create_results + update_results:
-					if isinstance(r, dict) and not r.get("error"):
-						if r.get("id"):
-							res_by_id[r.get("id")] = r
-						if r.get("sku"):
-							res_by_sku[r.get("sku")] = r
+					if isinstance(r, dict):
+						if not r.get("error"):
+							if r.get("id"):
+								res_by_id[r.get("id")] = r
+							if r.get("sku"):
+								res_by_sku[r.get("sku")] = r
+						else:
+							err = r.get("error", {})
+							err_code = err.get("code")
+							err_msg = err.get("message")
+							err_sku = r.get("sku") or err.get("data", {}).get("resource_id") or "Unknown"
+							frappe.logger("woo_prime").error(
+								f"WooCommerce variation batch error for SKU {err_sku}: {err_code} - {err_msg}"
+							)
+							create_log(
+								sync_type="Item",
+								direction="Outgoing",
+								status="Failed",
+								reference_doctype="Woo Item",
+								reference_name=frappe.db.get_value("Woo Item", {"sku": err_sku}) if err_sku else None,
+								woo_reference_id=str(parent_woo_id),
+								request_data=r,
+								response_data=r,
+								error_message=f"Variation batch error ({err_sku}): {err_code} - {err_msg}",
+							)
 
 				# Auto-recover variations that failed in update (e.g. invalid / deleted variation ID)
 				for idx, r in enumerate(update_results):
@@ -1296,15 +1399,30 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 					if not r_data:
 						try:
 							v_item = variant_docs[meta["v_name"]]
-							indiv_res = _publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings)
+							indiv_res = _publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings, variation_attr_keys=variation_attr_keys)
 							if indiv_res and indiv_res.get("id"):
 								r_data = indiv_res
+							else:
+								failed_variants.append((sku, "Failed individual variation creation"))
 						except Exception as indiv_err:
+							failed_variants.append((sku, str(indiv_err)))
 							frappe.log_error(f"Failed individual variation creation for {meta['v_name']}: {indiv_err}")
+							create_log(
+								sync_type="Item",
+								direction="Outgoing",
+								status="Failed",
+								reference_doctype="Woo Item",
+								reference_name=child_woo_item.name,
+								woo_reference_id=str(parent_woo_id),
+								request_data={"parent_woo_id": parent_woo_id, "sku": sku},
+								error_message=f"Individual variation creation failed ({sku}): {indiv_err}",
+							)
 
 					if r_data and r_data.get("id") and not r_data.get("error"):
+						success_count += 1
 						child_woo_item.woo_product_id = r_data.get("id")
 						child_woo_item.published = 1
+						child_woo_item.published_as = "template-variation"
 						v_permalink = r_data.get("permalink", "")
 						child_woo_item.woo_product_url = html.unescape(v_permalink) if v_permalink else ""
 						child_woo_item.sync_status = "Synced"
@@ -1313,12 +1431,417 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 						child_woo_item.save(ignore_permissions=True)
 			except Exception as e:
 				frappe.log_error(f"Batch variations sync failed for template {item.name}: {e}")
+				create_log(
+					sync_type="Item",
+					direction="Outgoing",
+					status="Failed",
+					reference_doctype="Woo Item",
+					reference_name=woo_item.name,
+					woo_reference_id=str(parent_woo_id),
+					request_data=batch_payload,
+					error_message=f"Batch variations sync failed: {e}",
+				)
 				# Fallback to individual sync if batch fails
 				for meta in meta_list:
-					v_item = variant_docs[meta["v_name"]]
-					_publish_variation_data(parent_woo_id, meta["child_woo_item"], v_item, api, settings)
+					try:
+						v_item = variant_docs[meta["v_name"]]
+						indiv_res = _publish_variation_data(parent_woo_id, meta["child_woo_item"], v_item, api, settings, variation_attr_keys=variation_attr_keys)
+						if indiv_res and indiv_res.get("id"):
+							success_count += 1
+						else:
+							failed_variants.append((meta["sku"], "Failed individual variation fallback"))
+					except Exception as f_err:
+						failed_variants.append((meta["sku"], str(f_err)))
 
+	# --- RESOLVE PARENT SYNC STATUS ---
+	expected_count = len(expected_variants)
+	if not included_variants or expected_count == 0:
+		woo_item.sync_status = "Error"
+		error_msg = f"Template '{item.name}' has variants, but no variants were eligible or priced for publishing."
+		frappe.logger("woo_prime").error(error_msg)
+		create_log(
+			sync_type="Item",
+			direction="Outgoing",
+			status="Failed",
+			reference_doctype="Woo Item",
+			reference_name=woo_item.name,
+			woo_reference_id=str(parent_woo_id),
+			error_message=error_msg,
+		)
+	elif success_count == 0:
+		woo_item.sync_status = "Error"
+		error_msg = f"Template '{item.name}' variable product published to WooCommerce (ID: {parent_woo_id}), but ALL {expected_count} variation(s) failed. Failed SKUs: {[f[0] for f in failed_variants]}"
+		frappe.logger("woo_prime").error(error_msg)
+		create_log(
+			sync_type="Item",
+			direction="Outgoing",
+			status="Failed",
+			reference_doctype="Woo Item",
+			reference_name=woo_item.name,
+			woo_reference_id=str(parent_woo_id),
+			error_message=error_msg,
+		)
+	elif success_count < expected_count:
+		woo_item.sync_status = "Partial"
+		warn_msg = f"Template '{item.name}' partially synced: {success_count}/{expected_count} variation(s) synced. Failed: {[f[0] for f in failed_variants]}"
+		frappe.logger("woo_prime").warning(warn_msg)
+		create_log(
+			sync_type="Item",
+			direction="Outgoing",
+			status="Failed",
+			reference_doctype="Woo Item",
+			reference_name=woo_item.name,
+			woo_reference_id=str(parent_woo_id),
+			error_message=warn_msg,
+		)
+	else:
+		woo_item.sync_status = "Synced"
+
+	woo_item.last_synced = now_datetime()
+	woo_item.flags.in_woo_sync = True
+	woo_item.save(ignore_permissions=True)
+
+	# --- RECONCILIATION ---
+	# Delete variations from Woo if marked Not Published or Separate Product that still have a woo_product_id
+	for ex_name in excluded_variants:
+		child_woo_name = frappe.db.get_value("Woo Item", {"item_code": ex_name})
+		if child_woo_name:
+			ex_child = frappe.get_doc("Woo Item", child_woo_name)
+			if ex_child.woo_product_id:
+				try:
+					api.delete_variation(parent_woo_id, ex_child.woo_product_id, force=True)
+				except Exception as rec_del_err:
+					frappe.logger("woo_prime").debug(f"Reconciliation variation delete notice: {rec_del_err}")
+
+				ex_mode = getattr(ex_child, "variant_publish_mode", "")
+				if ex_mode == "Not Published":
+					ex_child.woo_product_id = 0
+					ex_child.published = 0
+					ex_child.sync_status = "Not Synced"
+					ex_child.published_as = ""
+					ex_child.flags.in_woo_sync = True
+					ex_child.save(ignore_permissions=True)
+				elif ex_mode == "Separate Product":
+					ex_child.woo_product_id = 0
+					ex_child.flags.in_woo_sync = True
+					ex_child.save(ignore_permissions=True)
+
+	_cache_product_images_from_response(item, woo_item, result)
 	return result
+
+
+def _detach_variation_from_old_parent(woo_item, group_woo_id, api):
+	"""Detach a variation from its previous parent (Template or another group) if needed."""
+	if not getattr(woo_item, "woo_product_id", 0):
+		return
+
+	var_id = int(woo_item.woo_product_id)
+	# Check if already under this group product
+	try:
+		check_resp = api.get(f"products/{group_woo_id}/variations/{var_id}")
+		if check_resp.status_code == 200:
+			return
+	except Exception:
+		pass
+
+	# Belongs to old parent: resolve old parent and delete variation
+	try:
+		real_parent = None
+		try:
+			prod_data = api.get_product(var_id)
+			if prod_data:
+				real_parent = prod_data.get("parent_id")
+		except Exception:
+			pass
+
+		if not real_parent and getattr(woo_item, "item_code", None):
+			variant_of = frappe.db.get_value("Item", woo_item.item_code, "variant_of")
+			if variant_of:
+				real_parent = frappe.db.get_value("Woo Item", {"item_code": variant_of}, "woo_product_id")
+
+		if real_parent:
+			try:
+				api.delete_variation(real_parent, var_id, force=True)
+				frappe.logger("woo_prime").info(f"Detached variation {var_id} from parent {real_parent}")
+			except Exception as del_err:
+				frappe.logger("woo_prime").debug(f"Could not delete old variation {var_id}: {del_err}")
+	except Exception as exc:
+		frappe.logger("woo_prime").debug(f"Error checking old variation {var_id}: {exc}")
+
+	woo_item.woo_product_id = 0
+	woo_item.db_set("woo_product_id", 0)
+
+
+def _publish_variant_group_product(group, api, settings, sync_images=True):
+	"""Publish or update a Woo Variant Group as a variable product on WooCommerce."""
+	import html
+	import re
+	if isinstance(group, str):
+		group = frappe.get_doc("Woo Variant Group", group)
+
+	if not group.leader:
+		frappe.throw(_("Cannot publish group '{0}': Leader variant is required.").format(group.name))
+
+	leader_woo = frappe.get_doc("Woo Item", group.leader)
+	leader_item = frappe.get_doc("Item", leader_woo.item_code)
+
+	members = group.get_members()
+	if not members:
+		frappe.throw(_("Cannot publish group '{0}': No member variants found.").format(group.name))
+
+	member_item_codes = [m.item_code for m in members if m.item_code]
+
+	attributes_dict = {}
+	if member_item_codes:
+		all_var_attrs = frappe.get_all(
+			"Item Variant Attribute",
+			filters={"parent": ["in", member_item_codes]},
+			fields=["parent", "attribute", "attribute_value"],
+		)
+		for a in all_var_attrs:
+			if a.attribute:
+				val = clean_text(a.attribute_value) if a.attribute_value else ""
+				if val:
+					attributes_dict.setdefault(a.attribute, set()).add(val)
+				else:
+					attributes_dict.setdefault(a.attribute, set())
+
+	def _sort_options(opts):
+		opts_list = list(opts)
+		try:
+			return sorted(opts_list, key=lambda x: float(re.sub(r"[^\d.]", "", str(x)) or 0))
+		except Exception:
+			return sorted(opts_list)
+
+	woo_attributes = []
+	variation_attr_keys = set()
+
+	if getattr(leader_woo, "item_attributes", None) and len(leader_woo.item_attributes) > 0:
+		sorted_attrs = sorted(leader_woo.item_attributes, key=lambda r: (getattr(r, "idx", 0) or 0))
+		for pos, row in enumerate(sorted_attrs):
+			attr_name = row.attribute_name or row.attribute
+			if not attr_name:
+				continue
+			member_opts = attributes_dict.get(row.attribute, set()) or attributes_dict.get(attr_name, set())
+			opts = _sort_options(member_opts)
+			if not opts:
+				opts = [o.strip() for o in (row.options or "").replace("\n", ",").split(",") if o.strip()]
+
+			if not opts and getattr(row, "is_variation", 1):
+				continue
+
+			woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr_name, api)
+			is_var = bool(getattr(row, "is_variation", 1))
+			attr_payload = {
+				"name": target_name or attr_name,
+				"position": pos,
+				"visible": bool(getattr(row, "is_visible", 1)),
+				"variation": is_var,
+				"options": opts,
+			}
+			if woo_attr_id:
+				attr_payload["id"] = int(woo_attr_id)
+			woo_attributes.append(attr_payload)
+
+			if is_var:
+				variation_attr_keys.add(clean_text(attr_name).lower())
+				if row.attribute:
+					variation_attr_keys.add(clean_text(row.attribute).lower())
+				if target_name:
+					variation_attr_keys.add(clean_text(target_name).lower())
+	else:
+		idx = 0
+		for attr_name, options in sorted(attributes_dict.items()):
+			woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr_name, api)
+			attr_payload = {
+				"name": target_name or attr_name,
+				"position": idx,
+				"visible": True,
+				"variation": True,
+				"options": _sort_options(options),
+			}
+			if woo_attr_id:
+				attr_payload["id"] = int(woo_attr_id)
+			woo_attributes.append(attr_payload)
+			variation_attr_keys.add(clean_text(attr_name).lower())
+			if target_name:
+				variation_attr_keys.add(clean_text(target_name).lower())
+			idx += 1
+
+	product_name = group.item_name or leader_woo.item_name or leader_item.item_name or group.group_sku
+	product_data = {
+		"name": html.unescape(product_name),
+		"type": "variable",
+		"sku": group.group_sku,
+		"description": html.unescape(leader_woo.woo_description or leader_item.description or ""),
+		"short_description": html.unescape(getattr(leader_woo, "woo_short_description", None) or leader_item.description or ""),
+		"status": "publish",
+		"attributes": woo_attributes,
+		"manage_stock": False,
+	}
+
+	category_ids = _get_woo_category_ids(leader_woo, api)
+	if category_ids:
+		product_data["categories"] = category_ids
+
+	if sync_images or not group.woo_product_id:
+		images = _get_item_images(leader_item, leader_woo, api, settings)
+		if images:
+			product_data["images"] = images
+
+	woo_tag_ids = _get_woo_tag_ids(leader_woo, api)
+	if woo_tag_ids:
+		product_data["tags"] = woo_tag_ids
+
+	if group.woo_product_id:
+		result = api.update_product(group.woo_product_id, product_data)
+	else:
+		existing_id = None
+		if product_data.get("sku"):
+			try:
+				search_resp = api.get("products", params={"sku": product_data.get("sku"), "status": "any"})
+				if search_resp.status_code == 200 and search_resp.json():
+					existing_id = search_resp.json()[0].get("id")
+			except Exception:
+				pass
+
+		if existing_id:
+			group.woo_product_id = existing_id
+			result = api.update_product(existing_id, product_data)
+		else:
+			result = api.create_product(product_data)
+
+	if not result or not result.get("id"):
+		frappe.throw(_("WooCommerce did not return a valid product ID for group '{0}'").format(group.name))
+
+	group.woo_product_id = result.get("id")
+	group.published = 1
+	permalink = result.get("permalink", "")
+	group.woo_product_url = html.unescape(permalink) if permalink else ""
+	group.last_synced = now_datetime()
+	group.save(ignore_permissions=True)
+
+	_cache_product_images_from_response(leader_item, leader_woo, result)
+	return result, variation_attr_keys
+
+
+def _publish_variant_group_member(woo_item, item, api, settings, sync_images=True):
+	"""Publish a variant item that belongs to a Woo Variant Group."""
+	import html
+	group_name = woo_item.woo_variant_group
+	if not group_name:
+		frappe.throw(_("Item '{0}' does not belong to any Woo Variant Group.").format(woo_item.name))
+
+	group = frappe.get_doc("Woo Variant Group", group_name)
+
+	if woo_item.name == group.leader:
+		prod_res, variation_attr_keys = _publish_variant_group_product(group, api, settings, sync_images=sync_images)
+		group_woo_id = group.woo_product_id
+
+		members = group.get_members()
+		create_list = []
+		update_list = []
+		meta_list = []
+
+		leader_result = None
+
+		for m in members:
+			child_woo_item = frappe.get_doc("Woo Item", m.name)
+			v_item = frappe.get_doc("Item", m.item_code)
+
+			if _should_skip_variant(child_woo_item, v_item, context="group"):
+				continue
+
+			_detach_variation_from_old_parent(child_woo_item, group_woo_id, api)
+
+			child_woo_item.manage_stock = 1
+			try:
+				child_woo_item.db_set("manage_stock", 1)
+			except Exception:
+				pass
+
+			var_payload = _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_attr_keys=variation_attr_keys, sync_images=sync_images)
+
+			if child_woo_item.woo_product_id:
+				var_payload["id"] = int(child_woo_item.woo_product_id)
+				update_list.append(var_payload)
+			else:
+				create_list.append(var_payload)
+
+			meta_list.append({
+				"child_woo_item": child_woo_item,
+				"sku": var_payload.get("sku"),
+				"v_name": m.item_code
+			})
+
+		batch_payload = {}
+		if create_list:
+			batch_payload["create"] = create_list
+		if update_list:
+			batch_payload["update"] = update_list
+
+		if batch_payload:
+			try:
+				batch_res = api.batch_product_variations(group_woo_id, batch_payload)
+				res_by_id = {}
+				res_by_sku = {}
+				for r in batch_res.get("create", []) + batch_res.get("update", []):
+					if isinstance(r, dict) and not r.get("error"):
+						if r.get("id"):
+							res_by_id[r.get("id")] = r
+						if r.get("sku"):
+							res_by_sku[r.get("sku")] = r
+
+				for meta in meta_list:
+					c_item = meta["child_woo_item"]
+					sku = meta["sku"]
+					r_data = res_by_id.get(int(c_item.woo_product_id)) if c_item.woo_product_id else None
+					if not r_data and sku:
+						r_data = res_by_sku.get(sku)
+
+					if not r_data:
+						try:
+							v_item = frappe.get_doc("Item", meta["v_name"])
+							r_data = _publish_variation_data(group_woo_id, c_item, v_item, api, settings, variation_attr_keys=variation_attr_keys, sync_images=sync_images)
+						except Exception as indiv_err:
+							frappe.log_error(f"Failed individual variation creation for group member {meta['v_name']}: {indiv_err}")
+
+					if r_data and r_data.get("id") and not r_data.get("error"):
+						c_item.woo_product_id = r_data.get("id")
+						c_item.published = 1
+						c_item.published_as = "group-variation"
+						v_permalink = r_data.get("permalink", "")
+						c_item.woo_product_url = html.unescape(v_permalink) if v_permalink else ""
+						c_item.sync_status = "Synced"
+						c_item.last_synced = now_datetime()
+						c_item.flags.in_woo_sync = True
+						c_item.save(ignore_permissions=True)
+
+						if c_item.name == woo_item.name:
+							leader_result = r_data
+			except Exception as batch_err:
+				frappe.log_error(f"Batch variation sync failed for group {group.name}: {batch_err}")
+				for meta in meta_list:
+					v_item = frappe.get_doc("Item", meta["v_name"])
+					indiv = _publish_variation_data(group_woo_id, meta["child_woo_item"], v_item, api, settings, variation_attr_keys=variation_attr_keys, sync_images=sync_images)
+					if meta["child_woo_item"].name == woo_item.name:
+						leader_result = indiv
+
+		return leader_result or {"id": woo_item.woo_product_id or group.woo_product_id, "permalink": group.woo_product_url}
+
+	else:
+		if not group.woo_product_id:
+			_publish_variant_group_product(group, api, settings, sync_images=sync_images)
+
+		group_woo_id = group.woo_product_id
+		_detach_variation_from_old_parent(woo_item, group_woo_id, api)
+
+		woo_item.manage_stock = 1
+		res = _publish_variation_data(group_woo_id, woo_item, item, api, settings, sync_images=sync_images)
+		if res and res.get("id"):
+			woo_item.published_as = "group-variation"
+			woo_item.db_set("published_as", "group-variation")
+		return res
 
 
 def _real_parent_id(product_dict):
@@ -1337,19 +1860,44 @@ def _real_parent_id(product_dict):
 	return product_dict.get("parent_id") or None
 
 
-def _should_skip_variant(woo_item, item):
-	"""Check if a variant should be skipped during template publish."""
+def _should_skip_variant(woo_item, item=None, context="template", return_reason=False):
+	"""Check if a variant should be skipped during template or group publish.
+
+	Args:
+		woo_item: Woo Item document or object
+		item: ERPNext Item document or object
+		context: "template" or "group"
+		return_reason: bool, if True returns (should_skip, reason)
+	"""
 	from woo_prime.woo_prime.doctype.woo_ignored_item.woo_ignored_item import has_tombstone
-	
+
+	item_code = getattr(woo_item, "item_code", None) or (getattr(item, "item_code", None) if item else None)
+	sku = getattr(woo_item, "sku", None) or item_code
+
 	# Skip if Item is disabled
 	if item and getattr(item, "disabled", 0):
-		return True
-	
+		reason = f"Variant '{item_code}' is disabled in ERPNext Item Master."
+		frappe.logger("woo_prime").info(reason)
+		return (True, reason) if return_reason else True
+
 	# Skip if tombstone exists
-	if has_tombstone(item_code=woo_item.item_code, sku=woo_item.sku):
-		return True
-	
-	return False
+	if has_tombstone(item_code=item_code, sku=sku):
+		reason = f"Variant '{item_code}' (SKU: {sku}) has tombstone (was explicitly deleted)."
+		frappe.logger("woo_prime").info(reason)
+		return (True, reason) if return_reason else True
+
+	if context == "template":
+		mode = getattr(woo_item, "variant_publish_mode", "") or "With Template"
+		if mode == "Not Published":
+			reason = f"Variant '{item_code}' publish mode is 'Not Published'."
+			frappe.logger("woo_prime").info(reason)
+			return (True, reason) if return_reason else True
+		if mode == "Separate Product" or getattr(woo_item, "woo_variant_group", None):
+			reason = f"Variant '{item_code}' belongs to separate group '{getattr(woo_item, 'woo_variant_group', None)}'."
+			frappe.logger("woo_prime").info(reason)
+			return (True, reason) if return_reason else True
+
+	return (False, None) if return_reason else False
 
 
 def get_or_create_woo_item(item_code, sku=None):
@@ -1410,6 +1958,14 @@ def get_or_create_woo_item(item_code, sku=None):
 	woo_item.item_code = item_code
 	woo_item.sku = sku or item_code
 	settings = frappe.get_single("Woo Settings")
+
+	variant_of = frappe.db.get_value("Item", item_code, "variant_of")
+	if variant_of:
+		if getattr(settings, "new_variants_not_published", 0):
+			woo_item.variant_publish_mode = "Not Published"
+		else:
+			woo_item.variant_publish_mode = "With Template"
+
 	price_list = getattr(settings, "website_price_list", None) or getattr(settings, "default_price_list", None) or "Standard Selling"
 	price = _get_item_price(item_code, price_list)
 	if price:
@@ -1458,7 +2014,8 @@ def _publish_variant_item_to_woo(woo_item, item, api, settings, sync_images=True
 def _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_attr_keys=None, sync_images=False):
 	"""Prepare variation payload dictionary for WooCommerce."""
 	import html
-	price = _get_item_price(v_item.name, settings.default_price_list)
+	price_list = _resolve_price_list(settings)
+	price = _get_item_price(v_item.name, price_list)
 	regular_price = flt(child_woo_item.regular_price) if getattr(child_woo_item, "regular_price", None) and flt(child_woo_item.regular_price) > 0 else flt(price)
 	if (not child_woo_item.regular_price or flt(child_woo_item.regular_price) <= 0) and regular_price > 0:
 		child_woo_item.regular_price = flt(regular_price)
@@ -1493,9 +2050,10 @@ def _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_
 			if not candidate_keys.intersection(variation_attr_keys):
 				continue
 
+		clean_option = clean_text(attr.attribute_value).strip() if attr.attribute_value else ""
 		var_attr = {
 			"name": target_name or attr.attribute,
-			"option": attr.attribute_value
+			"option": clean_option
 		}
 		if woo_attr_id:
 			var_attr["id"] = int(woo_attr_id)
@@ -1522,33 +2080,90 @@ def _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_
 	if getattr(v_item, "weight_per_unit", None):
 		var_data["weight"] = str(flt(v_item.weight_per_unit))
 
-
 	if sync_images or not child_woo_item.woo_product_id:
-		images = _get_item_images(v_item, child_woo_item, api, settings)
-		if images:
-			var_data["image"] = images[0]
+		try:
+			images = _get_item_images(v_item, child_woo_item, api, settings)
+			if images:
+				var_data["image"] = images[0]
+		except Exception as img_err:
+			frappe.logger("woo_prime").warning(f"Variation image fetch error for {v_item.name}: {img_err}")
 
 	return var_data
 
 
-def _publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings, sync_images=False):
+def _publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings, variation_attr_keys=None, sync_images=False):
 	"""Publish a single variation to WooCommerce under parent variable product."""
-	var_data = _prepare_variation_payload(child_woo_item, v_item, api, settings, sync_images=sync_images)
+	import html
+	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
+
+	var_data = _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_attr_keys=variation_attr_keys, sync_images=sync_images)
+
+	sku = child_woo_item.sku or v_item.item_code
+	if flt(var_data.get("regular_price") or 0) <= 0:
+		msg = f"Variation '{sku}' regular price is {var_data.get('regular_price')} (<= 0). Skipped pushing to WooCommerce."
+		frappe.logger("woo_prime").warning(msg)
+		create_log(
+			sync_type="Item",
+			direction="Outgoing",
+			status="Failed",
+			reference_doctype="Woo Item",
+			reference_name=child_woo_item.name,
+			woo_reference_id=str(parent_woo_id),
+			request_data=var_data,
+			error_message=msg,
+		)
+		return None
 
 	res = None
-	if child_woo_item.woo_product_id:
-		try:
-			res = api.update_product_variation(parent_woo_id, child_woo_item.woo_product_id, var_data)
-		except Exception as e:
-			err_str = str(e).lower()
-			if "404" in err_str or "not found" in err_str or "invalid id" in err_str:
-				# Variation ID was deleted or invalid in WooCommerce; reset and recreate
-				child_woo_item.woo_product_id = 0
-				res = api.create_product_variation(parent_woo_id, var_data)
-			else:
-				raise
-	else:
-		res = api.create_product_variation(parent_woo_id, var_data)
+	try:
+		if child_woo_item.woo_product_id:
+			try:
+				res = api.update_product_variation(parent_woo_id, child_woo_item.woo_product_id, var_data)
+			except Exception as e:
+				err_str = str(e).lower()
+				if "404" in err_str or "not found" in err_str or "invalid id" in err_str:
+					# Variation ID was deleted or invalid in WooCommerce; reset and recreate
+					child_woo_item.woo_product_id = 0
+					res = api.create_product_variation(parent_woo_id, var_data)
+				else:
+					raise
+		else:
+			res = api.create_product_variation(parent_woo_id, var_data)
+	except Exception as exc:
+		# Image resilience: if failure occurred with image payload, retry without image
+		if "image" in var_data:
+			frappe.logger("woo_prime").warning(f"Variation creation failed with image for {sku}, retrying without image: {exc}")
+			no_img_data = dict(var_data)
+			no_img_data.pop("image", None)
+			try:
+				if child_woo_item.woo_product_id:
+					res = api.update_product_variation(parent_woo_id, child_woo_item.woo_product_id, no_img_data)
+				else:
+					res = api.create_product_variation(parent_woo_id, no_img_data)
+			except Exception as retry_exc:
+				create_log(
+					sync_type="Item",
+					direction="Outgoing",
+					status="Failed",
+					reference_doctype="Woo Item",
+					reference_name=child_woo_item.name,
+					woo_reference_id=str(parent_woo_id),
+					request_data=no_img_data,
+					error_message=f"Variation create failed without image ({sku}): {retry_exc}",
+				)
+				raise retry_exc
+		else:
+			create_log(
+				sync_type="Item",
+				direction="Outgoing",
+				status="Failed",
+				reference_doctype="Woo Item",
+				reference_name=child_woo_item.name,
+				woo_reference_id=str(parent_woo_id),
+				request_data=var_data,
+				error_message=f"Variation create failed ({sku}): {exc}",
+			)
+			raise exc
 
 	if res and res.get("id"):
 		child_woo_item.woo_product_id = res.get("id")
@@ -1559,6 +2174,7 @@ def _publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings
 		child_woo_item.last_synced = now_datetime()
 		child_woo_item.flags.in_woo_sync = True
 		child_woo_item.save(ignore_permissions=True)
+		_cache_product_images_from_response(v_item, child_woo_item, res)
 	return res
 
 
@@ -1566,7 +2182,7 @@ def _get_cached_wp_media_id(path):
 	"""Check if an image file has already been uploaded to WordPress Media library."""
 	if not path:
 		return None
-	cache_key = f"woo_wp_media_id:{path}"
+	cache_key = f"woo_wp_media_id:{str(path).strip()}"
 	cached_id = frappe.cache().get_value(cache_key)
 	if cached_id:
 		return cached_id
@@ -1577,8 +2193,29 @@ def _cache_wp_media_id(path, media_id):
 	"""Cache uploaded WordPress media ID for a file path."""
 	if not path or not media_id:
 		return
-	cache_key = f"woo_wp_media_id:{path}"
-	frappe.cache().set_value(cache_key, media_id)
+	cache_key = f"woo_wp_media_id:{str(path).strip()}"
+	frappe.cache().set_value(cache_key, int(media_id))
+
+
+def _cache_product_images_from_response(item, woo_item, result):
+	"""Cache WordPress media attachment IDs returned from WooCommerce to avoid duplicate uploads."""
+	if not result or not isinstance(result, dict):
+		return
+	try:
+		primary_path = getattr(woo_item, "image", None) or getattr(item, "image", None)
+		images_list = result.get("images")
+		if images_list and isinstance(images_list, list):
+			if primary_path and len(images_list) > 0 and images_list[0].get("id"):
+				_cache_wp_media_id(primary_path, images_list[0]["id"])
+			if woo_item and hasattr(woo_item, "images") and woo_item.images:
+				for idx, row in enumerate(woo_item.images):
+					if idx + 1 < len(images_list) and images_list[idx + 1].get("id"):
+						_cache_wp_media_id(row.image, images_list[idx + 1]["id"])
+		elif result.get("image") and isinstance(result["image"], dict):
+			if primary_path and result["image"].get("id"):
+				_cache_wp_media_id(primary_path, result["image"]["id"])
+	except Exception as e:
+		frappe.logger("woo_prime").debug(f"Media caching notice: {e}")
 
 
 def get_clean_public_image_url(path):
@@ -1713,7 +2350,11 @@ def _get_item_images(item, woo_item=None, api=None, settings=None):
 			)
 			# Still send it - might work if same network/VPN
 		
-		img_dict = {"src": url}
+		cached_media_id = _get_cached_wp_media_id(path)
+		if cached_media_id:
+			img_dict = {"id": int(cached_media_id)}
+		else:
+			img_dict = {"src": url}
 		if caption:
 			img_dict["alt"] = caption
 		images.append(img_dict)
@@ -2096,6 +2737,12 @@ def sync_stock_to_woo(woo_item):
 	"""
 	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
 
+	# Guard: Never sync stock for Not Published variants or unpublished items
+	if getattr(woo_item, "variant_publish_mode", "") == "Not Published":
+		return
+	if not woo_item.published:
+		return
+
 	api = get_woo_api()
 	settings = frappe.get_single("Woo Settings")
 
@@ -2104,37 +2751,34 @@ def sync_stock_to_woo(woo_item):
 	manage_stock = bool(getattr(woo_item, "manage_stock", 1))
 
 	# Check if item is a Variant that should be synced as a variation
-	# Respect woo_product_type: "Simple Item" means standalone product, not variation
 	variant_of = frappe.db.get_value("Item", woo_item.item_code, "variant_of") if woo_item.item_code else None
-	parent_woo_id = None
-	woo_product_type = getattr(woo_item, "woo_product_type", "")
-	
-	# Only treat as variation if variant_of exists AND woo_product_type is NOT "Simple Item"
-	if variant_of and woo_product_type != "Simple Item":
-		parent_woo_id = (
-			frappe.db.get_value("Woo Item", {"item_code": variant_of}, "woo_product_id")
-			or frappe.db.get_value("Woo Item", {"sku": variant_of}, "woo_product_id")
-			or (frappe.db.exists("Woo Item", variant_of) and frappe.db.get_value("Woo Item", variant_of, "woo_product_id"))
-		)
+	parent_woo_id = _resolve_parent_woo_id(
+		variant_of,
+		getattr(woo_item, "woo_product_type", ""),
+		getattr(woo_item, "woo_variant_group", None)
+	)
 
 	try:
 		if parent_woo_id:
 			if not woo_item.woo_product_id:
-				v_item = frappe.get_doc("Item", woo_item.item_code)
-				res = _publish_variation_data(parent_woo_id, woo_item, v_item, api, settings)
-				if res and res.get("id"):
-					woo_item.woo_product_id = res.get("id")
-					woo_item.published = 1
-					woo_item.db_set("woo_product_id", res.get("id"))
-					woo_item.db_set("published", 1)
+				if woo_item.published:
+					v_item = frappe.get_doc("Item", woo_item.item_code)
+					res = _publish_variation_data(parent_woo_id, woo_item, v_item, api, settings)
+					if res and res.get("id"):
+						woo_item.woo_product_id = res.get("id")
+						woo_item.published = 1
+						woo_item.db_set("woo_product_id", res.get("id"))
+						woo_item.db_set("published", 1)
 			# Sync as variation under parent product
-			api.update_variation_stock(parent_woo_id, woo_item.woo_product_id, stock_qty, manage_stock=manage_stock)
+			if woo_item.woo_product_id:
+				api.update_variation_stock(parent_woo_id, woo_item.woo_product_id, stock_qty, manage_stock=manage_stock)
 		else:
 			# Sync as standalone product (simple or variable)
-			api.update_stock(woo_item.woo_product_id, stock_qty, manage_stock=manage_stock)
+			if woo_item.woo_product_id:
+				api.update_stock(woo_item.woo_product_id, stock_qty, manage_stock=manage_stock)
 	except frappe.ValidationError as e:
 		err_msg = str(e)
-		if ("404" in err_msg or "not found" in err_msg.lower()) and parent_woo_id:
+		if ("404" in err_msg or "not found" in err_msg.lower()) and parent_woo_id and woo_item.published and getattr(woo_item, "variant_publish_mode", "") != "Not Published":
 			try:
 				# Task 1: Resolve real parent_id from WooCommerce to avoid stale parent issues
 				real_parent = parent_woo_id  # fallback
@@ -2210,6 +2854,12 @@ def sync_price_to_woo(woo_item):
 	"""
 	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
 
+	# Guard: Never sync price for Not Published variants or unpublished items
+	if getattr(woo_item, "variant_publish_mode", "") == "Not Published":
+		return
+	if not woo_item.published:
+		return
+
 	api = get_woo_api()
 	settings = frappe.get_single("Woo Settings")
 
@@ -2256,44 +2906,43 @@ def sync_price_to_woo(woo_item):
 
 	# Check if item is a Variant that should be synced as a variation
 	variant_of = frappe.db.get_value("Item", woo_item.item_code, "variant_of") if woo_item.item_code else None
-	parent_woo_id = None
-	woo_product_type = getattr(woo_item, "woo_product_type", "")
-
-	if variant_of and woo_product_type != "Simple Item":
-		parent_woo_id = (
-			frappe.db.get_value("Woo Item", {"item_code": variant_of}, "woo_product_id")
-			or frappe.db.get_value("Woo Item", {"sku": variant_of}, "woo_product_id")
-			or (frappe.db.exists("Woo Item", variant_of) and frappe.db.get_value("Woo Item", variant_of, "woo_product_id"))
-		)
+	parent_woo_id = _resolve_parent_woo_id(
+		variant_of,
+		getattr(woo_item, "woo_product_type", ""),
+		getattr(woo_item, "woo_variant_group", None)
+	)
 
 	try:
 		if parent_woo_id:
 			if not woo_item.woo_product_id:
-				v_item = frappe.get_doc("Item", woo_item.item_code)
-				res = _publish_variation_data(parent_woo_id, woo_item, v_item, api, settings)
-				if res and res.get("id"):
-					woo_item.woo_product_id = res.get("id")
-					woo_item.published = 1
-					woo_item.db_set("woo_product_id", res.get("id"))
-					woo_item.db_set("published", 1)
-			api.update_variation_price(
-				parent_woo_id, woo_item.woo_product_id, regular_price,
-				sale_price=flt(sale_price) if not clear_sale else None,
-				clear_sale=clear_sale,
-				date_from=date_on_sale_from,
-				date_to=date_on_sale_to,
-			)
+				if woo_item.published:
+					v_item = frappe.get_doc("Item", woo_item.item_code)
+					res = _publish_variation_data(parent_woo_id, woo_item, v_item, api, settings)
+					if res and res.get("id"):
+						woo_item.woo_product_id = res.get("id")
+						woo_item.published = 1
+						woo_item.db_set("woo_product_id", res.get("id"))
+						woo_item.db_set("published", 1)
+			if woo_item.woo_product_id:
+				api.update_variation_price(
+					parent_woo_id, woo_item.woo_product_id, regular_price,
+					sale_price=flt(sale_price) if not clear_sale else None,
+					clear_sale=clear_sale,
+					date_from=date_on_sale_from,
+					date_to=date_on_sale_to,
+				)
 		else:
-			api.update_price(
-				woo_item.woo_product_id, regular_price,
-				sale_price=flt(sale_price) if not clear_sale else None,
-				clear_sale=clear_sale,
-				date_from=date_on_sale_from,
-				date_to=date_on_sale_to,
-			)
+			if woo_item.woo_product_id:
+				api.update_price(
+					woo_item.woo_product_id, regular_price,
+					sale_price=flt(sale_price) if not clear_sale else None,
+					clear_sale=clear_sale,
+					date_from=date_on_sale_from,
+					date_to=date_on_sale_to,
+				)
 	except frappe.ValidationError as e:
 		err_msg = str(e)
-		if ("404" in err_msg or "not found" in err_msg.lower()) and parent_woo_id:
+		if ("404" in err_msg or "not found" in err_msg.lower()) and parent_woo_id and woo_item.published and getattr(woo_item, "variant_publish_mode", "") != "Not Published":
 			try:
 				# Task 1: Resolve real parent_id from WooCommerce to avoid stale parent issues
 				real_parent = parent_woo_id  # fallback
@@ -2367,6 +3016,17 @@ def sync_price_to_woo(woo_item):
 
 
 
+def _resolve_price_list(settings=None):
+	"""Resolve selling price list consistently: website_price_list -> default_price_list -> 'Standard Selling'."""
+	if not settings:
+		settings = frappe.get_single("Woo Settings")
+	return (
+		getattr(settings, "website_price_list", None)
+		or getattr(settings, "default_price_list", None)
+		or "Standard Selling"
+	)
+
+
 def _get_item_price(item_code, price_list=None):
 	"""Get item price from ERPNext price list.
 	For variant items, if no Item Price exists for the variant item_code,
@@ -2384,8 +3044,7 @@ def _get_item_price(item_code, price_list=None):
 		return 0.0
 
 	if not price_list:
-		settings = frappe.get_single("Woo Settings")
-		price_list = getattr(settings, "website_price_list", None) or getattr(settings, "default_price_list", None) or "Standard Selling"
+		price_list = _resolve_price_list()
 
 	price = frappe.db.get_value(
 		"Item Price",
@@ -2597,8 +3256,13 @@ def sync_all_stock(force=False):
 
 	woo_items = frappe.get_all(
 		"Woo Item",
-		filters={"published": 1, "sync_stock": 1, "woo_product_id": [">", 0]},
-		fields=["name", "item_code", "woo_product_id", "last_pushed_qty"],
+		filters=[
+			["published", "=", 1],
+			["sync_stock", "=", 1],
+			["woo_product_id", ">", 0],
+			["variant_publish_mode", "!=", "Not Published"],
+		],
+		fields=["name", "item_code", "woo_product_id", "last_pushed_qty", "woo_product_type", "woo_variant_group"],
 		order_by="last_synced asc, creation asc",
 	)
 
@@ -2616,9 +3280,11 @@ def sync_all_stock(force=False):
 					continue
 
 				variant_of = frappe.db.get_value("Item", item_data.item_code, "variant_of")
-				parent_woo_id = None
-				if variant_of:
-					parent_woo_id = frappe.db.get_value("Woo Item", {"item_code": variant_of}, "woo_product_id")
+				parent_woo_id = _resolve_parent_woo_id(
+					variant_of,
+					item_data.get("woo_product_type"),
+					item_data.get("woo_variant_group")
+				)
 
 				if parent_woo_id:
 					woo_item = frappe.get_doc("Woo Item", item_data.name)
@@ -2691,8 +3357,13 @@ def sync_all_prices(force=False):
 
 	woo_items = frappe.get_all(
 		"Woo Item",
-		filters={"published": 1, "sync_price": 1, "woo_product_id": [">", 0]},
-		fields=["name", "item_code", "woo_product_id", "regular_price", "sale_price", "last_pushed_price"],
+		filters=[
+			["published", "=", 1],
+			["sync_price", "=", 1],
+			["woo_product_id", ">", 0],
+			["variant_publish_mode", "!=", "Not Published"],
+		],
+		fields=["name", "item_code", "woo_product_id", "regular_price", "sale_price", "last_pushed_price", "woo_product_type", "woo_variant_group"],
 		order_by="last_synced asc, creation asc",
 	)
 
@@ -2717,12 +3388,11 @@ def sync_all_prices(force=False):
 				sale_price = flt(raw_sale) if raw_sale and flt(raw_sale) > 0 else None
 
 				variant_of = frappe.db.get_value("Item", item_data.item_code, "variant_of")
-				parent_woo_id = None
-				if variant_of:
-					parent_woo_id = (
-						frappe.db.get_value("Woo Item", {"item_code": variant_of}, "woo_product_id")
-						or frappe.db.get_value("Woo Item", {"sku": variant_of}, "woo_product_id")
-					)
+				parent_woo_id = _resolve_parent_woo_id(
+					variant_of,
+					item_data.get("woo_product_type"),
+					item_data.get("woo_variant_group")
+				)
 
 				if parent_woo_id:
 					woo_item = frappe.get_doc("Woo Item", item_data.name)
@@ -2986,7 +3656,12 @@ def sync_stock_for_item_code(item_code):
 
 		woo_items = frappe.get_all(
 			"Woo Item",
-			filters={"published": 1, "sync_stock": 1, "woo_product_id": [">", 0]},
+			filters=[
+				["published", "=", 1],
+				["sync_stock", "=", 1],
+				["woo_product_id", ">", 0],
+				["variant_publish_mode", "!=", "Not Published"],
+			],
 			or_filters=[{"item_code": item_code}, {"sku": item_code}],
 			fields=["name"],
 		)
@@ -3062,7 +3737,7 @@ def sync_price_for_item_code(item_code):
 				if current_price > 0:
 					woo_item.regular_price = flt(current_price)
 
-				if woo_item.published and woo_item.woo_product_id:
+				if woo_item.published and woo_item.woo_product_id and getattr(woo_item, "variant_publish_mode", "") != "Not Published":
 					sync_price_to_woo(woo_item)
 					woo_item.sync_status = "Synced"
 					woo_item.last_synced = now_datetime()
@@ -3143,22 +3818,50 @@ def on_item_update(doc, method):
 		if not enable_item_sync:
 			return
 
-		# 1. If this is a variant item, also sync its parent template item
+		# 1. If this is a variant item, determine sync target
 		if getattr(doc, "variant_of", None):
-			parent_woo_name = frappe.db.get_value("Woo Item", {"item_code": doc.variant_of})
-			if parent_woo_name:
-				parent_woo = frappe.get_doc("Woo Item", parent_woo_name)
-				if parent_woo.published:
-					frappe.enqueue(
-						"woo_prime.woo_prime.doctype.woo_item.woo_item._publish_single_woo_item_worker",
-						woo_item_name=parent_woo.name,
-						user=frappe.session.user,
-						queue="long",
-						timeout=1800,
-						enqueue_after_commit=True,
-						job_id=f"woo_publish_{parent_woo.name}",
-						deduplicate=True,
-					)
+			variant_woo_name = frappe.db.get_value("Woo Item", {"item_code": doc.name})
+			v_mode = "With Template"
+			v_group = None
+			if variant_woo_name:
+				v_mode = frappe.db.get_value("Woo Item", variant_woo_name, "variant_publish_mode") or "With Template"
+				v_group = frappe.db.get_value("Woo Item", variant_woo_name, "woo_variant_group")
+
+			if v_mode == "Not Published":
+				# Do not republish template or group
+				pass
+			elif v_group:
+				# Variant belongs to a group: republish group leader
+				leader_name = frappe.db.get_value("Woo Variant Group", v_group, "leader")
+				if leader_name:
+					leader_woo = frappe.get_doc("Woo Item", leader_name)
+					if leader_woo.published:
+						frappe.enqueue(
+							"woo_prime.woo_prime.doctype.woo_item.woo_item._publish_single_woo_item_worker",
+							woo_item_name=leader_woo.name,
+							user=frappe.session.user,
+							queue="long",
+							timeout=1800,
+							enqueue_after_commit=True,
+							job_id=f"woo_publish_{leader_woo.name}",
+							deduplicate=True,
+						)
+			else:
+				# With Template: republish parent template
+				parent_woo_name = frappe.db.get_value("Woo Item", {"item_code": doc.variant_of})
+				if parent_woo_name:
+					parent_woo = frappe.get_doc("Woo Item", parent_woo_name)
+					if parent_woo.published:
+						frappe.enqueue(
+							"woo_prime.woo_prime.doctype.woo_item.woo_item._publish_single_woo_item_worker",
+							woo_item_name=parent_woo.name,
+							user=frappe.session.user,
+							queue="long",
+							timeout=1800,
+							enqueue_after_commit=True,
+							job_id=f"woo_publish_{parent_woo.name}",
+							deduplicate=True,
+						)
 
 		# 2. Check if a Woo Item exists for this item
 		woo_item_name = frappe.db.get_value("Woo Item", {"item_code": doc.name})
@@ -3167,6 +3870,8 @@ def on_item_update(doc, method):
 
 		if woo_item_name:
 			woo_item = frappe.get_doc("Woo Item", woo_item_name)
+			if getattr(woo_item, "variant_publish_mode", "") == "Not Published":
+				return
 			if woo_item.published:
 				woo_item.flags.in_woo_sync = True
 
@@ -3281,9 +3986,8 @@ def _publish_variant_as_simple_item(woo_item, item, api, settings, sync_images=T
 		dict: WooCommerce product response
 	"""
 	
-	# If this variant was previously published, delete it from WooCommerce
-	# (could be a variation under parent OR a variable product)
-	if woo_item.woo_product_id:
+	# If this variant was previously published under another mode, delete it from WooCommerce
+	if woo_item.woo_product_id and getattr(woo_item, "published_as", "") != "simple":
 		try:
 			# First, try to check if it's a variation by getting parent
 			parent_item_name = item.variant_of
@@ -3324,182 +4028,247 @@ def _publish_variant_as_simple_item(woo_item, item, api, settings, sync_images=T
 		woo_item.woo_product_id = 0
 	
 	# Now publish as a simple product using the existing function
-	return _publish_simple_item_to_woo(woo_item, item, api, settings, sync_images=sync_images)
+	res = _publish_simple_item_to_woo(woo_item, item, api, settings, sync_images=sync_images)
+	woo_item.published_as = "simple"
+	return res
 
 
 def _publish_variant_as_new_template(woo_item, item, api, settings, sync_images=True):
-	"""Publish a variant item as a new template/variable product on WooCommerce.
-	
-	This is used when woo_product_type is set to 'Variant Item' for a variant.
-	It will create a new variable product that can have its own variations.
-	
-	Args:
-		woo_item: Woo Item document
-		item: ERPNext Item document (variant item)
-		api: WooCommerce API instance
-		settings: Woo Settings document
-		
-	Returns:
-		dict: WooCommerce product response
-	"""
-	import html
-	
-	# If this variant was previously published, delete it from WooCommerce
-	# (could be a variation under parent OR a standalone simple product)
-	if woo_item.woo_product_id:
-		try:
-			# First, try to check if it's a variation by getting parent
-			parent_item_name = item.variant_of
-			is_variation = False
-			
-			if parent_item_name:
-				parent_woo_item = frappe.db.get_value(
-					"Woo Item",
-					{"item_code": parent_item_name},
-					["name", "woo_product_id"],
-					as_dict=True
-				)
-				
-				if parent_woo_item and parent_woo_item.woo_product_id:
-					# Try to delete as variation from parent product
-					try:
-						api.delete(f"products/{parent_woo_item.woo_product_id}/variations/{woo_item.woo_product_id}", params={"force": True})
-						is_variation = True
-						frappe.logger("woo_prime").info(f"Deleted variation {woo_item.woo_product_id} from parent {parent_woo_item.woo_product_id}")
-					except Exception as var_err:
-						frappe.logger("woo_prime").debug(f"Not a variation or already deleted: {var_err}")
-			
-			# If not deleted as variation, delete as standalone product (simple or variable)
-			if not is_variation:
-				try:
-					api.delete_product(woo_item.woo_product_id)
-					frappe.logger("woo_prime").info(f"Deleted standalone product {woo_item.woo_product_id}")
-				except Exception as prod_err:
-					frappe.logger("woo_prime").debug(f"Product already deleted or not found: {prod_err}")
-		
-		except Exception as e:
-			frappe.log_error(
-				title=f"Error checking/deleting previous product for {woo_item.name}",
-				message=frappe.get_traceback()
-			)
-		
-		# Reset woo_product_id so it creates a new variable product
-		woo_item.woo_product_id = 0
-	
-	# Get attributes from the variant item to create as variable product attributes
-	attributes_dict = {}
-	for attr in item.attributes:
-		if attr.attribute not in attributes_dict:
-			attributes_dict[attr.attribute] = set()
-		if attr.attribute_value:
-			attributes_dict[attr.attribute].add(clean_text(attr.attribute_value))
-	
-	woo_attributes = []
-	
-	# Use attributes from woo_item.item_attributes if available, otherwise use item.attributes
-	if getattr(woo_item, "item_attributes", None) and len(woo_item.item_attributes) > 0:
-		# Sort by Frappe idx to respect the row order set in the child table UI
-		sorted_attrs = sorted(woo_item.item_attributes, key=lambda r: (getattr(r, "idx", 0) or 0))
-		for pos, row in enumerate(sorted_attrs):
-			attr_name = row.attribute_name or row.attribute
-			if not attr_name:
-				continue
-			
-			opts = [o.strip() for o in (row.options or "").replace("\n", ",").split(",") if o.strip()]
-			
-			woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr_name, api)
-			is_var = bool(getattr(row, "is_variation", 1))
-			
-			attr_payload = {
-				"name": target_name or attr_name,
-				"position": pos,  # Maintain order from child table (sorted by Frappe idx)
-				"visible": bool(getattr(row, "is_visible", 1)),
-				"variation": is_var,
-				"options": opts if opts else [],
-			}
-			if woo_attr_id:
-				attr_payload["id"] = int(woo_attr_id)
-			woo_attributes.append(attr_payload)
-	else:
-		# Fallback to item attributes (alphabetical order)
-		idx = 0
-		for attr_name, options in sorted(attributes_dict.items()):
-			woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr_name, api)
-			attr_payload = {
-				"name": target_name or attr_name,
-				"position": idx,
-				"visible": True,
-				"variation": True,
-				"options": sorted(list(options))
-			}
-			if woo_attr_id:
-				attr_payload["id"] = int(woo_attr_id)
-			woo_attributes.append(attr_payload)
-			idx += 1
-	
-	# Build product data for variable product
-	product_name = woo_item.item_name or item.item_name or ""
-	product_data = {
-		"name": html.unescape(product_name),
-		"type": "variable",
-		"sku": woo_item.sku,
-		"description": html.unescape(woo_item.woo_description or item.description or ""),
-		"short_description": html.unescape(getattr(woo_item, "woo_short_description", None) or item.description or ""),
-		"status": "publish",
-		"attributes": woo_attributes,
-		"manage_stock": bool(getattr(woo_item, "manage_stock", 0)),
-		"menu_order": int(getattr(woo_item, "menu_order", 0) or 0),
-	}
-	
-	# Add categories
-	category_ids = _get_woo_category_ids(woo_item, api)
-	if category_ids:
-		product_data["categories"] = category_ids
-	
-	# Add images
-	if sync_images or not woo_item.woo_product_id:
-		images = _get_item_images(item, woo_item, api, settings)
-		if images:
-			product_data["images"] = images
-	
-	# Add tags
-	woo_tag_ids = _get_woo_tag_ids(woo_item, api)
-	if woo_tag_ids:
-		product_data["tags"] = woo_tag_ids
-	elif getattr(item, "_user_tags", None):
-		tags_list = [{"name": t.strip()} for t in item._user_tags.split(",") if t.strip()]
-		if tags_list:
-			product_data["tags"] = tags_list
-	
-	# Create or update the product
-	if woo_item.woo_product_id:
-		result = api.update_product(woo_item.woo_product_id, product_data)
-	else:
-		# Check if product with same SKU exists
-		existing_id = None
-		if product_data.get("sku"):
-			try:
-				search_resp = api.get("products", params={"sku": product_data.get("sku"), "status": "any"})
-				if search_resp.status_code == 200 and search_resp.json():
-					existing_id = search_resp.json()[0].get("id")
-			except Exception:
-				frappe.log_error(title="woo_prime: SKU search error in _publish_variant_as_new_template", message=frappe.get_traceback())
-		
-		if existing_id:
-			woo_item.woo_product_id = existing_id
-			result = api.update_product(existing_id, product_data)
+	"""Deprecated: Use Woo Variant Group and 'Separate Product' mode instead."""
+	frappe.log_error(
+		title="Deprecated: _publish_variant_as_new_template",
+		message=f"Item {woo_item.name} used deprecated Variant Item mode. Forwarding to Woo Variant Group."
+	)
+	group_name = getattr(woo_item, "woo_variant_group", None)
+	if not group_name:
+		group_sku = f"{woo_item.sku or woo_item.item_code}-GRP"
+		if not frappe.db.exists("Woo Variant Group", group_sku):
+			grp = frappe.get_doc({
+				"doctype": "Woo Variant Group",
+				"group_sku": group_sku,
+				"template_item": item.variant_of,
+				"leader": woo_item.name,
+				"item_name": woo_item.item_name,
+				"woo_product_id": woo_item.woo_product_id or 0,
+			})
+			grp.insert(ignore_permissions=True)
+			group_name = grp.name
 		else:
-			result = api.create_product(product_data)
-	
-	# Update woo_item with response
-	if result and result.get("id"):
-		woo_item.woo_product_id = result.get("id")
-		woo_item.published = 1
-		permalink = result.get("permalink", "")
-		woo_item.woo_product_url = html.unescape(permalink) if permalink else ""
-		woo_item.sync_status = "Synced"
-		woo_item.last_synced = now_datetime()
-		woo_item.flags.in_woo_sync = True
-		woo_item.save(ignore_permissions=True)
-	
-	return result
+			group_name = group_sku
+		woo_item.woo_variant_group = group_name
+		woo_item.variant_publish_mode = "Separate Product"
+		woo_item.db_set({"woo_variant_group": group_name, "variant_publish_mode": "Separate Product"})
+
+	return _publish_variant_group_member(woo_item, item, api, settings, sync_images=sync_images)
+
+
+@frappe.whitelist()
+def diagnose_template_publish(item_code):
+	"""Dry-run diagnostic: build variation payloads for first 2 variants of template and test POST to WooCommerce."""
+	frappe.only_for(["System Manager", "Woo Manager", "Website Manager"])
+	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
+	api = get_woo_api()
+	settings = frappe.get_single("Woo Settings")
+
+	woo_item_name = frappe.db.get_value("Woo Item", {"item_code": item_code})
+	if not woo_item_name:
+		frappe.throw(frappe._("No Woo Item found for template {0}").format(item_code))
+	woo_item = frappe.get_doc("Woo Item", woo_item_name)
+
+	parent_woo_id = woo_item.woo_product_id
+	if not parent_woo_id and woo_item.sku:
+		try:
+			search_resp = api.get("products", params={"sku": woo_item.sku, "status": "any"})
+			if search_resp.status_code == 200 and search_resp.json():
+				parent_woo_id = search_resp.json()[0].get("id")
+		except Exception:
+			pass
+
+	all_variants = frappe.get_all(
+		"Item",
+		filters={"variant_of": item_code, "disabled": 0},
+		pluck="name",
+		limit=2
+	)
+
+	price_list = _resolve_price_list(settings)
+	results = []
+	for v_name in all_variants:
+		v_item = frappe.get_doc("Item", v_name)
+		child_woo = get_or_create_woo_item(v_name, v_item.item_code)
+		payload = _prepare_variation_payload(child_woo, v_item, api, settings, sync_images=False)
+		
+		wc_response = None
+		if parent_woo_id:
+			try:
+				resp = api.post(f"products/{parent_woo_id}/variations", data=payload)
+				try:
+					wc_response = {
+						"status_code": resp.status_code,
+						"body": resp.json()
+					}
+				except Exception:
+					wc_response = {
+						"status_code": resp.status_code,
+						"text": resp.text[:500]
+					}
+			except Exception as e:
+				wc_response = {"error": str(e)}
+
+		results.append({
+			"variant": v_name,
+			"sku": payload.get("sku"),
+			"payload": payload,
+			"price_resolved": payload.get("regular_price"),
+			"price_list_used": price_list,
+			"wc_response": wc_response
+		})
+
+	return {
+		"template": item_code,
+		"parent_woo_id": parent_woo_id,
+		"resolved_price_list": price_list,
+		"diagnostic_results": results
+	}
+
+
+@frappe.whitelist()
+def find_broken_variable_products():
+	"""Find variable products where WooCommerce has 0 variations or fewer variations than ERPNext."""
+	frappe.only_for(["System Manager", "Woo Manager", "Website Manager"])
+	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
+	api = get_woo_api()
+
+	templates = frappe.get_all(
+		"Woo Item",
+		filters={
+			"has_variants": 1,
+			"published": 1,
+			"woo_product_id": [">", 0]
+		},
+		fields=["name", "item_code", "sku", "woo_product_id", "sync_status"]
+	)
+
+	broken = []
+	for t in templates:
+		item_code = t.get("item_code") if isinstance(t, dict) else getattr(t, "item_code", None)
+		woo_name = t.get("name") if isinstance(t, dict) else getattr(t, "name", None)
+		sku = t.get("sku") if isinstance(t, dict) else getattr(t, "sku", None)
+		woo_pid = t.get("woo_product_id") if isinstance(t, dict) else getattr(t, "woo_product_id", None)
+		sync_st = t.get("sync_status") if isinstance(t, dict) else getattr(t, "sync_status", None)
+
+		try:
+			erp_variants = frappe.get_all(
+				"Item",
+				filters={"variant_of": item_code, "disabled": 0},
+				pluck="name"
+			)
+			included_count = 0
+			for v_name in erp_variants:
+				wi_mode = frappe.db.get_value("Woo Item", {"item_code": v_name}, "variant_publish_mode") or "With Template"
+				if wi_mode == "With Template":
+					included_count += 1
+
+			resp = api.get(f"products/{woo_pid}/variations", params={"per_page": 100})
+			wc_variations = resp.json() if (resp.status_code == 200 and isinstance(resp.json(), list)) else []
+			wc_count = len(wc_variations)
+
+			if wc_count == 0 or (included_count > 0 and wc_count < included_count):
+				broken.append({
+					"woo_item": woo_name,
+					"item_code": item_code,
+					"sku": sku,
+					"woo_product_id": woo_pid,
+					"current_sync_status": sync_st,
+					"erp_variants_count": included_count,
+					"wc_variations_count": wc_count,
+					"issue": "Zero variations in WooCommerce" if wc_count == 0 else f"Partial variations ({wc_count}/{included_count})"
+				})
+		except Exception as e:
+			frappe.logger("woo_prime").error(f"Error checking template {item_code}: {e}")
+
+	return {
+		"total_checked": len(templates),
+		"broken_count": len(broken),
+		"broken_products": broken
+	}
+
+
+@frappe.whitelist()
+def repair_broken_variable_products(item_codes=None, dry_run=1):
+	"""Repair broken variable products by re-publishing their variations."""
+	frappe.only_for(["System Manager", "Woo Manager", "Website Manager"])
+	dry_run = int(dry_run)
+	import json
+	if isinstance(item_codes, str):
+		try:
+			item_codes = json.loads(item_codes)
+		except Exception:
+			item_codes = [c.strip() for c in item_codes.split(",") if c.strip()]
+
+	broken_info = find_broken_variable_products()
+	targets = broken_info.get("broken_products", [])
+	if item_codes:
+		targets = [t for t in targets if t["item_code"] in item_codes]
+
+	if dry_run:
+		return {
+			"dry_run": 1,
+			"target_count": len(targets),
+			"targets": targets,
+			"message": frappe._("Dry run complete. Call with dry_run=0 to execute repair.")
+		}
+
+	if len(targets) > 5:
+		frappe.enqueue(
+			"woo_prime.api.sync._run_repair_broken_products",
+			targets=targets,
+			queue="long",
+			timeout=1800
+		)
+		return {
+			"dry_run": 0,
+			"queued": 1,
+			"target_count": len(targets),
+			"message": frappe._("Repair job queued in background for {0} products.").format(len(targets))
+		}
+	else:
+		return _run_repair_broken_products(targets)
+
+
+def _run_repair_broken_products(targets):
+	"""Internal worker to republish broken products."""
+	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
+	results = []
+	for t in targets:
+		try:
+			woo_item = frappe.get_doc("Woo Item", t["woo_item"])
+			publish_item_to_woo(woo_item, sync_images=0)
+			woo_item.reload()
+			results.append({
+				"item_code": t["item_code"],
+				"status": "Success",
+				"new_sync_status": woo_item.sync_status
+			})
+		except Exception as e:
+			results.append({
+				"item_code": t["item_code"],
+				"status": "Failed",
+				"error": str(e)
+			})
+			create_log(
+				sync_type="Item",
+				direction="Outgoing",
+				status="Failed",
+				reference_doctype="Woo Item",
+				reference_name=t["woo_item"],
+				woo_reference_id=str(t["woo_product_id"]),
+				error_message=f"Repair failed: {e}",
+			)
+
+	return {
+		"repaired": len([r for r in results if r["status"] == "Success"]),
+		"failed": len([r for r in results if r["status"] == "Failed"]),
+		"results": results
+	}
+

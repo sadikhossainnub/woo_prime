@@ -489,7 +489,7 @@ def sync_pricing_rule_to_woo(pricing_rule_name, dry_run=False):
 		filters={
 			"item_code": ["in", affected_items],
 		},
-		fields=["name", "item_code", "woo_product_id", "published", "regular_price", "sale_price", "last_pushed_price", "last_pushed_sale_price", "woo_product_type"],
+		fields=["name", "item_code", "woo_product_id", "published", "regular_price", "sale_price", "last_pushed_price", "last_pushed_sale_price", "woo_product_type", "woo_variant_group", "variant_publish_mode"],
 	)
 
 	if not woo_items:
@@ -562,16 +562,18 @@ def sync_pricing_rule_to_woo(pricing_rule_name, dry_run=False):
 				skipped += 1
 				continue
 
+			if item.get("variant_publish_mode") == "Not Published":
+				skipped += 1
+				continue
+
 			# 6. Check variation vs standalone product
+			from woo_prime.api.sync import _resolve_parent_woo_id
 			variant_of = frappe.db.get_value("Item", item.item_code, "variant_of")
-			woo_product_type = item.get("woo_product_type") or ""
-			parent_woo_id = None
-			if variant_of and woo_product_type != "Simple Item":
-				parent_woo_id = (
-					frappe.db.get_value("Woo Item", {"item_code": variant_of}, "woo_product_id")
-					or frappe.db.get_value("Woo Item", {"sku": variant_of}, "woo_product_id")
-					or (frappe.db.exists("Woo Item", variant_of) and frappe.db.get_value("Woo Item", variant_of, "woo_product_id"))
-				)
+			parent_woo_id = _resolve_parent_woo_id(
+				variant_of,
+				item.get("woo_product_type"),
+				item.get("woo_variant_group")
+			)
 
 			if dry_run:
 				create_log(
@@ -674,7 +676,7 @@ def clear_sale_price_for_items(item_codes, dry_run=False, rule_name=""):
 		filters={
 			"item_code": ["in", item_codes],
 		},
-		fields=["name", "item_code", "woo_product_id", "published", "regular_price", "sale_price", "last_pushed_price", "last_pushed_sale_price", "woo_product_type"],
+		fields=["name", "item_code", "woo_product_id", "published", "regular_price", "sale_price", "last_pushed_price", "last_pushed_sale_price", "woo_product_type", "woo_variant_group", "variant_publish_mode"],
 	)
 
 	from woo_prime.api.sync import _get_item_price
@@ -735,15 +737,17 @@ def clear_sale_price_for_items(item_codes, dry_run=False, rule_name=""):
 				skipped += 1
 				continue
 
+			if item.get("variant_publish_mode") == "Not Published":
+				skipped += 1
+				continue
+
+			from woo_prime.api.sync import _resolve_parent_woo_id
 			variant_of = frappe.db.get_value("Item", item.item_code, "variant_of")
-			woo_product_type = item.get("woo_product_type") or ""
-			parent_woo_id = None
-			if variant_of and woo_product_type != "Simple Item":
-				parent_woo_id = (
-					frappe.db.get_value("Woo Item", {"item_code": variant_of}, "woo_product_id")
-					or frappe.db.get_value("Woo Item", {"sku": variant_of}, "woo_product_id")
-					or (frappe.db.exists("Woo Item", variant_of) and frappe.db.get_value("Woo Item", variant_of, "woo_product_id"))
-				)
+			parent_woo_id = _resolve_parent_woo_id(
+				variant_of,
+				item.get("woo_product_type"),
+				item.get("woo_variant_group")
+			)
 
 			if dry_run:
 				create_log(
