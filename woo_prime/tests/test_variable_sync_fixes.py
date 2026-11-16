@@ -208,6 +208,29 @@ class TestVariableSyncFixes(unittest.TestCase):
 			self.assertEqual(res["broken_products"][0]["item_code"], "TP00172")
 			self.assertEqual(res["broken_products"][0]["wc_variations_count"], 0)
 
+	def test_repair_broken_products_sets_ignore_version(self):
+		"""_run_repair_broken_products sets flags.ignore_version on Woo Item to prevent version conflicts."""
+		import frappe
+		from woo_prime.api.sync import _run_repair_broken_products
+
+		mock_doc = MagicMock()
+		mock_doc.sync_status = "Synced"
+		mock_doc.flags = types.SimpleNamespace()
+		frappe.get_doc.return_value = mock_doc
+
+		targets = [{
+			"item_code": "TP00172",
+			"woo_item": "WOO-TP00172",
+			"woo_product_id": 322032
+		}]
+
+		with patch("woo_prime.api.sync.publish_item_to_woo") as mock_pub:
+			res = _run_repair_broken_products(targets)
+			self.assertEqual(res.get("repaired"), 1)
+			self.assertEqual(res.get("failed"), 0)
+			self.assertTrue(getattr(mock_doc.flags, "ignore_version", False))
+			mock_pub.assert_called_once_with(mock_doc, sync_images=0)
+
 
 if __name__ == "__main__":
 	unittest.main()

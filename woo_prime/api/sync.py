@@ -948,6 +948,8 @@ def publish_item_to_woo(woo_item, sync_images=None):
 	if sync_images is None:
 		sync_images = getattr(woo_item.flags, "sync_images", None)
 
+	woo_item.flags.ignore_version = True
+
 	# For new products (no woo_product_id), always push images.
 	# For already published products, only push images if sync_images is explicitly requested.
 	should_sync_images = True if (not woo_item.woo_product_id or bool(sync_images)) else False
@@ -1219,6 +1221,7 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 	permalink = result.get("permalink", "")
 	woo_item.woo_product_url = html.unescape(permalink) if permalink else ""
 	woo_item.flags.in_woo_sync = True
+	woo_item.flags.ignore_version = True
 	woo_item.save(ignore_permissions=True)
 
 	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
@@ -1428,6 +1431,7 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 						child_woo_item.sync_status = "Synced"
 						child_woo_item.last_synced = now_datetime()
 						child_woo_item.flags.in_woo_sync = True
+						child_woo_item.flags.ignore_version = True
 						child_woo_item.save(ignore_permissions=True)
 			except Exception as e:
 				frappe.log_error(f"Batch variations sync failed for template {item.name}: {e}")
@@ -1499,6 +1503,7 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 
 	woo_item.last_synced = now_datetime()
 	woo_item.flags.in_woo_sync = True
+	woo_item.flags.ignore_version = True
 	woo_item.save(ignore_permissions=True)
 
 	# --- RECONCILIATION ---
@@ -1520,10 +1525,12 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 					ex_child.sync_status = "Not Synced"
 					ex_child.published_as = ""
 					ex_child.flags.in_woo_sync = True
+					ex_child.flags.ignore_version = True
 					ex_child.save(ignore_permissions=True)
 				elif ex_mode == "Separate Product":
 					ex_child.woo_product_id = 0
 					ex_child.flags.in_woo_sync = True
+					ex_child.flags.ignore_version = True
 					ex_child.save(ignore_permissions=True)
 
 	_cache_product_images_from_response(item, woo_item, result)
@@ -4209,7 +4216,21 @@ def repair_broken_variable_products(item_codes=None, dry_run=1):
 	broken_info = find_broken_variable_products()
 	targets = broken_info.get("broken_products", [])
 	if item_codes:
-		targets = [t for t in targets if t["item_code"] in item_codes]
+		matched_targets = [t for t in targets if t["item_code"] in item_codes]
+		matched_codes = {t["item_code"] for t in matched_targets}
+		for ic in item_codes:
+			if ic not in matched_codes:
+				wi = frappe.db.get_value("Woo Item", {"item_code": ic}, ["name", "item_code", "sku", "woo_product_id", "sync_status"], as_dict=True)
+				if wi and wi.get("woo_product_id"):
+					matched_targets.append({
+						"woo_item": wi.name,
+						"item_code": wi.item_code,
+						"sku": wi.sku,
+						"woo_product_id": wi.woo_product_id,
+						"current_sync_status": wi.sync_status,
+						"issue": "Explicit repair request"
+					})
+		targets = matched_targets
 
 	if dry_run:
 		return {
@@ -4241,18 +4262,25 @@ def _run_repair_broken_products(targets):
 	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
 	results = []
 	for t in targets:
+		item_code = t.get("item_code") if isinstance(t, dict) else getattr(t, "item_code", None)
+		woo_name = t.get("woo_item") if isinstance(t, dict) else getattr(t, "woo_item", None)
+		woo_pid = t.get("woo_product_id") if isinstance(t, dict) else getattr(t, "woo_product_id", None)
 		try:
-			woo_item = frappe.get_doc("Woo Item", t["woo_item"])
+			frappe.db.commit()
+			woo_item = frappe.get_doc("Woo Item", woo_name)
+			woo_item.flags.ignore_version = True
 			publish_item_to_woo(woo_item, sync_images=0)
+			frappe.db.commit()
 			woo_item.reload()
 			results.append({
-				"item_code": t["item_code"],
+				"item_code": item_code,
 				"status": "Success",
 				"new_sync_status": woo_item.sync_status
 			})
 		except Exception as e:
+			frappe.db.rollback()
 			results.append({
-				"item_code": t["item_code"],
+				"item_code": item_code,
 				"status": "Failed",
 				"error": str(e)
 			})
@@ -4261,10 +4289,11 @@ def _run_repair_broken_products(targets):
 				direction="Outgoing",
 				status="Failed",
 				reference_doctype="Woo Item",
-				reference_name=t["woo_item"],
-				woo_reference_id=str(t["woo_product_id"]),
+				reference_name=woo_name,
+				woo_reference_id=str(woo_pid),
 				error_message=f"Repair failed: {e}",
 			)
+			frappe.db.commit()
 
 	return {
 		"repaired": len([r for r in results if r["status"] == "Success"]),
