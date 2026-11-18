@@ -950,9 +950,9 @@ def publish_item_to_woo(woo_item, sync_images=None):
 
 	woo_item.flags.ignore_version = True
 
-	# For new products (no woo_product_id), always push images.
-	# For already published products, only push images if sync_images is explicitly requested.
-	should_sync_images = True if (not woo_item.woo_product_id or bool(sync_images)) else False
+	# Always push images on every publish so WooCommerce images are replaced/updated.
+	# sync_images flag is kept for backward compatibility but images are always sent.
+	should_sync_images = True
 
 	# Guard: Cannot publish variant if marked "Not Published"
 	if getattr(woo_item, "variant_publish_mode", "") == "Not Published":
@@ -1086,10 +1086,10 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings, sync_images=True)
 	if simple_attrs:
 		product_data["attributes"] = simple_attrs
 
-	if sync_images or not woo_item.woo_product_id:
-		images = _get_item_images(item, woo_item, api, settings)
-		if images:
-			product_data["images"] = images
+	# Always push images to replace/update existing WooCommerce images on every publish
+	images = _get_item_images(item, woo_item, api, settings)
+	if images:
+		product_data["images"] = images
 
 	# Tags: prefer woo_tags Table MultiSelect, fallback to ERPNext _user_tags
 	woo_tag_ids = _get_woo_tag_ids(woo_item, api)
@@ -1277,10 +1277,10 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 	if category_ids:
 		product_data["categories"] = category_ids
 
-	if sync_images or not woo_item.woo_product_id:
-		images = _get_item_images(item, woo_item, api, settings)
-		if images:
-			product_data["images"] = images
+	# Always push images to replace/update existing WooCommerce images on every publish
+	images = _get_item_images(item, woo_item, api, settings)
+	if images:
+		product_data["images"] = images
 
 	# Tags: prefer woo_tags Table MultiSelect, fallback to ERPNext _user_tags
 	woo_tag_ids = _get_woo_tag_ids(woo_item, api)
@@ -1853,10 +1853,10 @@ def _publish_variant_group_product(group, api, settings, sync_images=True):
 	if category_ids:
 		product_data["categories"] = category_ids
 
-	if sync_images or not group.woo_product_id:
-		images = _get_item_images(leader_item, leader_woo, api, settings)
-		if images:
-			product_data["images"] = images
+	# Always push images to replace/update existing WooCommerce images on every publish
+	images = _get_item_images(leader_item, leader_woo, api, settings)
+	if images:
+		product_data["images"] = images
 
 	woo_tag_ids = _get_woo_tag_ids(leader_woo, api)
 	if woo_tag_ids:
@@ -2318,13 +2318,13 @@ def _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_
 	var_data["virtual"] = woo_virtual
 	var_data["downloadable"] = woo_downloadable
 
-	if sync_images or not child_woo_item.woo_product_id:
-		try:
-			images = _get_item_images(v_item, child_woo_item, api, settings)
-			if images:
-				var_data["image"] = images[0]
-		except Exception as img_err:
-			frappe.logger("woo_prime").warning(f"Variation image fetch error for {v_item.name}: {img_err}")
+	# Always push variation image to replace/update existing image on every publish
+	try:
+		images = _get_item_images(v_item, child_woo_item, api, settings)
+		if images:
+			var_data["image"] = images[0]
+	except Exception as img_err:
+		frappe.logger("woo_prime").warning(f"Variation image fetch error for {v_item.name}: {img_err}")
 
 	return var_data
 
