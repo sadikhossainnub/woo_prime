@@ -169,6 +169,102 @@
    "options": "Woo Item Category"
   },
   {
+   "fieldname": "woo_featured",
+   "fieldtype": "Check",
+   "label": "Featured Product",
+   "default": "0",
+   "in_list_view": 0
+  },
+  {
+   "fieldname": "catalog_visibility",
+   "fieldtype": "Select",
+   "label": "Catalog Visibility",
+   "options": "visible\ncatalog\nsearch\nhidden",
+   "default": "visible",
+   "description": "visible=Shop & Search, catalog=Shop only, search=Search only, hidden=Hidden"
+  },
+  {
+   "fieldname": "allow_backorders",
+   "fieldtype": "Select",
+   "label": "Backorders",
+   "options": "no\nnotify\nyes",
+   "default": "no",
+   "description": "no=Do not allow, notify=Allow but notify customer, yes=Allow"
+  },
+  {
+   "fieldname": "col_break_woo_flags",
+   "fieldtype": "Column Break",
+   "label": ""
+  },
+  {
+   "fieldname": "woo_virtual",
+   "fieldtype": "Check",
+   "label": "Virtual Product",
+   "default": "0",
+   "description": "No shipping required (e.g. services)"
+  },
+  {
+   "fieldname": "woo_downloadable",
+   "fieldtype": "Check",
+   "label": "Downloadable Product",
+   "default": "0"
+  },
+  {
+   "fieldname": "reviews_allowed",
+   "fieldtype": "Check",
+   "label": "Enable Reviews",
+   "default": "1"
+  },
+  {
+   "fieldname": "purchase_note",
+   "fieldtype": "Small Text",
+   "label": "Purchase Note",
+   "description": "Note shown to customer after purchase"
+  },
+  {
+   "fieldname": "dimensions_section",
+   "fieldtype": "Section Break",
+   "label": "Dimensions & Weight (WooCommerce)"
+  },
+  {
+   "fieldname": "woo_weight",
+   "fieldtype": "Float",
+   "label": "Weight (kg)",
+   "description": "Override ERPNext weight for WooCommerce. Leave 0 to auto-use Item weight."
+  },
+  {
+   "fieldname": "woo_length",
+   "fieldtype": "Float",
+   "label": "Length (cm)"
+  },
+  {
+   "fieldname": "col_break_dimensions",
+   "fieldtype": "Column Break",
+   "label": ""
+  },
+  {
+   "fieldname": "woo_width",
+   "fieldtype": "Float",
+   "label": "Width (cm)"
+  },
+  {
+   "fieldname": "woo_height",
+   "fieldtype": "Float",
+   "label": "Height (cm)"
+  },
+  {
+   "fieldname": "woo_external_url",
+   "fieldtype": "Data",
+   "label": "External/Affiliate URL",
+   "description": "For External product type only"
+  },
+  {
+   "fieldname": "woo_button_text",
+   "fieldtype": "Data",
+   "label": "Buy Button Text",
+   "description": "Button text for External product type (e.g. Buy Now)"
+  },
+  {
    "fieldname": "sync_section",
    "fieldtype": "Section Break",
    "label": "Sync Settings"
@@ -280,7 +376,7 @@
    "read_only": 1
   },
   {
-   "description": "Choose how to publish this item on WooCommerce:\n\u2022 Simple Item: Publish as simple product\n\u2022 Blank: Auto-detect based on item type. (Note: To publish variants as separate products, use 'Separate Product' mode and Woo Variant Group).",
+   "description": "Choose how to publish this item on WooCommerce:\n• Simple Item: Publish as simple product\n• Blank: Auto-detect based on item type. (Note: To publish variants as separate products, use 'Separate Product' mode and Woo Variant Group).",
    "fieldname": "woo_product_type",
    "fieldtype": "Select",
    "label": "WooCommerce Product Type",

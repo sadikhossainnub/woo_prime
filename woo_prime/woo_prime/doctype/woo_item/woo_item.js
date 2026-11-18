@@ -60,6 +60,15 @@ frappe.ui.form.on("Woo Item", {
 								indicator: "green",
 							});
 							frm.reload_doc();
+						} else if (data.status === "warning" || data.status === "partial") {
+							// Bug 4 fix: surface Partial publish outcome to the user
+							let warnMsg = data.message || __("Product partially synced — some variants may not have been pushed. Check Woo Sync Log for details.");
+							frappe.msgprint({
+								title: __("Partially Synced"),
+								message: warnMsg,
+								indicator: "orange",
+							});
+							frm.reload_doc();
 						} else if (data.status === "error") {
 							frappe.msgprint({
 								title: __("Publish Failed"),
@@ -341,6 +350,10 @@ frappe.ui.form.on("Woo Item", {
 		if (frm.doc.sync_status === "Synced") {
 			frm.dashboard.set_headline(
 				__('<span class="indicator-pill green">Synced with WooCommerce</span>')
+			);
+		} else if (frm.doc.sync_status === "Partial") {
+			frm.dashboard.set_headline(
+				__('<span class="indicator-pill orange">Partially Synced — Check Woo Sync Log</span>')
 			);
 		} else if (frm.doc.sync_status === "Error") {
 			frm.dashboard.set_headline(
@@ -1020,6 +1033,8 @@ frappe.listview_settings["Woo Item"] = {
 	get_indicator: function (doc) {
 		if (doc.sync_status === "Synced") {
 			return [__("Synced"), "green", "sync_status,=,Synced"];
+		} else if (doc.sync_status === "Partial") {
+			return [__("Partial"), "orange", "sync_status,=,Partial"];
 		} else if (doc.sync_status === "Error") {
 			return [__("Error"), "red", "sync_status,=,Error"];
 		}

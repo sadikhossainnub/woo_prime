@@ -986,12 +986,74 @@ def publish_item_to_woo(woo_item, sync_images=None):
 		return _publish_simple_item_to_woo(woo_item, item, api, settings, sync_images=should_sync_images)
 
 
+def _build_common_product_fields(woo_item, item):
+	"""Build common WooCommerce product fields shared across all product types (Simple, Template, Group)."""
+	import html
+
+	# --- Featured, Visibility, Virtual, Downloadable ---
+	if getattr(woo_item, "woo_featured", None):
+		pass  # applied inline below
+
+	common = {}
+
+	# Featured
+	common["featured"] = bool(getattr(woo_item, "woo_featured", 0))
+
+	# Catalog visibility
+	cv = getattr(woo_item, "catalog_visibility", "") or "visible"
+	common["catalog_visibility"] = cv
+
+	# Virtual / Downloadable
+	common["virtual"] = bool(getattr(woo_item, "woo_virtual", 0))
+	common["downloadable"] = bool(getattr(woo_item, "woo_downloadable", 0))
+
+	# Reviews
+	common["reviews_allowed"] = bool(getattr(woo_item, "reviews_allowed", 1))
+
+	# Backorders
+	common["backorders"] = getattr(woo_item, "allow_backorders", "") or "no"
+
+	# Purchase note
+	pnote = getattr(woo_item, "purchase_note", "") or ""
+	common["purchase_note"] = html.unescape(pnote) if pnote else ""
+
+	# Weight: prefer woo_weight, fallback to ERPNext item weight
+	woo_weight = flt(getattr(woo_item, "woo_weight", 0) or 0)
+	if woo_weight > 0:
+		common["weight"] = str(woo_weight)
+	elif getattr(item, "weight_per_unit", None):
+		common["weight"] = str(flt(item.weight_per_unit))
+
+	# Dimensions
+	dims = {}
+	woo_length = flt(getattr(woo_item, "woo_length", 0) or 0)
+	woo_width = flt(getattr(woo_item, "woo_width", 0) or 0)
+	woo_height = flt(getattr(woo_item, "woo_height", 0) or 0)
+	if woo_length or woo_width or woo_height:
+		dims["length"] = str(woo_length) if woo_length else ""
+		dims["width"] = str(woo_width) if woo_width else ""
+		dims["height"] = str(woo_height) if woo_height else ""
+	if dims:
+		common["dimensions"] = dims
+
+	# External URL / Button text (for External/Affiliate product type)
+	ext_url = getattr(woo_item, "woo_external_url", "") or ""
+	if ext_url:
+		common["external_url"] = ext_url
+	btn_text = getattr(woo_item, "woo_button_text", "") or ""
+	if btn_text:
+		common["button_text"] = btn_text
+
+	return common
+
+
 def _publish_simple_item_to_woo(woo_item, item, api, settings, sync_images=True):
 	"""Publish a simple item to WooCommerce."""
 	import html
 	price = _get_item_price(woo_item.item_code, settings.default_price_list)
 	regular_price = flt(woo_item.regular_price) if getattr(woo_item, "regular_price", None) else flt(price)
-	sale_price = flt(woo_item.sale_price) if getattr(woo_item, "sale_price", None) and flt(woo_item.sale_price) > 0 else None
+	# sale_price: if explicitly set to > 0 push it; if 0 or empty push "" to clear it in WooCommerce
+	raw_sale = flt(woo_item.sale_price) if getattr(woo_item, "sale_price", None) is not None else None
 	stock_qty = _get_stock_qty(woo_item.item_code, settings.default_warehouse)
 
 	manage_stock = bool(getattr(woo_item, "manage_stock", 1))
@@ -1000,6 +1062,7 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings, sync_images=True)
 		"name": html.unescape(product_name),
 		"sku": woo_item.sku,
 		"regular_price": str(flt(regular_price)),
+		"sale_price": str(flt(raw_sale)) if raw_sale and flt(raw_sale) > 0 else "",
 		"description": html.unescape(woo_item.woo_description or item.description or ""),
 		"short_description": html.unescape(getattr(woo_item, "woo_short_description", None) or item.description or ""),
 		"manage_stock": manage_stock,
@@ -1011,12 +1074,9 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings, sync_images=True)
 		product_data["stock_status"] = "instock" if int(stock_qty) > 0 else "outofstock"
 	else:
 		product_data["stock_status"] = "instock"
-	if sale_price is not None:
-		product_data["sale_price"] = str(flt(sale_price))
 
-	if getattr(item, "weight_per_unit", None):
-		product_data["weight"] = str(flt(item.weight_per_unit))
-
+	# Merge all common fields (featured, dimensions, virtual, backorders, etc.)
+	product_data.update(_build_common_product_fields(woo_item, item))
 
 	category_ids = _get_woo_category_ids(woo_item, api)
 	if category_ids:
@@ -1049,6 +1109,11 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings, sync_images=True)
 				search_resp = api.get("products", params={"sku": product_data.get("sku"), "status": "any"})
 				if search_resp.status_code == 200 and search_resp.json():
 					existing_id = search_resp.json()[0].get("id")
+				else:
+					# Search trash too (Item 5)
+					trash_resp = api.get("products", params={"sku": product_data.get("sku"), "status": "trash"})
+					if trash_resp.status_code == 200 and trash_resp.json():
+						existing_id = trash_resp.json()[0].get("id")
 			except Exception:
 				frappe.log_error(title="woo_prime: SKU search error in _publish_simple_item_to_woo", message=frappe.get_traceback())
 
@@ -1056,18 +1121,47 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings, sync_images=True)
 			woo_item.woo_product_id = existing_id
 			result = api.update_product(existing_id, product_data)
 		else:
-			result = api.create_product(product_data)
+			try:
+				result = api.create_product(product_data)
+			except Exception as create_err:
+				err_str = str(create_err).lower()
+				if "sku" in err_str or "duplicate" in err_str or "lookup table" in err_str:
+					try:
+						trash_resp = api.get("products", params={"sku": product_data.get("sku"), "status": "trash"})
+						if trash_resp.status_code == 200 and trash_resp.json():
+							trashed_id = trash_resp.json()[0].get("id")
+							woo_item.woo_product_id = trashed_id
+							result = api.update_product(trashed_id, product_data)
+					except Exception:
+						pass
+				if not result or not result.get("id"):
+					raise create_err
 
 	if result and result.get("id"):
-		woo_item.woo_product_id = result.get("id")
+		new_id = result.get("id")
+		woo_item.woo_product_id = new_id
 		woo_item.published = 1
 		permalink = result.get("permalink", "")
 		woo_item.woo_product_url = html.unescape(permalink) if permalink else ""
 		woo_item.sync_status = "Synced"
 		woo_item.last_synced = now_datetime()
 		woo_item.flags.in_woo_sync = True
+		woo_item.flags.ignore_version = True
+		try:
+			woo_item.db_set("woo_product_id", new_id, update_modified=False)
+			woo_item.db_set("published", 1, update_modified=False)
+		except Exception:
+			pass
 		woo_item.save(ignore_permissions=True)
-		_cache_product_images_from_response(item, woo_item, result)
+
+		# Clear tombstone on explicit publish (Item 2)
+		try:
+			from woo_prime.woo_prime.doctype.woo_ignored_item.woo_ignored_item import remove_tombstone
+			remove_tombstone(item_code=woo_item.item_code, sku=woo_item.sku)
+		except Exception:
+			pass
+
+		_cache_product_images_from_response(item, woo_item, result, images_sent=bool(product_data.get("images")))
 
 	return result
 
@@ -1174,6 +1268,11 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 		"menu_order": int(getattr(woo_item, "menu_order", 0) or 0),
 	}
 
+	# Merge all common fields (featured, dimensions, virtual, backorders, etc.)
+	product_data.update(_build_common_product_fields(woo_item, item))
+	# Template manage_stock is always False (stock managed at variation level)
+	product_data["manage_stock"] = False
+
 	category_ids = _get_woo_category_ids(woo_item, api)
 	if category_ids:
 		product_data["categories"] = category_ids
@@ -1202,6 +1301,11 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 				search_resp = api.get("products", params={"sku": product_data.get("sku"), "status": "any"})
 				if search_resp.status_code == 200 and search_resp.json():
 					existing_id = search_resp.json()[0].get("id")
+				else:
+					# Check trash too (Item 5)
+					trash_resp = api.get("products", params={"sku": product_data.get("sku"), "status": "trash"})
+					if trash_resp.status_code == 200 and trash_resp.json():
+						existing_id = trash_resp.json()[0].get("id")
 			except Exception:
 				frappe.log_error(title="woo_prime: SKU search error in _publish_template_item_to_woo", message=frappe.get_traceback())
 
@@ -1209,7 +1313,21 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 			woo_item.woo_product_id = existing_id
 			result = api.update_product(existing_id, product_data)
 		else:
-			result = api.create_product(product_data)
+			try:
+				result = api.create_product(product_data)
+			except Exception as create_err:
+				err_str = str(create_err).lower()
+				if "sku" in err_str or "duplicate" in err_str or "lookup table" in err_str:
+					try:
+						trash_resp = api.get("products", params={"sku": product_data.get("sku"), "status": "trash"})
+						if trash_resp.status_code == 200 and trash_resp.json():
+							trashed_id = trash_resp.json()[0].get("id")
+							woo_item.woo_product_id = trashed_id
+							result = api.update_product(trashed_id, product_data)
+					except Exception:
+						pass
+				if not result or not result.get("id"):
+					raise create_err
 
 	if not result or not result.get("id"):
 		frappe.throw(f"WooCommerce did not return a valid product ID for template '{item.name}'. Response: {str(result)[:300]}")
@@ -1222,6 +1340,11 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 	woo_item.woo_product_url = html.unescape(permalink) if permalink else ""
 	woo_item.flags.in_woo_sync = True
 	woo_item.flags.ignore_version = True
+	try:
+		woo_item.db_set("woo_product_id", parent_woo_id, update_modified=False)
+		woo_item.db_set("published", 1, update_modified=False)
+	except Exception:
+		pass
 	woo_item.save(ignore_permissions=True)
 
 	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
@@ -1253,7 +1376,7 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 					child_woo_item.db_set("manage_stock", int(manage_var_stock))
 				except Exception:
 					pass
-			var_payload = _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_attr_keys=variation_attr_keys, sync_images=sync_images)
+			var_payload = _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_attr_keys=variation_attr_keys, sync_images=sync_images, parent_woo_item=woo_item)
 
 			# Guard against zero/negative price
 			var_price = flt(var_payload.get("regular_price") or 0)
@@ -1492,7 +1615,7 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 		create_log(
 			sync_type="Item",
 			direction="Outgoing",
-			status="Failed",
+			status="Warning",
 			reference_doctype="Woo Item",
 			reference_name=woo_item.name,
 			woo_reference_id=str(parent_woo_id),
@@ -1506,34 +1629,69 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 	woo_item.flags.ignore_version = True
 	woo_item.save(ignore_permissions=True)
 
+	# Remove tombstone for template item on publish (Item 2)
+	try:
+		from woo_prime.woo_prime.doctype.woo_ignored_item.woo_ignored_item import remove_tombstone
+		remove_tombstone(item_code=woo_item.item_code, sku=woo_item.sku)
+	except Exception:
+		pass
+
 	# --- RECONCILIATION ---
-	# Delete variations from Woo if marked Not Published or Separate Product that still have a woo_product_id
+	# Only delete variations from Woo if intentionally excluded (Item 3)
 	for ex_name in excluded_variants:
 		child_woo_name = frappe.db.get_value("Woo Item", {"item_code": ex_name})
 		if child_woo_name:
 			ex_child = frappe.get_doc("Woo Item", child_woo_name)
 			if ex_child.woo_product_id:
-				try:
-					api.delete_variation(parent_woo_id, ex_child.woo_product_id, force=True)
-				except Exception as rec_del_err:
-					frappe.logger("woo_prime").debug(f"Reconciliation variation delete notice: {rec_del_err}")
-
 				ex_mode = getattr(ex_child, "variant_publish_mode", "")
-				if ex_mode == "Not Published":
-					ex_child.woo_product_id = 0
-					ex_child.published = 0
-					ex_child.sync_status = "Not Synced"
-					ex_child.published_as = ""
-					ex_child.flags.in_woo_sync = True
-					ex_child.flags.ignore_version = True
-					ex_child.save(ignore_permissions=True)
-				elif ex_mode == "Separate Product":
-					ex_child.woo_product_id = 0
-					ex_child.flags.in_woo_sync = True
-					ex_child.flags.ignore_version = True
-					ex_child.save(ignore_permissions=True)
+				v_disabled = frappe.db.get_value("Item", ex_name, "disabled")
+				is_group = bool(getattr(ex_child, "woo_variant_group", None))
+				is_intentional = (
+					v_disabled
+					or ex_mode == "Not Published"
+					or ex_mode == "Separate Product"
+					or is_group
+				)
+				if is_intentional:
+					try:
+						api.delete_variation(parent_woo_id, ex_child.woo_product_id, force=True)
+					except Exception as rec_del_err:
+						frappe.logger("woo_prime").debug(f"Reconciliation variation delete notice: {rec_del_err}")
 
-	_cache_product_images_from_response(item, woo_item, result)
+					if ex_mode == "Not Published":
+						ex_child.woo_product_id = 0
+						ex_child.published = 0
+						ex_child.sync_status = "Not Synced"
+						ex_child.published_as = ""
+						ex_child.flags.in_woo_sync = True
+						ex_child.flags.ignore_version = True
+						ex_child.save(ignore_permissions=True)
+					elif ex_mode == "Separate Product" or is_group:
+						ex_child.woo_product_id = 0
+						ex_child.flags.in_woo_sync = True
+						ex_child.flags.ignore_version = True
+						ex_child.save(ignore_permissions=True)
+				else:
+					# Tombstone or other non-intentional exclusion: DO NOT delete from Woo!
+					skip_warn = f"Variant '{ex_name}' excluded from template '{item.name}' sync, but live variation {ex_child.woo_product_id} was preserved in WooCommerce (not intentionally disabled or marked Not Published/Separate Product)."
+					frappe.logger("woo_prime").warning(skip_warn)
+					create_log(
+						sync_type="Item",
+						direction="Outgoing",
+						status="Warning",
+						reference_doctype="Woo Item",
+						reference_name=ex_child.name,
+						woo_reference_id=str(ex_child.woo_product_id),
+						error_message=skip_warn,
+					)
+
+	_cache_product_images_from_response(item, woo_item, result, images_sent=bool(product_data.get("images")))
+
+	result["sync_status"] = woo_item.sync_status
+	result["expected_variants_count"] = expected_count
+	result["synced_variants_count"] = success_count
+	result["failed_variants"] = failed_variants
+
 	return result
 
 
@@ -1687,6 +1845,10 @@ def _publish_variant_group_product(group, api, settings, sync_images=True):
 		"manage_stock": False,
 	}
 
+	# Merge common fields from leader_woo (featured, dimensions, etc.)
+	product_data.update(_build_common_product_fields(leader_woo, leader_item))
+	product_data["manage_stock"] = False  # variant group: always manage at variation level
+
 	category_ids = _get_woo_category_ids(leader_woo, api)
 	if category_ids:
 		product_data["categories"] = category_ids
@@ -1709,6 +1871,11 @@ def _publish_variant_group_product(group, api, settings, sync_images=True):
 				search_resp = api.get("products", params={"sku": product_data.get("sku"), "status": "any"})
 				if search_resp.status_code == 200 and search_resp.json():
 					existing_id = search_resp.json()[0].get("id")
+				else:
+					# Check trash too (Item 5)
+					trash_resp = api.get("products", params={"sku": product_data.get("sku"), "status": "trash"})
+					if trash_resp.status_code == 200 and trash_resp.json():
+						existing_id = trash_resp.json()[0].get("id")
 			except Exception:
 				pass
 
@@ -1716,7 +1883,21 @@ def _publish_variant_group_product(group, api, settings, sync_images=True):
 			group.woo_product_id = existing_id
 			result = api.update_product(existing_id, product_data)
 		else:
-			result = api.create_product(product_data)
+			try:
+				result = api.create_product(product_data)
+			except Exception as create_err:
+				err_str = str(create_err).lower()
+				if "sku" in err_str or "duplicate" in err_str or "lookup table" in err_str:
+					try:
+						trash_resp = api.get("products", params={"sku": product_data.get("sku"), "status": "trash"})
+						if trash_resp.status_code == 200 and trash_resp.json():
+							trashed_id = trash_resp.json()[0].get("id")
+							group.woo_product_id = trashed_id
+							result = api.update_product(trashed_id, product_data)
+					except Exception:
+						pass
+				if not result or not result.get("id"):
+					raise create_err
 
 	if not result or not result.get("id"):
 		frappe.throw(_("WooCommerce did not return a valid product ID for group '{0}'").format(group.name))
@@ -1726,9 +1907,14 @@ def _publish_variant_group_product(group, api, settings, sync_images=True):
 	permalink = result.get("permalink", "")
 	group.woo_product_url = html.unescape(permalink) if permalink else ""
 	group.last_synced = now_datetime()
+	try:
+		group.db_set("woo_product_id", result.get("id"), update_modified=False)
+		group.db_set("published", 1, update_modified=False)
+	except Exception:
+		pass
 	group.save(ignore_permissions=True)
 
-	_cache_product_images_from_response(leader_item, leader_woo, result)
+	_cache_product_images_from_response(leader_item, leader_woo, result, images_sent=bool(product_data.get("images")))
 	return result, variation_attr_keys
 
 
@@ -1767,7 +1953,7 @@ def _publish_variant_group_member(woo_item, item, api, settings, sync_images=Tru
 			except Exception:
 				pass
 
-			var_payload = _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_attr_keys=variation_attr_keys, sync_images=sync_images)
+			var_payload = _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_attr_keys=variation_attr_keys, sync_images=sync_images, parent_woo_item=leader_woo)
 
 			if child_woo_item.woo_product_id:
 				var_payload["id"] = int(child_woo_item.woo_product_id)
@@ -2018,15 +2204,28 @@ def _publish_variant_item_to_woo(woo_item, item, api, settings, sync_images=True
 	return _publish_variation_data(parent_woo_item.woo_product_id, woo_item, item, api, settings, sync_images=sync_images)
 
 
-def _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_attr_keys=None, sync_images=False):
-	"""Prepare variation payload dictionary for WooCommerce."""
+def _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_attr_keys=None, sync_images=False, parent_woo_item=None):
+	"""Prepare variation payload dictionary for WooCommerce.
+
+	Args:
+		child_woo_item: Woo Item doc for the variation.
+		v_item: ERPNext Item doc for the variation.
+		api: WooCommerce API client.
+		settings: Woo Settings doc.
+		variation_attr_keys: Set of attribute names marked as variation dimensions.
+		sync_images: Whether to push images to WooCommerce.
+		parent_woo_item: Optional parent template Woo Item doc; used to inherit
+		    weight/dimensions/virtual/downloadable when child has none.
+	"""
 	import html
 	price_list = _resolve_price_list(settings)
 	price = _get_item_price(v_item.name, price_list)
 	regular_price = flt(child_woo_item.regular_price) if getattr(child_woo_item, "regular_price", None) and flt(child_woo_item.regular_price) > 0 else flt(price)
 	if (not child_woo_item.regular_price or flt(child_woo_item.regular_price) <= 0) and regular_price > 0:
 		child_woo_item.regular_price = flt(regular_price)
-	sale_price = flt(child_woo_item.sale_price) if getattr(child_woo_item, "sale_price", None) and flt(child_woo_item.sale_price) > 0 else None
+	# Bug A fix: treat 0 sale_price as "clear sale" — send "" instead of omitting the key
+	raw_sale = flt(child_woo_item.sale_price) if getattr(child_woo_item, "sale_price", None) is not None else None
+	sale_price_str = str(flt(raw_sale)) if raw_sale is not None and flt(raw_sale) > 0 else ""
 	stock_qty = _get_stock_qty(v_item.name, settings.default_warehouse)
 
 	if variation_attr_keys is None and getattr(v_item, "variant_of", None):
@@ -2070,6 +2269,7 @@ def _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_
 	var_data = {
 		"sku": child_woo_item.sku or v_item.item_code,
 		"regular_price": str(flt(regular_price)),
+		"sale_price": sale_price_str,
 		"manage_stock": manage_stock,
 		"status": "publish",
 		"attributes": var_attributes,
@@ -2081,11 +2281,42 @@ def _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_
 		var_data["stock_status"] = "instock" if int(stock_qty) > 0 else "outofstock"
 	else:
 		var_data["stock_status"] = "instock"
-	if sale_price is not None:
-		var_data["sale_price"] = str(flt(sale_price))
 
-	if getattr(v_item, "weight_per_unit", None):
+	# Weight: prefer child woo_weight, then parent woo_item's woo_weight, then ERP weight_per_unit
+	child_woo_weight = flt(getattr(child_woo_item, "woo_weight", 0) or 0)
+	parent_woo_weight = flt(getattr(parent_woo_item, "woo_weight", 0) or 0) if parent_woo_item else 0
+	if child_woo_weight > 0:
+		var_data["weight"] = str(child_woo_weight)
+	elif parent_woo_weight > 0:
+		var_data["weight"] = str(parent_woo_weight)
+	elif getattr(v_item, "weight_per_unit", None):
 		var_data["weight"] = str(flt(v_item.weight_per_unit))
+
+	# Dimensions: prefer child, fall back to parent woo_item
+	def _dim_val(src, key):
+		return flt(getattr(src, key, 0) or 0)
+
+	c_len = _dim_val(child_woo_item, "woo_length")
+	c_wid = _dim_val(child_woo_item, "woo_width")
+	c_hgt = _dim_val(child_woo_item, "woo_height")
+	p_len = _dim_val(parent_woo_item, "woo_length") if parent_woo_item else 0
+	p_wid = _dim_val(parent_woo_item, "woo_width") if parent_woo_item else 0
+	p_hgt = _dim_val(parent_woo_item, "woo_height") if parent_woo_item else 0
+	eff_len = c_len or p_len
+	eff_wid = c_wid or p_wid
+	eff_hgt = c_hgt or p_hgt
+	if eff_len or eff_wid or eff_hgt:
+		var_data["dimensions"] = {
+			"length": str(eff_len) if eff_len else "",
+			"width": str(eff_wid) if eff_wid else "",
+			"height": str(eff_hgt) if eff_hgt else "",
+		}
+
+	# Virtual / Downloadable: inherit from parent if child not explicitly set
+	woo_virtual = bool(getattr(child_woo_item, "woo_virtual", None) or (parent_woo_item and getattr(parent_woo_item, "woo_virtual", 0)))
+	woo_downloadable = bool(getattr(child_woo_item, "woo_downloadable", None) or (parent_woo_item and getattr(parent_woo_item, "woo_downloadable", 0)))
+	var_data["virtual"] = woo_virtual
+	var_data["downloadable"] = woo_downloadable
 
 	if sync_images or not child_woo_item.woo_product_id:
 		try:
@@ -3885,7 +4116,7 @@ def on_item_update(doc, method):
 							queue="long",
 							timeout=1800,
 							enqueue_after_commit=True,
-							job_id=f"woo_publish_{leader_woo.name}",
+							job_id=f"woo_publish_{leader_woo.name}_noimg",
 							deduplicate=True,
 						)
 			else:
@@ -3901,7 +4132,7 @@ def on_item_update(doc, method):
 							queue="long",
 							timeout=1800,
 							enqueue_after_commit=True,
-							job_id=f"woo_publish_{parent_woo.name}",
+							job_id=f"woo_publish_{parent_woo.name}_noimg",
 							deduplicate=True,
 						)
 
@@ -3950,13 +4181,15 @@ def on_item_update(doc, method):
 				woo_item.save(ignore_permissions=True)
 				frappe.db.commit()
 
+				# Bug 6: image-aware job_id prevents no-image job from deduplicating an image-sync job.
+				_img_sfx = "img" if image_changed else "noimg"
 				frappe.enqueue(
 					"woo_prime.woo_prime.doctype.woo_item.woo_item._publish_single_woo_item_worker",
 					woo_item_name=woo_item.name,
 					user=frappe.session.user,
 					queue="long",
 					timeout=1800,
-					job_id=f"woo_publish_{woo_item.name}",
+					job_id=f"woo_publish_{woo_item.name}_{_img_sfx}",
 					deduplicate=True,
 					sync_images=image_changed,
 				)
@@ -3966,6 +4199,58 @@ def on_item_update(doc, method):
 
 	except Exception as e:
 		frappe.log_error(title=f"Item Auto Sync Hook Exception - {doc.name}", message=str(e))
+
+
+def on_item_rename(doc, method, old_name, new_name, merge=False):
+	"""Bug 8 — Rename drift: keep Woo Item SKU in sync when an Item is renamed.
+
+	Rules:
+	- If the Woo Item is NOT yet published (woo_product_id == 0 / published == 0):
+	  update sku and item_code to match new_name so they don't drift.
+	- If already published to WooCommerce: do NOT auto-rename (risks breaking the live
+	  WooCommerce product); instead log a warning so the user can decide.
+	- For merge renames: skip entirely (the old Woo Item should stay on the surviving item).
+	"""
+	if merge:
+		return
+	try:
+		woo_item_name = frappe.db.get_value("Woo Item", {"item_code": old_name})
+		if not woo_item_name:
+			woo_item_name = frappe.db.get_value("Woo Item", {"sku": old_name})
+		if not woo_item_name:
+			return
+
+		is_published = frappe.db.get_value("Woo Item", woo_item_name, "published")
+		if is_published:
+			# Already live — warn, do not change
+			msg = (
+				f"Item '{old_name}' was renamed to '{new_name}' but its Woo Item "
+				f"('{woo_item_name}') is already published to WooCommerce. "
+				f"SKU/item_code have NOT been updated automatically to avoid breaking "
+				f"the live product. Please update the SKU manually in Woo Item if needed."
+			)
+			frappe.logger("woo_prime").warning(msg)
+			from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
+			create_log(
+				sync_type="Item",
+				direction="Outgoing",
+				status="Warning",
+				reference_doctype="Woo Item",
+				reference_name=woo_item_name,
+				error_message=msg,
+			)
+			return
+
+		# Not published — safe to update sku + item_code
+		frappe.db.set_value("Woo Item", woo_item_name, {
+			"item_code": new_name,
+			"sku": new_name,
+		}, update_modified=False)
+		frappe.logger("woo_prime").info(
+			f"Woo Item '{woo_item_name}': sku/item_code updated from '{old_name}' to '{new_name}' after Item rename."
+		)
+	except Exception as e:
+		frappe.log_error(title=f"Woo Item Rename Sync Exception - {old_name}->{new_name}", message=str(e))
 
 
 def sync_all_items():

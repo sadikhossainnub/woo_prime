@@ -253,6 +253,14 @@ class WooItem(Document):
 		self.save(ignore_permissions=True)
 		return {"status": "success", "count": len(self.item_attributes or [])}
 
+	def after_insert(self):
+		"""Clear tombstone when a Woo Item is explicitly created or restored (Item 2)."""
+		try:
+			from woo_prime.woo_prime.doctype.woo_ignored_item.woo_ignored_item import remove_tombstone
+			remove_tombstone(item_code=self.item_code, sku=self.sku)
+		except Exception:
+			pass
+
 	def on_update(self):
 		"""Auto-sync to WooCommerce when Woo Item is updated."""
 		if getattr(self.flags, "in_woo_sync", False) or getattr(frappe.flags, "in_test", False):
@@ -316,39 +324,114 @@ class WooItem(Document):
 
 		try:
 			result = publish_item_to_woo(self, sync_images=getattr(self.flags, "sync_images", None))
+			woo_id = result.get("id") if isinstance(result, dict) else None
+			if woo_id:
+				self.woo_product_id = woo_id
+				self.published = 1
+				permalink = result.get("permalink", "")
+				if permalink:
+					self.woo_product_url = html.unescape(permalink)
+				# Persist critical IDs immediately using db_set before full document save
+				# This prevents losing woo_product_id if save() encounters a lock timeout (Item 5)
+				try:
+					self.db_set("woo_product_id", woo_id, update_modified=False)
+					self.db_set("published", 1, update_modified=False)
+					if self.woo_product_url:
+						self.db_set("woo_product_url", self.woo_product_url, update_modified=False)
+				except Exception as db_set_err:
+					frappe.logger("woo_prime").debug(f"Immediate db_set notice: {db_set_err}")
+
 			try:
 				self.reload()
 			except Exception:
 				pass
-			self.woo_product_id = result.get("id")
-			self.published = 1
-			permalink = result.get("permalink", "")
-			self.woo_product_url = html.unescape(permalink) if permalink else ""
-			self.sync_status = "Synced"
+
+			if woo_id:
+				self.woo_product_id = woo_id
+				self.published = 1
+				permalink = result.get("permalink", "")
+				if permalink:
+					self.woo_product_url = html.unescape(permalink)
+
+			# Keep the status computed by the inner publish (Item 4)
+			inner_status = result.get("sync_status") if isinstance(result, dict) else None
+			self.sync_status = inner_status or self.sync_status or "Synced"
 			self.last_synced = now_datetime()
 			self.flags.in_woo_sync = True
-			self.save(ignore_permissions=True)
+			self.flags.ignore_version = True
 
-			# Log success
+			# Save with retry on lock wait timeout (Item 5)
+			for attempt in range(3):
+				try:
+					self.save(ignore_permissions=True)
+					break
+				except Exception as save_err:
+					if ("1205" in str(save_err) or "Lock wait timeout" in str(save_err)) and attempt < 2:
+						import time
+						time.sleep(0.5 * (attempt + 1))
+						try:
+							self.reload()
+						except Exception:
+							pass
+						self.woo_product_id = woo_id
+						self.published = 1
+						self.sync_status = inner_status or self.sync_status or "Synced"
+						self.flags.in_woo_sync = True
+						self.flags.ignore_version = True
+					else:
+						raise
+
+			# Clear tombstone on explicit user publish (Item 2)
+			try:
+				from woo_prime.woo_prime.doctype.woo_ignored_item.woo_ignored_item import remove_tombstone
+				remove_tombstone(item_code=self.item_code, sku=self.sku)
+			except Exception:
+				pass
+
+			# Log outcome according to sync_status (Item 4)
+			log_status = "Success"
+			if self.sync_status == "Partial":
+				log_status = "Warning"
+			elif self.sync_status == "Error":
+				log_status = "Failed"
+
 			create_sync_log(
 				sync_type="Item",
 				direction="Outgoing",
-				status="Success",
+				status=log_status,
 				reference_doctype="Woo Item",
 				reference_name=self.name,
-				woo_reference_id=str(self.woo_product_id),
+				woo_reference_id=str(self.woo_product_id or ""),
 				request_data={"item_code": self.item_code, "sku": self.sku, "item_name": self.item_name},
 				response_data=result if isinstance(result, dict) else {"woo_product_id": self.woo_product_id, "url": self.woo_product_url},
 			)
 
-			msg = _("✅ Product '{0}' published to WooCommerce successfully!<br>Product ID: <b>{1}</b>").format(
-				self.item_name or self.name, self.woo_product_id
-			)
+			synced_cnt = result.get("synced_variants_count") if isinstance(result, dict) else None
+			exp_cnt = result.get("expected_variants_count") if isinstance(result, dict) else None
+
+			if self.sync_status == "Partial":
+				msg = _("⚠️ Template '{0}' published to WooCommerce (ID: {1}), but only {2}/{3} variants synced.<br>Check Woo Sync Log for details.").format(
+					self.item_name or self.name, self.woo_product_id, synced_cnt or 0, exp_cnt or 0
+				)
+				if frappe.request and not frappe.flags.in_test:
+					frappe.msgprint(msg, title=_("Partially Synced"), indicator="orange")
+			elif self.sync_status == "Error":
+				msg = _("⚠️ Product '{0}' published to WooCommerce (ID: {1}), but no variants were synced.<br>Check Woo Sync Log for details.").format(
+					self.item_name or self.name, self.woo_product_id
+				)
+				if frappe.request and not frappe.flags.in_test:
+					frappe.msgprint(msg, title=_("Sync Warning"), indicator="red")
+			else:
+				msg = _("✅ Product '{0}' published to WooCommerce successfully!<br>Product ID: <b>{1}</b>").format(
+					self.item_name or self.name, self.woo_product_id
+				)
+				if frappe.request and not frappe.flags.in_test:
+					frappe.msgprint(msg, title=_("Published"), indicator="green")
 
 			_publish_item_progress(
 				user=user,
 				operation="publish_item",
-				status="completed",
+				status="completed" if self.sync_status == "Synced" else "warning",
 				message=msg,
 				woo_item_name=self.name,
 				item_code=self.item_code,
@@ -357,11 +440,9 @@ class WooItem(Document):
 				woo_product_url=self.woo_product_url,
 			)
 
-			if frappe.request and not frappe.flags.in_test:
-				frappe.msgprint(msg, title=_("Published"), indicator="green")
-
 			return {
-				"status": "success",
+				"status": "partial" if self.sync_status == "Partial" else ("error" if self.sync_status == "Error" else "success"),
+				"sync_status": self.sync_status,
 				"woo_product_id": self.woo_product_id,
 				"woo_product_url": self.woo_product_url,
 				"woo_item_name": self.name,

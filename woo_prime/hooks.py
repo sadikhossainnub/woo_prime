@@ -156,7 +156,8 @@ doc_events = {
 		"on_update": "woo_prime.api.sync.on_item_price_update"
 	},
 	"Item": {
-		"on_update": "woo_prime.api.sync.on_item_update"
+		"on_update": "woo_prime.api.sync.on_item_update",
+		"after_rename": "woo_prime.api.sync.on_item_rename",
 	},
 	"Sales Order": {
 		"on_submit": "woo_prime.api.sync.on_sales_order_status_change",
