@@ -149,6 +149,12 @@ class WooAPI:
 			# Log the outgoing request
 			safe_params = {k: v for k, v in req_params.items() if k not in ("consumer_key", "consumer_secret")}
 			logger.info(f"[WooAPI] {method} → {url} | params={safe_params} | rest_route={use_rest} | query_auth={use_query} | timeout={req_timeout}")
+			if data:
+				try:
+					import json
+					logger.info(f"[WooAPI Payload] {method} {endpoint}:\n{json.dumps(data, indent=2, ensure_ascii=False)}")
+				except Exception:
+					logger.info(f"[WooAPI Payload] {method} {endpoint}: {data}")
 
 			resp = self.session.request(
 				method=method,
