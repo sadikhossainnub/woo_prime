@@ -129,7 +129,7 @@ def _is_within_sync_window():
 		within_window = now >= start_time or now <= end_time
 	
 	if not within_window:
-		logger = frappe.logger("woo_prime", allow_site=True, max_size=1, file_count=50)
+		logger = frappe.logger("woo_prime", allow_site=True, max_size=10_000_000, file_count=50)
 		logger.info(
 			f"[SyncWindow] Outside sync window (current: {now.strftime('%H:%M:%S')}, "
 			f"window: {start_time.strftime('%H:%M:%S')} - {end_time.strftime('%H:%M:%S')}). "
@@ -349,7 +349,7 @@ def sync_categories_from_woo_background(user=None):
 			"total_synced": 0
 		}
 	
-	logger = frappe.logger("woo_prime", allow_site=True, max_size=1, file_count=50)
+	logger = frappe.logger("woo_prime", allow_site=True, max_size=10_000_000, file_count=50)
 	
 	# Send initial progress notification
 	_publish_progress_category(

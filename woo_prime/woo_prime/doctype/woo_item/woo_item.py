@@ -1232,7 +1232,7 @@ def _is_within_sync_window(now_val=None, start_val=None, end_val=None):
 		within_window = now >= start_time or now <= end_time
 
 	if not within_window:
-		logger = frappe.logger("woo_prime", allow_site=True, max_size=1, file_count=50)
+		logger = frappe.logger("woo_prime", allow_site=True, max_size=10_000_000, file_count=50)
 		logger.info(
 			f"[SyncWindow] Outside sync window (current: {now.strftime('%H:%M:%S')}, "
 			f"window: {start_time.strftime('%H:%M:%S')} - {end_time.strftime('%H:%M:%S')}). "
@@ -1760,7 +1760,7 @@ def fetch_items_from_woocommerce(auto_create_missing=False, batch_size=10, skip_
 	if not default_item_group:
 		default_item_group = frappe.db.get_value("Item Group", {"is_group": 0}, "name") or "All Item Groups"
 
-	logger = frappe.logger("woo_prime", allow_site=True, max_size=1, file_count=50)
+	logger = frappe.logger("woo_prime", allow_site=True, max_size=10_000_000, file_count=50)
 	api = get_woo_api()
 	page = 1
 	total_fetched = 0
@@ -1961,7 +1961,7 @@ def fetch_items_from_woocommerce_background(
 		}
 
 	# Initialize logger with site-specific logging
-	logger = frappe.logger("woo_prime", allow_site=True, max_size=1, file_count=50)
+	logger = frappe.logger("woo_prime", allow_site=True, max_size=10_000_000, file_count=50)
 	
 	# Load Woo Settings and get default Item Group
 	settings = frappe.get_single("Woo Settings")

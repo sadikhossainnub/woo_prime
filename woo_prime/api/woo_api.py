@@ -122,7 +122,7 @@ class WooAPI:
 		if data is not None:
 			headers["Content-Type"] = "application/json"
 
-		logger = frappe.logger("woo_prime", allow_site=True, max_size=1, file_count=50)
+		logger = frappe.logger("woo_prime", allow_site=True, max_size=10_000_000, file_count=50)
 		req_timeout = timeout or self.timeout
 
 		def make_call(use_rest, use_query):
@@ -152,9 +152,12 @@ class WooAPI:
 			if data:
 				try:
 					import json
-					logger.info(f"[WooAPI Payload] {method} {endpoint}:\n{json.dumps(data, indent=2, ensure_ascii=False)}")
+					payload_str = json.dumps(data, indent=2, ensure_ascii=False)
+					logger.info(f"[WooAPI Payload] {method} {endpoint}:\n{payload_str}")
+					print(f"\n[WooAPI] {method} {endpoint}:\n{payload_str}\n", flush=True)
 				except Exception:
 					logger.info(f"[WooAPI Payload] {method} {endpoint}: {data}")
+					print(f"\n[WooAPI] {method} {endpoint}: {data}\n", flush=True)
 
 			resp = self.session.request(
 				method=method,

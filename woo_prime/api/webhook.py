@@ -125,7 +125,7 @@ def verify_webhook_signature(payload):
 	"""
 	settings = frappe.get_single("Woo Settings")
 	webhook_secret = settings.get_password("webhook_secret")
-	logger = frappe.logger("woo_prime", allow_site=True, max_size=1, file_count=50)
+	logger = frappe.logger("woo_prime", allow_site=True, max_size=10_000_000, file_count=50)
 
 	if not webhook_secret or not webhook_secret.strip():
 		logger.warning("[Webhook] Signature verification failed: webhook_secret not configured")
@@ -239,14 +239,14 @@ def process_webhook_product(product_data):
 				from frappe.utils import get_datetime
 				elapsed = (now_datetime() - get_datetime(last_synced)).total_seconds()
 				if elapsed < 60:
-					logger = frappe.logger("woo_prime", allow_site=True, max_size=1, file_count=50)
+					logger = frappe.logger("woo_prime", allow_site=True, max_size=10_000_000, file_count=50)
 					logger.info(
 						f"[Webhook] Skipping product {woo_id} echo (last_synced {elapsed:.1f}s ago)"
 					)
 					return
 
 	default_item_group = getattr(settings, "default_item_group", None) or "All Item Groups"
-	logger = frappe.logger("woo_prime", allow_site=True, max_size=1, file_count=50)
+	logger = frappe.logger("woo_prime", allow_site=True, max_size=10_000_000, file_count=50)
 
 	_process_single_product(
 		prod=product_data,
