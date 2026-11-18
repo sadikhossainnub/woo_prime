@@ -2353,6 +2353,7 @@ def _publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings
 		return None
 
 	res = None
+	image_sent = "image" in var_data
 	try:
 		if child_woo_item.woo_product_id:
 			try:
@@ -2371,6 +2372,7 @@ def _publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings
 		# Image resilience: if failure occurred with image payload, retry without image
 		if "image" in var_data:
 			frappe.logger("woo_prime").warning(f"Variation creation failed with image for {sku}, retrying without image: {exc}")
+			image_sent = False
 			no_img_data = dict(var_data)
 			no_img_data.pop("image", None)
 			try:
@@ -2412,7 +2414,7 @@ def _publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings
 		child_woo_item.last_synced = now_datetime()
 		child_woo_item.flags.in_woo_sync = True
 		child_woo_item.save(ignore_permissions=True)
-		_cache_product_images_from_response(v_item, child_woo_item, res)
+		_cache_product_images_from_response(v_item, child_woo_item, res, images_sent=image_sent)
 	return res
 
 
@@ -2435,8 +2437,10 @@ def _cache_wp_media_id(path, media_id):
 	frappe.cache().set_value(cache_key, int(media_id))
 
 
-def _cache_product_images_from_response(item, woo_item, result):
+def _cache_product_images_from_response(item, woo_item, result, images_sent=False):
 	"""Cache WordPress media attachment IDs returned from WooCommerce to avoid duplicate uploads."""
+	if not images_sent:
+		return
 	if not result or not isinstance(result, dict):
 		return
 	try:
