@@ -376,12 +376,11 @@
    "read_only": 1
   },
   {
-   "description": "Choose how to publish this item on WooCommerce:\n• Simple Item: Publish as simple product\n• Blank: Auto-detect based on item type. (Note: To publish variants as separate products, use 'Separate Product' mode and Woo Variant Group).",
+   "description": "Choose how to publish this item on WooCommerce:\n\u2022 Simple Item: Publish as simple product\n\u2022 Blank: Auto-detect based on item type. (Note: To publish variants as separate products, use 'Separate Product' mode and Woo Variant Group).",
    "fieldname": "woo_product_type",
    "fieldtype": "Select",
    "label": "WooCommerce Product Type",
-   "options": "\nSimple Item\nVariant Item",
-   "depends_on": "eval:!doc.has_variants && !doc.variant_of"
+   "options": "\nSimple Item\nVariant Item"
   },
   {
    "depends_on": "eval:doc.has_variants",

@@ -44,19 +44,20 @@ class WooItem(Document):
 					if self.woo_product_type == "Variant Item":
 						frappe.throw(_("'Variant Item' is not allowed for variants. Use 'Separate Product' mode to create an independent variable product group."))
 
-				# Always enforce stock management rules:
+				# Stock management rules (honor user choice; only set defaults on new docs):
 				if self.has_variants:
 					# Template Variable Product: stock NEVER on parent, always variation-level
 					self.manage_stock = 0
-					self.manage_variation_stock = 1
+					if self.is_new() and getattr(self, "manage_variation_stock", None) is None:
+						self.manage_variation_stock = 1
 				elif self.variant_of:
-					# Variant: variation-level stock
-					self.manage_stock = 1
 					self.manage_variation_stock = 0
+					if self.is_new() and getattr(self, "manage_stock", None) is None:
+						self.manage_stock = 1
 				else:
-					# Simple Product: parent-level stock
-					self.manage_stock = 1
 					self.manage_variation_stock = 0
+					if self.is_new() and getattr(self, "manage_stock", None) is None:
+						self.manage_stock = 1
 
 			# Fetch item_name if not set
 			if not self.item_name:
