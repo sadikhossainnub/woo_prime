@@ -23,6 +23,48 @@ frappe.listview_settings["Item"].onload = function (listview) {
 		});
 	}, __("WooCommerce"));
 
+	listview.page.add_inner_button(__("Fetch by SKU"), function () {
+		frappe.prompt(
+			[
+				{
+					fieldname: "sku",
+					fieldtype: "Data",
+					label: __("WooCommerce SKU"),
+					reqd: 1,
+				},
+				{
+					fieldname: "auto_create_missing",
+					fieldtype: "Check",
+					label: __("Auto-create ERPNext Item if not matched"),
+					default: 1,
+				},
+			],
+			function (values) {
+				frappe.call({
+					method: "woo_prime.woo_prime.doctype.woo_item.woo_item.fetch_single_item_by_sku",
+					args: {
+						sku: values.sku,
+						auto_create_missing: values.auto_create_missing,
+					},
+					freeze: true,
+					freeze_message: __("Fetching product from WooCommerce by SKU..."),
+					callback: function (r) {
+						if (r.message && r.message.status === "success") {
+							frappe.msgprint({
+								title: __("Fetched Successfully"),
+								message: r.message.message,
+								indicator: "green",
+							});
+							listview.refresh();
+						}
+					},
+				});
+			},
+			__("Fetch Single Product from WooCommerce"),
+			__("Fetch")
+		);
+	}, __("WooCommerce"));
+
 	listview.page.add_inner_button(__("Auto Link Woo Items by SKU"), function () {
 		frappe.call({
 			method: "woo_prime.woo_prime.doctype.woo_item.woo_item.auto_link_unlinked_items",

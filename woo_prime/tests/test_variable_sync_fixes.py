@@ -47,6 +47,8 @@ class TestVariableSyncFixes(unittest.TestCase):
 		import frappe
 		frappe.local = types.SimpleNamespace()
 		frappe.db.exists.return_value = False
+		frappe.get_all.side_effect = None
+		frappe.get_all.return_value = []
 
 	def test_resolve_price_list_prefers_website_price_list(self):
 		settings = types.SimpleNamespace(
@@ -230,6 +232,68 @@ class TestVariableSyncFixes(unittest.TestCase):
 			self.assertEqual(res.get("failed"), 0)
 			self.assertTrue(getattr(mock_doc.flags, "ignore_version", False))
 			mock_pub.assert_called_once_with(mock_doc, sync_images=0)
+
+	def test_get_item_images_falls_back_to_variant_image(self):
+		"""Template item with no direct image falls back to first variant's image."""
+		import frappe
+		from woo_prime.api.sync import _get_item_images
+
+		item = types.SimpleNamespace(
+			name="TP00172",
+			image=None,
+			has_variants=1
+		)
+		woo_item = types.SimpleNamespace(
+			name="WOO-TP00172",
+			image=None,
+			images=[]
+		)
+
+		frappe.db.get_value.return_value = "/files/variant_kurti.jpg"
+		frappe.get_all.return_value = []
+		frappe.conf = types.SimpleNamespace(get=lambda k: "https://dressup.com.bd")
+		frappe.cache().get_value.return_value = None
+
+		images = _get_item_images(item, woo_item)
+		self.assertTrue(len(images) > 0)
+		self.assertIn("variant_kurti.jpg", images[0]["src"])
+
+	def test_fetch_single_item_by_sku_success(self):
+		"""fetch_single_item_by_sku retrieves product from WooCommerce and syncs it."""
+		import frappe
+		from woo_prime.woo_prime.doctype.woo_item.woo_item import fetch_single_item_by_sku
+
+		mock_api = MagicMock()
+		mock_resp = MagicMock()
+		mock_resp.status_code = 200
+		mock_resp.json.return_value = [{
+			"id": 99999,
+			"sku": "TEST-SKU-001",
+			"name": "Test Kurti",
+			"permalink": "https://dressup.com.bd/test",
+			"regular_price": "1200",
+			"sale_price": "1000",
+			"manage_stock": True,
+			"type": "simple",
+			"images": [{"src": "https://dressup.com.bd/files/test.jpg"}]
+		}]
+		mock_api.get.return_value = mock_resp
+
+		mock_doc = MagicMock()
+		mock_doc.name = "WOO-TEST-SKU-001"
+		mock_doc.item_code = "TEST-SKU-001"
+		mock_doc.sync_status = "Synced"
+		mock_doc.flags = types.SimpleNamespace()
+
+		frappe.db.get_value.return_value = "TEST-SKU-001"
+		frappe.db.exists.return_value = True
+		frappe.get_doc.return_value = mock_doc
+
+		with patch("woo_prime.woo_prime.doctype.woo_settings.woo_settings.get_woo_api", return_value=mock_api):
+			res = fetch_single_item_by_sku("TEST-SKU-001")
+			self.assertEqual(res.get("status"), "success")
+			self.assertEqual(res.get("sku"), "TEST-SKU-001")
+			self.assertEqual(res.get("woo_product_id"), 99999)
 
 
 if __name__ == "__main__":

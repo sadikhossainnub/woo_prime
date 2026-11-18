@@ -2359,7 +2359,7 @@ def _get_item_images(item, woo_item=None, api=None, settings=None):
 		
 		cached_media_id = _get_cached_wp_media_id(path)
 		if cached_media_id:
-			img_dict = {"id": int(cached_media_id)}
+			img_dict = {"id": int(cached_media_id), "src": url}
 		else:
 			img_dict = {"src": url}
 		if caption:
@@ -2367,8 +2367,24 @@ def _get_item_images(item, woo_item=None, api=None, settings=None):
 		images.append(img_dict)
 
 	# 1. Primary image (Woo Item image takes priority if manually uploaded, fallback to Item.image)
-	primary_image = getattr(woo_item, "image", None) or item.image
-	process_image(primary_image)
+	primary_image = getattr(woo_item, "image", None) or getattr(item, "image", None)
+
+	# If template item has no main image, fallback to image of its first variant
+	if not primary_image and getattr(item, "has_variants", 0):
+		var_img = frappe.db.get_value("Item", {"variant_of": item.name, "disabled": 0, "image": ["!=", ""]}, "image")
+		if not var_img and woo_item:
+			var_img = frappe.db.get_value("Woo Item", {"variant_of": item.name, "image": ["!=", ""]}, "image")
+		if var_img:
+			primary_image = var_img
+			if woo_item and not getattr(woo_item, "image", None):
+				try:
+					woo_item.image = var_img
+					woo_item.db_set("image", var_img)
+				except Exception:
+					pass
+
+	if primary_image:
+		process_image(primary_image)
 
 	# 2. Child Table images from Woo Item `images` table
 	if woo_item and hasattr(woo_item, "images") and woo_item.images:
@@ -2377,7 +2393,7 @@ def _get_item_images(item, woo_item=None, api=None, settings=None):
 			caption = getattr(row, "caption", None)
 			process_image(img_path, caption)
 
-	# 3. Additional attached images (Gallery) from File doctype
+	# 3. Additional attached images (Gallery) from File doctype (Item and Woo Item)
 	attached_files = frappe.get_all(
 		"File",
 		filters={
@@ -2387,13 +2403,32 @@ def _get_item_images(item, woo_item=None, api=None, settings=None):
 		fields=["file_url"],
 		order_by="creation asc"
 	)
+	if woo_item and getattr(woo_item, "name", None):
+		woo_attached = frappe.get_all(
+			"File",
+			filters={
+				"attached_to_doctype": "Woo Item",
+				"attached_to_name": woo_item.name,
+			},
+			fields=["file_url"],
+			order_by="creation asc"
+		)
+		attached_files.extend(woo_attached)
 
 	for f in attached_files:
-		file_url = f.get("file_url")
+		file_url = f.get("file_url") if isinstance(f, dict) else (getattr(f, "file_url", None) or (f if isinstance(f, str) else None))
 		if not file_url:
 			continue
 		ext = file_url.lower().rsplit(".", 1)[-1] if "." in file_url else ""
 		if ext in ("jpg", "jpeg", "png", "gif", "webp", "svg"):
+			if not primary_image:
+				primary_image = file_url
+				if woo_item and not getattr(woo_item, "image", None):
+					try:
+						woo_item.image = file_url
+						woo_item.db_set("image", file_url)
+					except Exception:
+						pass
 			process_image(file_url)
 
 	return images
@@ -4136,6 +4171,52 @@ def diagnose_template_publish(item_code):
 		"parent_woo_id": parent_woo_id,
 		"resolved_price_list": price_list,
 		"diagnostic_results": results
+	}
+
+
+@frappe.whitelist()
+def diagnose_item_images(item_code):
+	"""Diagnose product image resolution and WooCommerce sync for an item."""
+	frappe.only_for(["System Manager", "Woo Manager", "Website Manager"])
+	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
+	api = get_woo_api()
+	settings = frappe.get_single("Woo Settings")
+
+	item = frappe.get_doc("Item", item_code)
+	woo_item_name = frappe.db.get_value("Woo Item", {"item_code": item_code})
+	woo_item = frappe.get_doc("Woo Item", woo_item_name) if woo_item_name else None
+
+	item_files = frappe.get_all("File", filters={"attached_to_doctype": "Item", "attached_to_name": item_code}, fields=["name", "file_url"])
+	woo_files = frappe.get_all("File", filters={"attached_to_doctype": "Woo Item", "attached_to_name": woo_item_name}, fields=["name", "file_url"]) if woo_item_name else []
+
+	payload_images = _get_item_images(item, woo_item, api, settings)
+
+	woo_product_data = None
+	if woo_item and woo_item.woo_product_id:
+		try:
+			resp = api.get(f"products/{woo_item.woo_product_id}")
+			if resp.status_code == 200:
+				woo_product_data = {
+					"id": resp.json().get("id"),
+					"name": resp.json().get("name"),
+					"images": resp.json().get("images"),
+				}
+			else:
+				woo_product_data = {"status_code": resp.status_code, "text": resp.text[:300]}
+		except Exception as e:
+			woo_product_data = {"error": str(e)}
+
+	return {
+		"item_code": item_code,
+		"item_image": item.image,
+		"woo_item_image": getattr(woo_item, "image", None) if woo_item else None,
+		"has_variants": item.has_variants,
+		"variant_of": item.variant_of,
+		"item_attached_files": item_files,
+		"woo_item_attached_files": woo_files,
+		"prepared_images_payload": payload_images,
+		"woo_product_id": getattr(woo_item, "woo_product_id", None) if woo_item else None,
+		"live_woo_product_images": woo_product_data,
 	}
 
 

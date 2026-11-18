@@ -322,6 +322,22 @@ class WooAPI:
 			return response.json()
 
 		if self._is_image_error(response):
+			images = product_data.get("images")
+			if images and isinstance(images, list):
+				src_images = []
+				for img in images:
+					if isinstance(img, dict) and img.get("src"):
+						clean_dict = {"src": img["src"]}
+						if img.get("alt"):
+							clean_dict["alt"] = img["alt"]
+						src_images.append(clean_dict)
+				if src_images:
+					retry_src_data = dict(product_data)
+					retry_src_data["images"] = src_images
+					src_retry = self.post("products", data=retry_src_data)
+					if src_retry.status_code in (200, 201):
+						return src_retry.json()
+
 			retry = self.post("products", data=self._strip_images(product_data))
 			if retry.status_code in (200, 201):
 				frappe.log_error(
@@ -422,6 +438,22 @@ class WooAPI:
 		if response.status_code == 404 and _retry_create:
 			return self.create_product(product_data)
 		if self._is_image_error(response):
+			images = product_data.get("images")
+			if images and isinstance(images, list):
+				src_images = []
+				for img in images:
+					if isinstance(img, dict) and img.get("src"):
+						clean_dict = {"src": img["src"]}
+						if img.get("alt"):
+							clean_dict["alt"] = img["alt"]
+						src_images.append(clean_dict)
+				if src_images:
+					retry_src_data = dict(product_data)
+					retry_src_data["images"] = src_images
+					src_retry = self.put(f"products/{product_id}", data=retry_src_data)
+					if src_retry.status_code == 200:
+						return src_retry.json()
+
 			# Image URL unreachable – retry without images so other fields still sync
 			retry = self.put(f"products/{product_id}", data=self._strip_images(product_data))
 			if retry.status_code == 200:

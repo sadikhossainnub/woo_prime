@@ -13,7 +13,7 @@ frappe.ui.form.on("Item", {
 						function () {
 							frappe.call({
 								method: "woo_prime.woo_prime.doctype.woo_item.woo_item.publish_item_from_item_master",
-								args: { item_code: frm.doc.name, background: true },
+								args: { item_code: frm.doc.name, background: true, sync_images: 1 },
 								callback: function (r) {
 									if (r && r.message) {
 										frappe.show_alert({
@@ -24,6 +24,54 @@ frappe.ui.form.on("Item", {
 								},
 							});
 						}
+					);
+				},
+				__("WooCommerce")
+			);
+
+			frm.add_custom_button(
+				__("Fetch from WooCommerce by SKU"),
+				function () {
+					let default_sku = frm.doc.item_code || frm.doc.name || "";
+					frappe.prompt(
+						[
+							{
+								fieldname: "sku",
+								fieldtype: "Data",
+								label: __("WooCommerce SKU"),
+								default: default_sku,
+								reqd: 1,
+							},
+							{
+								fieldname: "auto_create_missing",
+								fieldtype: "Check",
+								label: __("Auto-create ERPNext Item if not matched"),
+								default: 0,
+							},
+						],
+						function (values) {
+							frappe.call({
+								method: "woo_prime.woo_prime.doctype.woo_item.woo_item.fetch_single_item_by_sku",
+								args: {
+									sku: values.sku,
+									auto_create_missing: values.auto_create_missing,
+								},
+								freeze: true,
+								freeze_message: __("Fetching product from WooCommerce by SKU..."),
+								callback: function (r) {
+									if (r.message && r.message.status === "success") {
+										frappe.msgprint({
+											title: __("Fetched Successfully"),
+											message: r.message.message,
+											indicator: "green",
+										});
+										frm.reload_doc();
+									}
+								},
+							});
+						},
+						__("Fetch Product by SKU"),
+						__("Fetch")
 					);
 				},
 				__("WooCommerce")

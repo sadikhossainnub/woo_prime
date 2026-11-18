@@ -128,6 +128,54 @@ frappe.ui.form.on("Woo Item", {
 			}
 
 			frm.add_custom_button(
+				__("Fetch by SKU from Woo"),
+				function () {
+					let default_sku = frm.doc.sku || frm.doc.item_code || "";
+					frappe.prompt(
+						[
+							{
+								fieldname: "sku",
+								fieldtype: "Data",
+								label: __("WooCommerce SKU"),
+								default: default_sku,
+								reqd: 1,
+							},
+							{
+								fieldname: "auto_create_missing",
+								fieldtype: "Check",
+								label: __("Auto-create ERPNext Item if not matched"),
+								default: 0,
+							},
+						],
+						function (values) {
+							frappe.call({
+								method: "woo_prime.woo_prime.doctype.woo_item.woo_item.fetch_single_item_by_sku",
+								args: {
+									sku: values.sku,
+									auto_create_missing: values.auto_create_missing,
+								},
+								freeze: true,
+								freeze_message: __("Fetching product from WooCommerce by SKU..."),
+								callback: function (r) {
+									if (r.message && r.message.status === "success") {
+										frappe.msgprint({
+											title: __("Fetched Successfully"),
+											message: r.message.message,
+											indicator: "green",
+										});
+										frm.reload_doc();
+									}
+								},
+							});
+						},
+						__("Fetch Product by SKU"),
+						__("Fetch")
+					);
+				},
+				__("Actions")
+			);
+
+			frm.add_custom_button(
 				__("Fetch Price from ERPNext"),
 				function () {
 					fetch_price_from_erpnext_handler(frm);
@@ -978,8 +1026,8 @@ frappe.listview_settings["Woo Item"] = {
 		return [__("Not Synced"), "grey", "sync_status,=,Not Synced"];
 	},
 	onload: function (listview) {
-		// 1. Fetch Products from WooCommerce
-		listview.page.add_inner_button(__("Fetch from WooCommerce"), function () {
+		// 1. Fetch Products from WooCommerce (Bulk)
+		listview.page.add_inner_button(__("Fetch All from WooCommerce"), function () {
 			frappe.call({
 				method: "woo_prime.woo_prime.doctype.woo_item.woo_item.fetch_items_from_woocommerce",
 				freeze: true,
@@ -988,6 +1036,49 @@ frappe.listview_settings["Woo Item"] = {
 					listview.refresh();
 				},
 			});
+		});
+
+		// 1b. Fetch Single Item by SKU
+		listview.page.add_inner_button(__("Fetch by SKU"), function () {
+			frappe.prompt(
+				[
+					{
+						fieldname: "sku",
+						fieldtype: "Data",
+						label: __("WooCommerce SKU"),
+						reqd: 1,
+					},
+					{
+						fieldname: "auto_create_missing",
+						fieldtype: "Check",
+						label: __("Auto-create ERPNext Item if not matched"),
+						default: 0,
+					},
+				],
+				function (values) {
+					frappe.call({
+						method: "woo_prime.woo_prime.doctype.woo_item.woo_item.fetch_single_item_by_sku",
+						args: {
+							sku: values.sku,
+							auto_create_missing: values.auto_create_missing,
+						},
+						freeze: true,
+						freeze_message: __("Fetching product from WooCommerce by SKU..."),
+						callback: function (r) {
+							if (r.message && r.message.status === "success") {
+								frappe.msgprint({
+									title: __("Fetched Successfully"),
+									message: r.message.message,
+									indicator: "green",
+								});
+								listview.refresh();
+							}
+						},
+					});
+				},
+				__("Fetch Single Product by SKU"),
+				__("Fetch")
+			);
 		});
 
 		// 2. Auto Link Unlinked Items by SKU

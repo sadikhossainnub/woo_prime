@@ -65,6 +65,12 @@ class WooItem(Document):
 			elif self.item_name:
 				self.item_name = html.unescape(self.item_name)
 
+			# Auto-sync image from Item if not set on Woo Item
+			if not getattr(self, "image", None):
+				item_img = frappe.db.get_value("Item", self.item_code, "image")
+				if item_img:
+					self.image = item_img
+
 			# Auto-fetch regular_price and evaluate Pricing Rule sale_price
 			settings = frappe.get_single("Woo Settings")
 			from woo_prime.api.sync import _get_item_price, _resolve_price_list
@@ -273,11 +279,13 @@ class WooItem(Document):
 			pass
 
 	@frappe.whitelist()
-	def publish_to_woocommerce(self, background=True, sync_images=None):
+	def publish_to_woocommerce(self, background=True, sync_images=True):
 		"""Create or update product on WooCommerce."""
 		frappe.only_for(["System Manager", "Woo Manager", "Website Manager"])
 		background = _parse_bool(background)
-		if sync_images is not None:
+		if sync_images is None:
+			sync_images = True
+		else:
 			sync_images = _parse_bool(sync_images)
 
 		if background:
@@ -606,11 +614,13 @@ class WooItem(Document):
 
 
 @frappe.whitelist()
-def publish_single_item(woo_item_name, background=False, sync_images=None):
+def publish_single_item(woo_item_name, background=False, sync_images=True):
 	"""Standalone whitelist method to publish a Woo Item without for_update lock."""
 	frappe.only_for(["System Manager", "Woo Manager", "Website Manager"])
 	background = _parse_bool(background)
-	if sync_images is not None:
+	if sync_images is None:
+		sync_images = True
+	else:
 		sync_images = _parse_bool(sync_images)
 	if not woo_item_name or not frappe.db.exists("Woo Item", woo_item_name):
 		frappe.throw(_("Woo Item {0} not found.").format(woo_item_name))
@@ -891,14 +901,17 @@ def bulk_publish(items, background=True):
 		return _bulk_publish_worker(items=items, user=frappe.session.user)
 
 
-def _publish_single_woo_item_worker(woo_item_name, user=None, sync_images=None):
+def _publish_single_woo_item_worker(woo_item_name, user=None, sync_images=True):
 	"""Background worker: publish a single Woo Item to WooCommerce."""
 	try:
 		if not frappe.db.exists("Woo Item", woo_item_name):
 			return
 		woo_item = frappe.get_doc("Woo Item", woo_item_name)
-		if sync_images is not None:
-			woo_item.flags.sync_images = _parse_bool(sync_images)
+		if sync_images is None:
+			sync_images = True
+		else:
+			sync_images = _parse_bool(sync_images)
+		woo_item.flags.sync_images = sync_images
 		_publish_item_progress(
 			user=user,
 			operation="publish_item",
@@ -1276,6 +1289,15 @@ def _process_single_product(prod, settings, default_item_group, auto_create_miss
 		woo_item.regular_price = reg_p
 	if sale_p > 0:
 		woo_item.sale_price = sale_p
+
+	# Set image if available
+	images = prod.get("images")
+	if images and isinstance(images, list) and len(images) > 0 and images[0].get("src"):
+		if not getattr(woo_item, "image", None):
+			woo_item.image = images[0]["src"]
+	elif prod.get("image") and isinstance(prod.get("image"), dict) and prod["image"].get("src"):
+		if not getattr(woo_item, "image", None):
+			woo_item.image = prod["image"]["src"]
 	
 	# Auto-link to ERPNext Item (Requirements 8.3, 8.4)
 	# Priority: woo_product_id → item_code/SKU match → exact name match → item_name (only if unique)
@@ -1339,6 +1361,240 @@ def _process_single_product(prod, settings, default_item_group, auto_create_miss
 					pass
 
 	return {"linked": linked, "created": created}
+
+
+def _process_single_variation(var, parent_id, settings, default_item_group, auto_create_missing, logger):
+	"""Process a single WooCommerce variation dictionary into a Woo Item."""
+	from frappe.utils import flt
+
+	var_id = var.get("id")
+	sku = (var.get("sku") or "").strip()
+	permalink = var.get("permalink", "")
+	description = html.unescape(var.get("description", "") or "")
+
+	if not sku:
+		sku = f"WC-{var_id}"
+
+	# Find existing Woo Item
+	existing_name = (
+		frappe.db.get_value("Woo Item", {"woo_product_id": var_id})
+		or frappe.db.get_value("Woo Item", {"sku": sku})
+		or (frappe.db.exists("Woo Item", sku) and sku)
+	)
+
+	if existing_name:
+		woo_item = frappe.get_doc("Woo Item", existing_name)
+	else:
+		woo_item = frappe.new_doc("Woo Item")
+		woo_item.sku = sku
+
+	woo_item.woo_product_id = var_id
+	woo_item.woo_product_url = html.unescape(permalink) if permalink else ""
+	woo_item.woo_description = description
+	woo_item.published = 1
+	woo_item.published_as = "template-variation"
+	woo_item.variant_publish_mode = "With Template"
+
+	if "manage_stock" in var:
+		woo_item.manage_stock = 1 if var.get("manage_stock") else 0
+
+	reg_p = flt(var.get("regular_price") or 0)
+	sale_p = flt(var.get("sale_price") or 0)
+	if reg_p > 0:
+		woo_item.regular_price = reg_p
+	if sale_p > 0:
+		woo_item.sale_price = sale_p
+
+	# Set image if available
+	img = var.get("image")
+	if img and isinstance(img, dict) and img.get("src"):
+		woo_item.image = img["src"]
+
+	# Resolve parent template in ERPNext
+	parent_woo_name = frappe.db.get_value("Woo Item", {"woo_product_id": parent_id})
+	parent_item_code = frappe.db.get_value("Woo Item", parent_woo_name, "item_code") if parent_woo_name else None
+	if parent_item_code:
+		woo_item.variant_of = parent_item_code
+
+	# Auto-link to ERPNext Item
+	matched_item = (
+		frappe.db.get_value("Item", {"item_code": sku}, "name")
+		or frappe.db.get_value("Item", {"name": sku}, "name")
+	)
+
+	if matched_item:
+		woo_item.item_code = matched_item
+		woo_item.sync_status = "Synced"
+	else:
+		if auto_create_missing and not frappe.db.exists("Item", sku):
+			try:
+				new_item = frappe.new_doc("Item")
+				new_item.item_code = sku
+				new_item.item_name = sku
+				new_item.item_group = default_item_group
+				new_item.stock_uom = "Nos"
+				new_item.is_stock_item = 1
+				if parent_item_code:
+					new_item.variant_of = parent_item_code
+				if description:
+					new_item.description = description
+				new_item.insert(ignore_permissions=True)
+				woo_item.item_code = new_item.name
+				woo_item.sync_status = "Synced"
+			except Exception as e:
+				logger.error(f"Failed to auto-create variant Item {sku}: {e}")
+				woo_item.sync_status = "Not Synced"
+		elif not woo_item.item_code:
+			woo_item.sync_status = "Not Synced"
+
+	woo_item.flags.in_woo_sync = True
+	woo_item.flags.ignore_version = True
+	woo_item.save(ignore_permissions=True)
+	return {"woo_item": woo_item.name, "sku": sku, "woo_product_id": var_id}
+
+
+@frappe.whitelist()
+def fetch_single_item_by_sku(sku, auto_create_missing=False):
+	"""Fetch a single product (or variation) from WooCommerce by SKU.
+
+	Args:
+		sku (str): WooCommerce SKU to search and import
+		auto_create_missing (bool): Whether to create ERPNext Item if not matched
+
+	Returns:
+		dict: Details of the fetched item (status, woo_item_name, item_code, etc.)
+	"""
+	frappe.only_for(["System Manager", "Woo Manager", "Website Manager"])
+	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
+	from woo_prime.woo_prime.doctype.woo_sync_log.woo_sync_log import create_log
+
+	if not sku or not str(sku).strip():
+		frappe.throw(_("Please provide a valid SKU."))
+
+	sku = str(sku).strip()
+	auto_create_missing = _parse_bool(auto_create_missing)
+	api = get_woo_api()
+	settings = frappe.get_single("Woo Settings")
+	default_item_group = getattr(settings, "default_item_group", None) or "All Item Groups"
+	logger = frappe.logger("woo_prime")
+
+	# 1. Search WooCommerce top-level products by SKU
+	prod = None
+	try:
+		resp = api.get("products", params={"sku": sku, "status": "any"})
+		if resp.status_code == 200 and resp.json():
+			prod = resp.json()[0]
+	except Exception as e:
+		logger.error(f"Error searching product by SKU '{sku}': {e}")
+
+	# 2. If not found in top-level products, search if SKU belongs to a variation
+	is_variation = False
+	parent_id = None
+	if not prod:
+		variant_of = (
+			frappe.db.get_value("Item", sku, "variant_of")
+			or frappe.db.get_value("Item", {"item_code": sku}, "variant_of")
+			or frappe.db.get_value("Woo Item", {"sku": sku}, "variant_of")
+		)
+		if variant_of:
+			parent_woo_id = (
+				frappe.db.get_value("Woo Item", {"item_code": variant_of}, "woo_product_id")
+				or frappe.db.get_value("Woo Item", variant_of, "woo_product_id")
+			)
+			if parent_woo_id:
+				try:
+					v_resp = api.get(f"products/{parent_woo_id}/variations", params={"sku": sku})
+					if v_resp.status_code == 200 and v_resp.json():
+						prod = v_resp.json()[0]
+						is_variation = True
+						parent_id = parent_woo_id
+				except Exception:
+					pass
+
+		# If still not found, search WooCommerce with general search query
+		if not prod:
+			try:
+				search_resp = api.get("products", params={"search": sku, "status": "any"})
+				if search_resp.status_code == 200 and search_resp.json():
+					for candidate in search_resp.json():
+						if (candidate.get("sku") or "").strip() == sku:
+							prod = candidate
+							break
+						if candidate.get("type") == "variable" and candidate.get("id"):
+							try:
+								v_resp = api.get(f"products/{candidate['id']}/variations", params={"sku": sku})
+								if v_resp.status_code == 200 and v_resp.json():
+									prod = v_resp.json()[0]
+									is_variation = True
+									parent_id = candidate["id"]
+									break
+							except Exception:
+								pass
+			except Exception as e:
+				logger.error(f"Error during general search for SKU '{sku}': {e}")
+
+	if not prod:
+		create_log(
+			sync_type="Item",
+			direction="Incoming",
+			status="Failed",
+			request_data={"sku": sku},
+			error_message=f"Product with SKU '{sku}' not found on WooCommerce.",
+		)
+		frappe.throw(_("No product or variation found on WooCommerce with SKU: {0}").format(sku))
+
+	# 3. Process the found product / variation
+	variation_count = 0
+	if is_variation:
+		_process_single_variation(prod, parent_id, settings, default_item_group, auto_create_missing, logger)
+	else:
+		_process_single_product(prod, settings, default_item_group, auto_create_missing, logger)
+		if prod.get("type") == "variable":
+			try:
+				var_resp = api.get(f"products/{prod['id']}/variations", params={"per_page": 100})
+				if var_resp.status_code == 200 and var_resp.json():
+					for v in var_resp.json():
+						_process_single_variation(v, prod["id"], settings, default_item_group, auto_create_missing, logger)
+						variation_count += 1
+			except Exception as var_err:
+				logger.warning(f"Failed to fetch variations for variable product {prod['id']}: {var_err}")
+
+	frappe.db.commit()
+
+	target_woo_id = prod.get("id")
+	woo_item_name = (
+		frappe.db.get_value("Woo Item", {"woo_product_id": target_woo_id})
+		or frappe.db.get_value("Woo Item", {"sku": sku})
+		or (frappe.db.exists("Woo Item", sku) and sku)
+	)
+	woo_item = frappe.get_doc("Woo Item", woo_item_name) if woo_item_name else None
+
+	create_log(
+		sync_type="Item",
+		direction="Incoming",
+		status="Success",
+		reference_doctype="Woo Item",
+		reference_name=woo_item.name if woo_item else None,
+		woo_reference_id=str(target_woo_id),
+		request_data={"sku": sku},
+		response_data={"woo_product_id": target_woo_id, "sku": prod.get("sku"), "name": prod.get("name")},
+	)
+
+	extra_msg = f" (including {variation_count} variations)" if variation_count > 0 else ""
+	return {
+		"status": "success",
+		"sku": sku,
+		"woo_product_id": target_woo_id,
+		"name": prod.get("name") or prod.get("sku") or sku,
+		"woo_item_name": woo_item.name if woo_item else None,
+		"item_code": woo_item.item_code if woo_item else None,
+		"is_variation": is_variation,
+		"variation_count": variation_count,
+		"sync_status": woo_item.sync_status if woo_item else None,
+		"message": _("Product <b>{0}</b> (SKU: {1}){2} fetched and synced successfully!").format(
+			prod.get("name") or sku, sku, extra_msg
+		),
+	}
 
 
 @frappe.whitelist()
@@ -2002,7 +2258,7 @@ def create_erpnext_items_from_woo(items):
 
 
 @frappe.whitelist()
-def publish_item_from_item_master(item_code, background=True):
+def publish_item_from_item_master(item_code, background=True, sync_images=True):
 	"""Publish an ERPNext Item to WooCommerce directly from the Item Master form.
 
 	Finds or auto-creates the linked Woo Item, then triggers publish_to_woocommerce.
@@ -2010,6 +2266,7 @@ def publish_item_from_item_master(item_code, background=True):
 	Args:
 		item_code: ERPNext Item code
 		background: If True, runs publish in background worker
+		sync_images: Whether to sync product images (defaults to True)
 
 	Returns:
 		dict with status, woo_product_id, woo_product_url, woo_item_name
@@ -2019,6 +2276,10 @@ def publish_item_from_item_master(item_code, background=True):
 		frappe.throw(_("Item {0} not found.").format(item_code))
 
 	background = _parse_bool(background)
+	if sync_images is None:
+		sync_images = True
+	else:
+		sync_images = _parse_bool(sync_images)
 	item = frappe.get_doc("Item", item_code)
 
 	# Find existing Woo Item linked to this item_code
@@ -2030,9 +2291,15 @@ def publish_item_from_item_master(item_code, background=True):
 
 	if woo_item_name:
 		woo_item = frappe.get_doc("Woo Item", woo_item_name)
-		# Ensure item_code is linked
+		# Ensure item_code and image are linked
+		changed = False
 		if not woo_item.item_code:
 			woo_item.item_code = item_code
+			changed = True
+		if item.image and not getattr(woo_item, "image", None):
+			woo_item.image = item.image
+			changed = True
+		if changed:
 			woo_item.save(ignore_permissions=True)
 	else:
 		# Auto-create a Woo Item for this ERPNext Item
@@ -2046,6 +2313,7 @@ def publish_item_from_item_master(item_code, background=True):
 		woo_item = frappe.new_doc("Woo Item")
 		woo_item.sku = item_code
 		woo_item.item_code = item_code
+		woo_item.image = item.image
 		woo_item.item_name = html.unescape(item.item_name or item_code)
 		woo_item.regular_price = flt(price) if price else 0
 		if item.description:
@@ -2062,25 +2330,18 @@ def publish_item_from_item_master(item_code, background=True):
 			timeout=1800,
 			enqueue_after_commit=True,
 			job_name=f"woo_publish_{woo_item.name}",
+			sync_images=sync_images,
 		)
 		msg = _("Publishing '{0}' to WooCommerce in the background...").format(item.item_name or item_code)
 		if frappe.request:
 			frappe.msgprint(msg, title=_("Publish Queued"), indicator="blue")
 		return {
 			"status": "queued",
-			"woo_item_name": woo_item.name,
-			"item_code": item_code,
 			"message": msg,
+			"woo_item_name": woo_item.name,
 		}
 	else:
-		woo_item._execute_publish_sync(user=frappe.session.user)
-		woo_item.reload()
-		return {
-			"status": "success",
-			"woo_product_id": woo_item.woo_product_id,
-			"woo_product_url": woo_item.woo_product_url or "",
-			"woo_item_name": woo_item.name,
-		}
+		return woo_item.publish_to_woocommerce(background=False, sync_images=sync_images)
 
 
 @frappe.whitelist()
