@@ -1372,14 +1372,43 @@ def _process_single_product(prod, settings, default_item_group, auto_create_miss
 	if sale_p > 0:
 		woo_item.sale_price = sale_p
 
-	# Set image if available
+	# Set images (Primary + Gallery) from WooCommerce
 	images = prod.get("images")
-	if images and isinstance(images, list) and len(images) > 0 and images[0].get("src"):
-		if not getattr(woo_item, "image", None):
-			woo_item.image = images[0]["src"]
+	if images and isinstance(images, list) and len(images) > 0:
+		# 1. Main / Featured Image
+		primary_img = images[0].get("src")
+		if primary_img:
+			woo_item.image = primary_img
+			if images[0].get("id"):
+				try:
+					from woo_prime.api.sync import _cache_wp_media_id
+					_cache_wp_media_id(primary_img, images[0]["id"])
+				except Exception:
+					pass
+
+		# 2. Gallery Images (images[1:]) into child table `images`
+		woo_item.set("images", [])
+		for gal in images[1:]:
+			src = gal.get("src")
+			if src:
+				woo_item.append("images", {
+					"image": src,
+					"caption": gal.get("alt") or gal.get("name") or "",
+				})
+				if gal.get("id"):
+					try:
+						from woo_prime.api.sync import _cache_wp_media_id
+						_cache_wp_media_id(src, gal["id"])
+					except Exception:
+						pass
 	elif prod.get("image") and isinstance(prod.get("image"), dict) and prod["image"].get("src"):
-		if not getattr(woo_item, "image", None):
-			woo_item.image = prod["image"]["src"]
+		woo_item.image = prod["image"]["src"]
+		if prod["image"].get("id"):
+			try:
+				from woo_prime.api.sync import _cache_wp_media_id
+				_cache_wp_media_id(prod["image"]["src"], prod["image"]["id"])
+			except Exception:
+				pass
 	
 	# Auto-link to ERPNext Item (Requirements 8.3, 8.4)
 	# Priority: woo_product_id → item_code/SKU match → exact name match → item_name (only if unique)
