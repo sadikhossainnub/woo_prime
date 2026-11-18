@@ -3,10 +3,10 @@
 
 frappe.ui.form.on("Woo Item", {
 	refresh(frm) {
-		// Publish to WooCommerce button
+		// Publish button
 		if (!frm.is_new()) {
 			frm.add_custom_button(
-				__("Publish to WooCommerce"),
+				__("Publish"),
 				function () {
 					if (frm.doc.has_variants && frm.has_included_variants === false) {
 						frappe.msgprint({

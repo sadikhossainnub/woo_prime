@@ -4,9 +4,9 @@
 frappe.ui.form.on("Item", {
 	refresh(frm) {
 		if (!frm.is_new()) {
-			// --- Publish to WooCommerce button ---
+			// --- Publish button ---
 			frm.add_custom_button(
-				__("Publish to WooCommerce"),
+				__("Publish"),
 				function () {
 					frappe.confirm(
 						__("Publish <b>{0}</b> to WooCommerce in the background?<br><br>If a linked Woo Item does not exist, one will be auto-created.", [frm.doc.item_name || frm.doc.name]),
