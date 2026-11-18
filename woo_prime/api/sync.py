@@ -2592,7 +2592,18 @@ def _get_item_images(item, woo_item=None, api=None, settings=None):
 			)
 			# Still send it - might work if same network/VPN
 		
-		cached_media_id = _get_cached_wp_media_id(path)
+		is_local_file = (
+			str(path).startswith("/files/")
+			or str(path).startswith("files/")
+			or str(path).startswith("/private/files/")
+			or str(path).startswith("private/files/")
+			or not str(path).startswith("http")
+		)
+
+		# For local ERPNext files, never send cached_media_id: WooCommerce must download
+		# the file from ERPNext URL to properly replace/update the image in WooCommerce.
+		# For remote WooCommerce images (e.g. wp-content/uploads), using cached_media_id avoids re-download.
+		cached_media_id = None if is_local_file else _get_cached_wp_media_id(path)
 		if cached_media_id:
 			img_dict = {"id": int(cached_media_id), "src": url}
 		else:

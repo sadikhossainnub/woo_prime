@@ -1363,6 +1363,12 @@ def _process_single_product(prod, settings, default_item_group, auto_create_miss
 	woo_item.published = 1
 	if "manage_stock" in prod:
 		woo_item.manage_stock = 1 if prod.get("manage_stock") else 0
+
+	wc_type = prod.get("type")
+	if wc_type == "simple" and not woo_item.woo_product_type:
+		woo_item.woo_product_type = "Simple Item"
+	elif wc_type == "variable" and not woo_item.woo_product_type:
+		woo_item.woo_product_type = "Variant Item"
 	
 	# Set prices using frappe.utils.flt() (Requirement 8.2)
 	reg_p = flt(prod.get("regular_price") or 0)
