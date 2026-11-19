@@ -1152,6 +1152,7 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings, sync_images=True)
 			woo_item.db_set("published", 1, update_modified=False)
 		except Exception:
 			pass
+		woo_item.flags.ignore_version = True
 		woo_item.save(ignore_permissions=True)
 
 		# Clear tombstone on explicit publish (Item 2)
@@ -2008,6 +2009,7 @@ def _publish_variant_group_member(woo_item, item, api, settings, sync_images=Tru
 						c_item.sync_status = "Synced"
 						c_item.last_synced = now_datetime()
 						c_item.flags.in_woo_sync = True
+						c_item.flags.ignore_version = True
 						c_item.save(ignore_permissions=True)
 
 						if c_item.name == woo_item.name:
@@ -2199,7 +2201,13 @@ def _publish_variant_item_to_woo(woo_item, item, api, settings, sync_images=True
 		parent_woo_item.published = 1
 		parent_woo_item.sync_status = "Synced"
 		parent_woo_item.last_synced = now_datetime()
+		parent_woo_item.flags.ignore_version = True
 		parent_woo_item.save(ignore_permissions=True)
+		# Reload woo_item because _publish_template_item_to_woo modified and saved child variations in DB
+		try:
+			woo_item.reload()
+		except Exception:
+			pass
 
 	return _publish_variation_data(parent_woo_item.woo_product_id, woo_item, item, api, settings, sync_images=sync_images)
 
@@ -2413,6 +2421,7 @@ def _publish_variation_data(parent_woo_id, child_woo_item, v_item, api, settings
 		child_woo_item.sync_status = "Synced"
 		child_woo_item.last_synced = now_datetime()
 		child_woo_item.flags.in_woo_sync = True
+		child_woo_item.flags.ignore_version = True
 		child_woo_item.save(ignore_permissions=True)
 		_cache_product_images_from_response(v_item, child_woo_item, res, images_sent=image_sent)
 	return res
