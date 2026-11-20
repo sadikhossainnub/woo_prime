@@ -3071,7 +3071,6 @@ def dynamic_scheduler_runner():
 	scheduled_order_sync()
 	scheduled_stock_sync()
 	scheduled_price_sync()
-	scheduled_item_sync()
 
 
 def scheduled_order_sync():
@@ -3132,26 +3131,6 @@ def scheduled_price_sync():
 		)
 	except Exception as e:
 		frappe.log_error(title="Scheduled Price Sync Dispatch Error", message=str(e))
-
-
-def scheduled_item_sync():
-	"""Scheduled job: checks interval and enqueues item sync."""
-	try:
-		settings = frappe.get_single("Woo Settings")
-		if not settings.enabled or not getattr(settings, "enable_item_sync", 1):
-			return
-		from woo_prime.woo_prime.doctype.woo_item.woo_item import _is_within_sync_window
-		if not _is_within_sync_window():
-			return
-		frappe.enqueue(
-			"woo_prime.api.sync.sync_all_items",
-			queue="long",
-			timeout=3000,
-			job_id="woo_scheduled_item_sync",
-			deduplicate=True,
-		)
-	except Exception as e:
-		frappe.log_error(title="Scheduled Item Sync Dispatch Error", message=str(e))
 
 
 def sync_all_stock(force=False):
@@ -3735,10 +3714,6 @@ def on_item_update(doc, method):
 		if not settings.enabled:
 			return
 
-		enable_item_sync = getattr(settings, "enable_item_sync", 1)
-		if not enable_item_sync:
-			return
-
 		# 1. If this is a variant item, determine sync target
 		if getattr(doc, "variant_of", None):
 			variant_woo_name = frappe.db.get_value("Woo Item", {"item_code": doc.name})
@@ -3883,45 +3858,6 @@ def on_item_rename(doc, method, old_name, new_name, merge=False):
 		frappe.log_error(title=f"Woo Item Rename Sync Exception - {old_name}->{new_name}", message=str(e))
 
 
-def sync_all_items():
-	"""Scheduled task: Daily auto-sync for published Woo Items."""
-	settings = frappe.get_single("Woo Settings")
-	if not settings.enabled or not getattr(settings, "enable_item_sync", 1):
-		return
-
-	from woo_prime.woo_prime.doctype.woo_item.woo_item import _is_within_sync_window
-	if not _is_within_sync_window():
-		return
-
-	# Interval gate (default 1440 minutes = 1 day)
-	interval_minutes = int(getattr(settings, "item_sync_interval_minutes", 1440) or 1440)
-	last_sync = getattr(settings, "last_item_sync_time", None)
-	if last_sync:
-		from frappe.utils import get_datetime
-		elapsed_minutes = (now_datetime() - get_datetime(last_sync)).total_seconds() / 60.0
-		if elapsed_minutes < interval_minutes:
-			return
-
-	woo_items = frappe.get_all(
-		"Woo Item",
-		filters={"published": 1, "sync_status": "Synced"},
-		fields=["name"],
-		order_by="last_synced asc, creation asc",
-		limit=100,
-	)
-
-	for item in woo_items:
-		try:
-			doc = frappe.get_doc("Woo Item", item.name)
-			doc.flags.in_woo_sync = True
-			doc.flags.sync_images = False
-			doc._execute_publish_sync(sync_images=False)
-			frappe.db.commit()
-		except Exception as e:
-			frappe.log_error(f"Scheduled item sync failed for {item.name}: {e}")
-
-	frappe.db.set_value("Woo Settings", "Woo Settings", "last_item_sync_time", now_datetime())
-	frappe.db.commit()
 
 
 

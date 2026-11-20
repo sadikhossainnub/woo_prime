@@ -172,7 +172,6 @@ scheduler_events = {
 			"woo_prime.api.sync.scheduled_order_sync",
 			"woo_prime.api.sync.scheduled_stock_sync",
 			"woo_prime.api.sync.scheduled_price_sync",
-			"woo_prime.api.sync.scheduled_item_sync",
 		],
 	},
 	"daily": [

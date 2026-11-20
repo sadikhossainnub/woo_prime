@@ -261,7 +261,7 @@ class WooItem(Document):
 
 		try:
 			settings = frappe.get_single("Woo Settings")
-			if not settings.enabled or not getattr(settings, "enable_item_sync", 1):
+			if not settings.enabled:
 				return
 
 			# If item is published and has a WooCommerce product ID, auto-sync changes in background
