@@ -78,8 +78,7 @@ class TestVariableSyncFixes(unittest.TestCase):
 		child_woo = types.SimpleNamespace(
 			item_code="TP-01",
 			sku="TP-01",
-			variant_publish_mode="Not Published",
-			woo_variant_group=None
+			variant_publish_mode="Not Published"
 		)
 		item = types.SimpleNamespace(item_code="TP-01", disabled=0)
 		should_skip, reason = _should_skip_variant(child_woo, item, context="template", return_reason=True)
@@ -90,8 +89,7 @@ class TestVariableSyncFixes(unittest.TestCase):
 		child_woo = types.SimpleNamespace(
 			item_code="TP-01",
 			sku="TP-01",
-			variant_publish_mode="With Template",
-			woo_variant_group=None
+			variant_publish_mode="With Template"
 		)
 		item = types.SimpleNamespace(item_code="TP-01", disabled=1)
 		should_skip, reason = _should_skip_variant(child_woo, item, context="template", return_reason=True)

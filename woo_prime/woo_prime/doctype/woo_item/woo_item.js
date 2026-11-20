@@ -1298,8 +1298,6 @@ function render_interactive_variants_table(frm) {
 				let to_create = 0;
 				let to_update = 0;
 				let not_published = 0;
-				let separate_groups = new Set();
-				let separate_count = 0;
 
 				variants.forEach(v => {
 					let mode = v.mode || "With Template";
@@ -1309,27 +1307,19 @@ function render_interactive_variants_table(frm) {
 						else to_create++;
 					} else if (mode === "Not Published") {
 						not_published++;
-					} else if (mode === "Separate Product") {
-						separate_count++;
-						if (v.group) separate_groups.add(v.group);
 					}
 				});
 
 				let summary_html = `
 					<div class="row mb-3 mt-1" style="background:#f8f9fa; border:1px solid #e2e8f0; border-radius:6px; padding:10px 12px; font-size:12px;">
-						<div class="col-md-4">
+						<div class="col-md-6">
 							<span class="text-muted">${__("With Template")}:</span>
 							<b>${with_template}</b>
 							<span class="text-muted">(${to_update} ${__("update")}, ${to_create} ${__("create")})</span>
 						</div>
-						<div class="col-md-4">
+						<div class="col-md-6">
 							<span class="text-muted">${__("Not Published")}:</span>
 							<b>${not_published}</b>
-						</div>
-						<div class="col-md-4">
-							<span class="text-muted">${__("Separate Groups")}:</span>
-							<b>${separate_count}</b>
-							<span class="text-muted">(${__("across")} ${separate_groups.size} ${__("group(s)")})</span>
 						</div>
 					</div>
 				`;
@@ -1366,15 +1356,6 @@ function render_interactive_variants_table(frm) {
 						<button type="button" class="btn btn-xs btn-default text-danger btn-action-exclude" ${sel_count === 0 ? "disabled" : ""}>
 							<i class="fa fa-ban"></i> ${__("Exclude (Unpublish)")}
 						</button>
-						<button type="button" class="btn btn-xs btn-default btn-action-create-group" ${sel_count === 0 ? "disabled" : ""}>
-							<i class="fa fa-folder-open-o"></i> ${__("Create New Product from Selection")}
-						</button>
-						<button type="button" class="btn btn-xs btn-default btn-action-add-group" ${sel_count === 0 ? "disabled" : ""}>
-							<i class="fa fa-plus"></i> ${__("Add to Existing Product")}
-						</button>
-						<button type="button" class="btn btn-xs btn-default btn-action-remove-group" ${sel_count === 0 ? "disabled" : ""}>
-							<i class="fa fa-times"></i> ${__("Remove from Product")}
-						</button>
 						<span class="text-muted ml-auto" style="font-size:11px;">
 							${__("{0} of {1} selected", [sel_count, total])}
 						</span>
@@ -1389,9 +1370,6 @@ function render_interactive_variants_table(frm) {
 						status_badge = `<span class="badge" style="background:#28a745; color:white; font-size:11px;">${__("With Template")}</span>`;
 					} else if (mode === "Not Published") {
 						status_badge = `<span class="badge" style="background:#6c757d; color:white; font-size:11px;">${__("Not Published")}</span>`;
-					} else if (mode === "Separate Product") {
-						let grp_link = v.group ? `<a href="/desk/woo-variant-group/${v.group}" style="color:white; text-decoration:underline;">${v.group}</a>` : '';
-						status_badge = `<span class="badge" style="background:#17a2b8; color:white; font-size:11px;">${__("Separate")}: ${grp_link}</span>`;
 					}
 
 					let woo_id_badge = v.woo_product_id
@@ -1528,174 +1506,6 @@ function render_interactive_variants_table(frm) {
 								callback: function (res) {
 									if (res && res.message) {
 										frappe.show_alert({ message: res.message.message || __("Variants excluded"), indicator: "orange" });
-										render_interactive_variants_table(frm);
-									}
-								}
-							});
-						}
-					);
-				});
-
-				$wrapper.find(".btn-action-create-group").on("click", function () {
-					if (!selected.size) return;
-					let sel_variants = variants.filter(v => selected.has(v.item_code));
-					let in_other_group = sel_variants.find(v => v.mode === "Separate Product");
-					if (in_other_group) {
-						frappe.msgprint({
-							title: __("Cannot Create Product"),
-							message: __("Variant '{0}' already belongs to group '{1}'. Please remove it from that group first.", [in_other_group.item_code, in_other_group.group]),
-							indicator: "red"
-						});
-						return;
-					}
-
-					let first_var = sel_variants[0];
-					let first_attr_val = first_var && first_var.attributes ? Object.values(first_var.attributes)[0] : "GRP";
-					let clean_attr = (first_attr_val || "GRP").replace(/[^a-zA-Z0-9_-]/g, "");
-					let suggested_sku = `${frm.doc.sku || frm.doc.item_code}-${clean_attr}`;
-
-					let leader_options = sel_variants.map(v => {
-						let attr_str = v.attributes ? Object.values(v.attributes).join(", ") : "";
-						return {
-							value: v.item_code,
-							label: `${v.item_code} (${v.sku || ""}) - ${attr_str}`
-						};
-					});
-
-					let d = new frappe.ui.Dialog({
-						title: __("Create New Product from Selection"),
-						fields: [
-							{
-								label: __("Product Name"),
-								fieldname: "product_name",
-								fieldtype: "Data",
-								default: `${frm.doc.item_name || frm.doc.item_code} - ${first_attr_val}`
-							},
-							{
-								label: __("Group SKU"),
-								fieldname: "group_sku",
-								fieldtype: "Data",
-								reqd: 1,
-								default: suggested_sku
-							},
-							{
-								label: __("Leader Variant"),
-								fieldname: "leader",
-								fieldtype: "Select",
-								reqd: 1,
-								options: leader_options,
-								default: leader_options[0] ? leader_options[0].value : ""
-							}
-						],
-						primary_action_label: __("Create Product"),
-						primary_action: function (values) {
-							d.hide();
-							frappe.call({
-								method: "woo_prime.woo_prime.doctype.woo_item.woo_item.create_variant_group_from_selection",
-								args: {
-									template: frm.doc.item_code,
-									item_codes: Array.from(selected),
-									group_sku: values.group_sku,
-									item_name: values.product_name,
-									leader: values.leader
-								},
-								freeze: true,
-								freeze_message: __("Creating variant group..."),
-								callback: function (res) {
-									if (res && res.message) {
-										frappe.msgprint({
-											title: __("Product Group Created"),
-											message: __("Woo Variant Group <a href='/desk/woo-variant-group/{0}'><b>{0}</b></a> created successfully with {1} variant(s).", [res.message.group, selected.size]),
-											indicator: "green"
-										});
-										render_interactive_variants_table(frm);
-									}
-								}
-							});
-						}
-					});
-					d.show();
-				});
-
-				$wrapper.find(".btn-action-add-group").on("click", function () {
-					if (!selected.size) return;
-					let sel_variants = variants.filter(v => selected.has(v.item_code));
-					let in_other_group = sel_variants.find(v => v.mode === "Separate Product");
-					if (in_other_group) {
-						frappe.msgprint({
-							title: __("Cannot Add to Product"),
-							message: __("Variant '{0}' already belongs to group '{1}'. Please remove it from that group first.", [in_other_group.item_code, in_other_group.group]),
-							indicator: "red"
-						});
-						return;
-					}
-
-					let d = new frappe.ui.Dialog({
-						title: __("Add Selected Variants to Existing Product"),
-						fields: [
-							{
-								label: __("Select Woo Variant Group"),
-								fieldname: "group",
-								fieldtype: "Link",
-								options: "Woo Variant Group",
-								reqd: 1,
-								get_query: function () {
-									return {
-										filters: {
-											template_item: frm.doc.item_code
-										}
-									};
-								}
-							}
-						],
-						primary_action_label: __("Add to Product"),
-						primary_action: function (values) {
-							d.hide();
-							frappe.call({
-								method: "woo_prime.woo_prime.doctype.woo_item.woo_item.add_to_variant_group",
-								args: {
-									group: values.group,
-									item_codes: Array.from(selected)
-								},
-								freeze: true,
-								freeze_message: __("Adding to group..."),
-								callback: function (res) {
-									if (res && res.message) {
-										frappe.show_alert({ message: res.message.message || __("Variants added to group"), indicator: "green" });
-										render_interactive_variants_table(frm);
-									}
-								}
-							});
-						}
-					});
-					d.show();
-				});
-
-				$wrapper.find(".btn-action-remove-group").on("click", function () {
-					if (!selected.size) return;
-					let group_members = variants.filter(v => selected.has(v.item_code) && v.mode === "Separate Product");
-					if (!group_members.length) {
-						frappe.msgprint({
-							title: __("No Group Members"),
-							message: __("None of the selected variants currently belong to a separate product group."),
-							indicator: "orange"
-						});
-						return;
-					}
-
-					frappe.confirm(
-						__("Remove {0} variant(s) from their group? They will be set to 'Not Published' and deleted from WooCommerce.", [group_members.length]),
-						function () {
-							frappe.call({
-								method: "woo_prime.woo_prime.doctype.woo_item.woo_item.remove_from_variant_group",
-								args: {
-									item_codes: group_members.map(v => v.item_code)
-								},
-								freeze: true,
-								freeze_message: __("Removing from group..."),
-								callback: function (res) {
-									if (res && res.message) {
-										frappe.show_alert({ message: res.message.message || __("Variants removed from group"), indicator: "green" });
 										render_interactive_variants_table(frm);
 									}
 								}

@@ -41,7 +41,6 @@
   "has_variants",
   "variant_of",
   "variant_publish_mode",
-  "woo_variant_group",
   "published_as",
   "variants_section",
   "variants_html"
@@ -354,20 +353,12 @@
   {
    "default": "With Template",
    "depends_on": "eval:doc.variant_of",
-   "description": "Choose where to publish this variant: With Template, Not Published, or Separate Product (grouped)",
+   "description": "Choose where to publish this variant: With Template or Not Published",
    "fieldname": "variant_publish_mode",
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Variant Publish Mode",
-   "options": "\nWith Template\nNot Published\nSeparate Product"
-  },
-  {
-   "depends_on": "eval:doc.variant_publish_mode == 'Separate Product'",
-   "fieldname": "woo_variant_group",
-   "fieldtype": "Link",
-   "in_list_view": 1,
-   "label": "Woo Variant Group",
-   "options": "Woo Variant Group"
+   "options": "\nWith Template\nNot Published"
   },
   {
    "fieldname": "published_as",
@@ -376,7 +367,7 @@
    "read_only": 1
   },
   {
-   "description": "Choose how to publish this item on WooCommerce:\n\u2022 Simple Item: Publish as simple product\n\u2022 Blank: Auto-detect based on item type. (Note: To publish variants as separate products, use 'Separate Product' mode and Woo Variant Group).",
+   "description": "Choose how to publish this item on WooCommerce:\n\u2022 Simple Item: Publish as simple product\n\u2022 Blank: Auto-detect based on item type.",
    "fieldname": "woo_product_type",
    "fieldtype": "Select",
    "label": "WooCommerce Product Type",

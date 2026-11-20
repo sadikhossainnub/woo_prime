@@ -32,17 +32,9 @@ class WooItem(Document):
 						# Simple item → default to "Simple Item"
 						self.woo_product_type = "Simple Item"
 
-				# Validate invariant for variant_publish_mode and woo_variant_group
-				if self.variant_of:
-					mode = getattr(self, "variant_publish_mode", "") or "With Template"
-					if mode == "Separate Product" and not self.woo_variant_group:
-						frappe.throw(_("Variant Publish Mode is 'Separate Product', but Woo Variant Group is not selected."))
-					elif mode != "Separate Product" and self.woo_variant_group:
-						self.woo_variant_group = None
-
-					# Disallow setting woo_product_type = "Variant Item" on a variant
-					if self.woo_product_type == "Variant Item":
-						frappe.throw(_("'Variant Item' is not allowed for variants. Use 'Separate Product' mode to create an independent variable product group."))
+				# Disallow setting woo_product_type = "Variant Item" on a variant
+				if self.variant_of and self.woo_product_type == "Variant Item":
+					frappe.throw(_("'Variant Item' is not allowed for variants."))
 
 				# Stock management rules (honor user choice; only set defaults on new docs):
 				if self.has_variants:
@@ -1326,11 +1318,6 @@ def _process_single_product(prod, settings, default_item_group, auto_create_miss
 	# Extract product data
 	woo_id = prod.get("id")
 
-	# Skip import if this woo_product_id belongs to a Woo Variant Group
-	if woo_id and frappe.db.exists("Woo Variant Group", {"woo_product_id": woo_id}):
-		logger.info(f"Skipping import of product {woo_id} as it is managed by a Woo Variant Group")
-		return {"linked": False, "created": False}
-
 	sku = (prod.get("sku") or "").strip()
 	name = html.unescape(prod.get("name") or "")
 	permalink = prod.get("permalink", "")
@@ -2584,23 +2571,6 @@ def delete_woo_item(woo_item_name, delete_item_master=False, delete_from_woocomm
 	woo_product_id = woo_item.woo_product_id
 	item_name_label = woo_item.item_name or woo_item_name
 
-	# Check group leader constraint
-	if getattr(woo_item, "woo_variant_group", None):
-		if frappe.db.exists("Woo Variant Group", woo_item.woo_variant_group):
-			leader = frappe.db.get_value("Woo Variant Group", woo_item.woo_variant_group, "leader")
-			if leader == woo_item.name:
-				other_members = frappe.get_all(
-					"Woo Item",
-					filters={"woo_variant_group": woo_item.woo_variant_group, "name": ["!=", woo_item.name]},
-				)
-				if other_members:
-					frappe.throw(
-						_("Cannot delete leader '{0}' while other members exist in Woo Variant Group '{1}'. "
-						  "Please reassign the leader or remove other members first.").format(
-							woo_item.name, woo_item.woo_variant_group
-						)
-					)
-
 	# Resolve ERPNext Item to determine template / variant status
 	is_template = False
 	is_variant = False
@@ -2626,7 +2596,7 @@ def delete_woo_item(woo_item_name, delete_item_master=False, delete_from_woocomm
 				from woo_prime.api.sync import _resolve_parent_woo_id
 				real = api.get_product(woo_product_id) or {}
 				real_parent = real.get("parent_id") or _resolve_parent_woo_id(
-					variant_of, woo_item.woo_product_type, woo_item.woo_variant_group
+					variant_of, woo_item.woo_product_type
 				)
 				if real_parent:
 					api.delete_variation(real_parent, woo_product_id)
@@ -2667,8 +2637,7 @@ def delete_woo_item(woo_item_name, delete_item_master=False, delete_from_woocomm
 	success_deleted_items = []
 	try:
 		if is_template:
-			# Delete all variant Woo Items linked to variants of this template,
-			# EXCLUDING variants that belong to a Separate Product group
+			# Delete all variant Woo Items linked to variants of this template
 			if item_code:
 				variant_codes = frappe.get_all(
 					"Item", filters={"variant_of": item_code}, pluck="name"
@@ -2678,8 +2647,6 @@ def delete_woo_item(woo_item_name, delete_item_master=False, delete_from_woocomm
 						"Woo Item",
 						filters={
 							"item_code": ["in", variant_codes],
-							"variant_publish_mode": ["!=", "Separate Product"],
-							"woo_variant_group": ["in", ["", None]],
 						},
 						fields=["name", "item_code", "sku", "woo_product_id"]
 					)
@@ -2688,44 +2655,16 @@ def delete_woo_item(woo_item_name, delete_item_master=False, delete_from_woocomm
 						success_deleted_items.append(v_wi)
 						frappe.delete_doc("Woo Item", v_wi.name, ignore_permissions=True, force=True)
 
-					has_group_variants = frappe.db.exists(
-						"Woo Item",
-						{
-							"item_code": ["in", variant_codes],
-							"variant_publish_mode": "Separate Product",
-						}
-					)
-					if has_group_variants:
-						frappe.msgprint(_("Note: Variants assigned to Separate Product groups were preserved."))
-
 		# Store info before deleting
 		deleted_item_info = {
 			"item_code": woo_item.item_code,
 			"sku": woo_item.sku,
 			"woo_product_id": woo_item.woo_product_id
 		}
-		
-		# If this variant belonged to a group, check if group is now empty
-		group_to_cleanup = getattr(woo_item, "woo_variant_group", None)
 
 		_delete_linked_sync_logs("Woo Item", woo_item_name)
 		frappe.delete_doc("Woo Item", woo_item_name, ignore_permissions=True, force=True)
 		success_deleted_items.append(deleted_item_info)
-
-		if group_to_cleanup and frappe.db.exists("Woo Variant Group", group_to_cleanup):
-			remaining_group_members = frappe.get_all(
-				"Woo Item",
-				filters={"woo_variant_group": group_to_cleanup}
-			)
-			if not remaining_group_members:
-				grp_woo_id = frappe.db.get_value("Woo Variant Group", group_to_cleanup, "woo_product_id")
-				if delete_from_woocommerce and grp_woo_id:
-					try:
-						api = get_woo_api()
-						api.delete_product(grp_woo_id, force=True)
-					except Exception:
-						pass
-				frappe.delete_doc("Woo Variant Group", group_to_cleanup, ignore_permissions=True)
 	except Exception as exc:
 		errors.append(f"Woo Item doc: {exc}")
 		frappe.log_error(
@@ -2828,7 +2767,7 @@ def get_template_variants_info(item_code):
 	woo_items = frappe.get_all(
 		"Woo Item",
 		filters={"item_code": ["in", variant_codes]},
-		fields=["name", "item_code", "sku", "woo_product_id", "published", "manage_stock", "last_pushed_qty", "variant_publish_mode", "woo_variant_group"],
+		fields=["name", "item_code", "sku", "woo_product_id", "published", "manage_stock", "last_pushed_qty", "variant_publish_mode"],
 	)
 	woo_by_item = {w.item_code: w for w in woo_items}
 
@@ -2847,7 +2786,6 @@ def get_template_variants_info(item_code):
 			"stock_qty": int(stock_qty),
 			"last_pushed_qty": woo_info.get("last_pushed_qty"),
 			"mode": woo_info.get("variant_publish_mode") or "With Template",
-			"group": woo_info.get("woo_variant_group") or "",
 			"attributes": attrs_by_item.get(v.item_code, {}),
 		})
 	return res
@@ -2873,8 +2811,6 @@ def set_variants_publish_mode(template, item_codes, mode):
 	except Exception:
 		pass
 
-	affected_groups = set()
-
 	for code in codes:
 		wi_name = frappe.db.get_value("Woo Item", {"item_code": code})
 		if not wi_name:
@@ -2890,7 +2826,7 @@ def set_variants_publish_mode(template, item_codes, mode):
 				except Exception:
 					pass
 				if not real_parent:
-					real_parent = _resolve_parent_woo_id(doc.variant_of, doc.woo_product_type, doc.woo_variant_group)
+					real_parent = _resolve_parent_woo_id(doc.variant_of, doc.woo_product_type)
 				if real_parent:
 					try:
 						api.delete_variation(real_parent, doc.woo_product_id, force=True)
@@ -2901,231 +2837,13 @@ def set_variants_publish_mode(template, item_codes, mode):
 				doc.sync_status = "Not Synced"
 				doc.published_as = ""
 
-			old_grp = doc.woo_variant_group
-			if old_grp:
-				affected_groups.add(old_grp)
-			doc.woo_variant_group = None
 			doc.variant_publish_mode = "Not Published"
 			doc.save(ignore_permissions=True)
 
 		elif mode == "With Template":
-			if doc.woo_variant_group:
-				if doc.woo_product_id and api:
-					grp_woo_id = frappe.db.get_value("Woo Variant Group", doc.woo_variant_group, "woo_product_id")
-					if grp_woo_id:
-						try:
-							api.delete_variation(grp_woo_id, doc.woo_product_id, force=True)
-						except Exception:
-							pass
-					doc.woo_product_id = 0
-					doc.published = 0
-					doc.sync_status = "Not Synced"
-					doc.published_as = ""
-				old_grp = doc.woo_variant_group
-				affected_groups.add(old_grp)
-				doc.woo_variant_group = None
-
 			doc.variant_publish_mode = "With Template"
 			doc.save(ignore_permissions=True)
 
-	# Clean up any groups that were emptied
-	for grp in affected_groups:
-		if frappe.db.exists("Woo Variant Group", grp):
-			remaining = frappe.get_all("Woo Item", filters={"woo_variant_group": grp})
-			if not remaining:
-				grp_woo_id = frappe.db.get_value("Woo Variant Group", grp, "woo_product_id")
-				if grp_woo_id and api:
-					try:
-						api.delete_product(grp_woo_id, force=True)
-					except Exception:
-						pass
-				frappe.delete_doc("Woo Variant Group", grp, ignore_permissions=True)
-			else:
-				grp_doc = frappe.get_doc("Woo Variant Group", grp)
-				if grp_doc.leader not in [m.name for m in remaining]:
-					grp_doc.leader = remaining[0].name
-					grp_doc.save(ignore_permissions=True)
-
 	return {"status": "ok", "message": _("Updated publish mode for {0} variant(s).").format(len(codes))}
-
-
-@frappe.whitelist()
-def create_variant_group_from_selection(template, item_codes, group_sku, item_name=None, leader=None):
-	"""Create a new Woo Variant Group from selected variants."""
-	frappe.only_for(["System Manager", "Woo Manager", "Website Manager"])
-	codes = _parse_item_codes(item_codes)
-	if not codes:
-		frappe.throw(_("No variants selected to form a group."))
-
-	group_sku = (group_sku or "").strip()
-	if not group_sku:
-		frappe.throw(_("Group SKU is required."))
-
-	if frappe.db.exists("Woo Item", {"sku": group_sku}):
-		frappe.throw(_("Group SKU '{0}' cannot match an existing Woo Item SKU.").format(group_sku))
-
-	if frappe.db.exists("Woo Variant Group", group_sku):
-		frappe.throw(_("Woo Variant Group with SKU '{0}' already exists.").format(group_sku))
-
-	for code in codes:
-		wi = frappe.db.get_value("Woo Item", {"item_code": code}, ["name", "woo_variant_group"], as_dict=True)
-		if wi and wi.woo_variant_group:
-			frappe.throw(_("Variant '{0}' already belongs to group '{1}'. Please remove it first.").format(code, wi.woo_variant_group))
-
-	if not leader and codes:
-		leader = codes[0]
-
-	leader_woo = (
-		frappe.db.get_value("Woo Item", {"item_code": leader}, "name")
-		or frappe.db.get_value("Woo Item", leader, "name")
-	)
-	if not leader_woo:
-		frappe.throw(_("Could not resolve leader Woo Item for '{0}'").format(leader))
-
-	group = frappe.get_doc({
-		"doctype": "Woo Variant Group",
-		"group_sku": group_sku,
-		"template_item": template,
-		"leader": leader_woo,
-		"item_name": item_name.strip() if item_name else None,
-	})
-	group.insert(ignore_permissions=True)
-
-	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
-	api = None
-	try:
-		api = get_woo_api()
-	except Exception:
-		pass
-
-	for code in codes:
-		wi_name = frappe.db.get_value("Woo Item", {"item_code": code})
-		if not wi_name:
-			continue
-		w_doc = frappe.get_doc("Woo Item", wi_name)
-		if w_doc.woo_product_id and api:
-			try:
-				real = api.get_product(w_doc.woo_product_id) or {}
-				parent_id = real.get("parent_id")
-				if parent_id:
-					api.delete_variation(parent_id, w_doc.woo_product_id, force=True)
-			except Exception:
-				pass
-			w_doc.woo_product_id = 0
-			w_doc.published = 0
-			w_doc.sync_status = "Not Synced"
-			w_doc.published_as = ""
-		w_doc.variant_publish_mode = "Separate Product"
-		w_doc.woo_variant_group = group.name
-		w_doc.save(ignore_permissions=True)
-
-	return {"status": "ok", "group": group.name, "group_sku": group.group_sku}
-
-
-@frappe.whitelist()
-def add_to_variant_group(group, item_codes):
-	"""Add variants to an existing Woo Variant Group."""
-	frappe.only_for(["System Manager", "Woo Manager", "Website Manager"])
-	if not frappe.db.exists("Woo Variant Group", group):
-		frappe.throw(_("Woo Variant Group '{0}' does not exist.").format(group))
-
-	codes = _parse_item_codes(item_codes)
-	if not codes:
-		frappe.throw(_("No variants selected."))
-
-	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
-	api = None
-	try:
-		api = get_woo_api()
-	except Exception:
-		pass
-
-	for code in codes:
-		wi_name = frappe.db.get_value("Woo Item", {"item_code": code})
-		if not wi_name:
-			continue
-		w_doc = frappe.get_doc("Woo Item", wi_name)
-		if w_doc.woo_variant_group and w_doc.woo_variant_group != group:
-			frappe.throw(_("Variant '{0}' already belongs to group '{1}'.").format(code, w_doc.woo_variant_group))
-
-		if w_doc.woo_product_id and api:
-			try:
-				real = api.get_product(w_doc.woo_product_id) or {}
-				parent_id = real.get("parent_id")
-				if parent_id:
-					api.delete_variation(parent_id, w_doc.woo_product_id, force=True)
-			except Exception:
-				pass
-			w_doc.woo_product_id = 0
-			w_doc.published = 0
-			w_doc.sync_status = "Not Synced"
-			w_doc.published_as = ""
-
-		w_doc.variant_publish_mode = "Separate Product"
-		w_doc.woo_variant_group = group
-		w_doc.save(ignore_permissions=True)
-
-	return {"status": "ok", "group": group, "message": _("Added {0} variant(s) to group '{1}'.").format(len(codes), group)}
-
-
-@frappe.whitelist()
-def remove_from_variant_group(item_codes):
-	"""Remove variants from their group. Delete variations and cleanup empty groups."""
-	frappe.only_for(["System Manager", "Woo Manager", "Website Manager"])
-	codes = _parse_item_codes(item_codes)
-	if not codes:
-		frappe.throw(_("No variants selected."))
-
-	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
-	api = None
-	try:
-		api = get_woo_api()
-	except Exception:
-		pass
-
-	affected_groups = set()
-
-	for code in codes:
-		wi_name = frappe.db.get_value("Woo Item", {"item_code": code})
-		if not wi_name:
-			continue
-		w_doc = frappe.get_doc("Woo Item", wi_name)
-		old_grp = w_doc.woo_variant_group
-		if old_grp:
-			affected_groups.add(old_grp)
-			if w_doc.woo_product_id and api:
-				grp_woo_id = frappe.db.get_value("Woo Variant Group", old_grp, "woo_product_id")
-				if grp_woo_id:
-					try:
-						api.delete_variation(grp_woo_id, w_doc.woo_product_id, force=True)
-					except Exception:
-						pass
-			w_doc.woo_product_id = 0
-			w_doc.published = 0
-			w_doc.sync_status = "Not Synced"
-			w_doc.published_as = ""
-			w_doc.woo_variant_group = None
-			w_doc.variant_publish_mode = "Not Published"
-			w_doc.save(ignore_permissions=True)
-
-	for grp in affected_groups:
-		if not frappe.db.exists("Woo Variant Group", grp):
-			continue
-		remaining = frappe.get_all("Woo Item", filters={"woo_variant_group": grp})
-		if not remaining:
-			grp_doc = frappe.get_doc("Woo Variant Group", grp)
-			if grp_doc.woo_product_id and api:
-				try:
-					api.delete_product(grp_doc.woo_product_id, force=True)
-				except Exception as e:
-					frappe.throw(_("Failed to delete empty WooCommerce group product {0}: {1}").format(grp_doc.woo_product_id, e))
-			frappe.delete_doc("Woo Variant Group", grp, ignore_permissions=True)
-		else:
-			grp_doc = frappe.get_doc("Woo Variant Group", grp)
-			if grp_doc.leader not in [m.name for m in remaining]:
-				grp_doc.leader = remaining[0].name
-				grp_doc.save(ignore_permissions=True)
-
-	return {"status": "ok", "message": _("Removed {0} variant(s) from group(s).").format(len(codes))}
 
 
