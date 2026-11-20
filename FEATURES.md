@@ -1,205 +1,266 @@
-# Woo Prime — Complete Feature Documentation & Technical Guide
+# Woo Prime — Automatic Sync বিস্তারিত
 
-**Woo Prime** is an enterprise-grade, bi-directional integration app between **ERPNext** (v15/v16) and **WooCommerce** (WordPress). It powers end-to-end synchronization for Products, Template Variations, Stock, Prices, Categories, Attributes, Tags, Shipping Rules, Orders, and Discounts with real-time Webhooks, background workers, and fail-safe database recovery.
-
----
-
-## Table of Contents
-1. [Core Architecture & Background Processing](#1-core-architecture--background-processing)
-2. [Product & Item Management](#2-product--item-management)
-3. [Attributes & Variation Taxonomy](#3-attributes--variation-taxonomy)
-4. [Product Categories & Tags](#4-product-categories--tags)
-5. [Shipping Methods & Rules Synchronization](#5-shipping-methods--rules-synchronization)
-6. [Automated Order Processing & Webhooks](#6-automated-order-processing--webhooks)
-7. [Stock & Price Synchronization](#7-stock--price-synchronization)
-8. [WordPress Connector Plugin](#8-wordpress-connector-plugin)
-9. [Diagnostics, Logging & Self-Healing Database](#9-diagnostics-logging--self-healing-database)
-10. [Configuration & Setup Reference](#10-configuration--setup-reference)
+> এই ডকুমেন্টে Woo Prime অ্যাপের সমস্ত স্বয়ংক্রিয় (automatic) sync প্রক্রিয়ার বিবরণ দেওয়া হয়েছে।
 
 ---
 
-## 1. Core Architecture & Background Processing
+## ১. Scheduled Tasks (নির্ধারিত সময়ের কাজ)
 
-### High-Performance Non-Blocking Design
-- **Background Worker Engine**: All heavy tasks (fetching hundreds of products, bulk publishing variable items, pushing attributes) are enqueued to Frappe's background worker (`queue="long"` with 30–60 minute timeouts).
-- **WebSocket Real-Time Progress Notifications**: Every background sync broadcasts live events (`woo_fetch_progress`, `woo_publish_progress`) to the desk UI. Users see live percentage bars, processed counts, and status toasts without freezing the browser or hitting gateway timeouts.
-- **Resilient WooCommerce REST Client (`woo_api.py`)**:
-  - Full support for WooCommerce REST API v3.
-  - Configurable timeout (default 60s) preventing `Read timed out` exceptions on shared or high-latency WordPress hosts.
-  - Automatic fallback between Query Param Authentication (`consumer_key`/`consumer_secret`) and Basic Auth headers.
-  - Automatic URL normalization (handles trailing slashes, `wp-json` route prefixing).
-  - Custom User-Agent support (default `curl/8.5.0`) to bypass Cloudflare WAF, Wordfence, or ModSecurity bot challenges.
+Frappe scheduler প্রতি **৫ মিনিটে** নিচের ৩টি কাজ চেক করে:
 
----
+```
+hooks.py → scheduler_events → cron: "*/5 * * * *"
+```
 
-## 2. Product & Item Management
+| Scheduled Function | কী করে |
+|---|---|
+| `scheduled_order_sync` | WooCommerce অর্ডার pull করে |
+| `scheduled_stock_sync` | সব পণ্যের স্টক push করে |
+| `scheduled_price_sync` | সব পণ্যের দাম push করে |
 
-### 2.1 Publishing Items (ERPNext ➔ WooCommerce)
-- **Background Single Publish**:
-  - Available on **`Woo Item`** form and **`Item` (ERPNext Item Master)** form via the **`Publish to WooCommerce`** action button.
-  - Runs in the background queue; notifies the user via real-time alert and reloads the document with WooCommerce Product ID and live permalink.
-- **Bulk Publishing**:
-  - In **`Woo Item List View`**, select any number of items and click **`Actions ➔ Bulk Publish to WooCommerce`**.
-  - A real-time progress dialog tracks: Total Items, Current Item, Successful Count, and Failed Count with a progress bar.
-- **Supported Product Types**:
-  1. **Simple Products**:
-     - Synchronizes SKU, title, descriptions, regular price, sale price, weight, stock quantity, stock status (`instock`/`outofstock`).
-     - Uploads primary item image and slideshow images.
-     - Attaches WooCommerce categories and tags.
-  2. **Template & Variable Products**:
-     - Recognizes ERPNext Template items (`has_variants = 1`) and publishes as WooCommerce `variable` products.
-     - Automatically generates global product attributes (`pa_*`) and term values for swatch buttons.
-     - **Batch Variations API**: Uploads all variant items (`variant_of`) in a single WooCommerce Batch API call (`/wp-json/wc/v3/products/<id>/variations/batch`) for ultra-fast creation.
-     - Generates child `Woo Item` records for each variant and links variation IDs.
-
-### 2.2 Fetching Products (WooCommerce ➔ ERPNext)
-- **Batched Product Fetch**:
-  - Fetches products in configurable page sizes (10 to 100 items per request).
-  - Auto-matches and links with ERPNext Items by SKU, Item Code, or Name.
-  - **Auto-create Missing Items**: Automatically creates ERPNext Item Master records under the default Item Group if no local match is found.
-  - **SKU Fallback**: Generates `WC-{id}` if WooCommerce products do not have an SKU assigned.
-  - **Tag Attachment**: Extracts product tags from WooCommerce and attaches them directly to ERPNext Items (`_user_tags`).
+> [!NOTE]
+> প্রতিটি scheduled function শুধু **চেক** করে — আসল কাজ background queue-এ `frappe.enqueue()` করে পাঠায়। এতে scheduler কখনো block হয় না।
 
 ---
 
-## 3. Attributes & Variation Taxonomy
+## ২. Scheduled Sync-এর শর্তাবলী (Guard Checks)
 
-### 3.1 ERPNext Attribute ➔ WooCommerce Global Attribute Push
-- **Single Attribute Push**:
-  - In ERPNext **`Item Attribute`** master, click **`WooCommerce ➔ Push to WooCommerce`**.
-  - Automatically creates a Global Taxonomy Attribute (e.g., `pa_color`, `pa_size`) on WooCommerce, uploads all term values, and maps them in `Woo Settings`.
-- **Bulk Attributes Push**:
-  - In **`Woo Settings`**, click **`Sync ➔ Push Attributes to WooCommerce`** or use the **`Push All Attributes to WooCommerce`** button.
-  - Runs as a background worker with live progress tracking dialog.
-- **Strict Unique Abbreviation Sanitizer**:
-  - Automatically cleans HTML entities (`&amp;` ➔ `&`).
-  - Generates strictly unique, uppercase abbreviations (<=10 characters) for `Item Attribute Value` rows, permanently resolving `Abbreviation must appear only once` errors.
-- **Auto-Mapping**:
-  - **`Auto-Map Attributes by Name`** scans all ERPNext Item Attributes and WooCommerce Attributes to link matching pairs automatically.
+প্রতিটি scheduled sync চালু হওয়ার আগে ৩টি শর্ত পরীক্ষা করে:
 
----
+```
+১. settings.enabled == True  (Woo Settings চালু আছে?)
+২. enable_xxx_sync == True   (ওই নির্দিষ্ট sync চালু আছে?)
+৩. _is_within_sync_window()  (এখন sync করার সময় উইন্ডোতে আছে?)
+```
 
-## 4. Product Categories & Tags
-
-### 4.1 Product Categories
-- Synchronizes the entire WooCommerce Category taxonomy (Hierarchical parent-child tree).
-- Links ERPNext `Item Group` records to `Woo Category`.
-- Assigns primary and secondary categories to WooCommerce products during publishing.
-- Runs in background with live category count updates.
-
-### 4.2 Product Tags
-- **3-Tier Fetch Strategy**:
-  1. WooCommerce REST API `products/tags?hide_empty=false`.
-  2. Embedded tags scan from existing WooCommerce products.
-  3. WordPress Core REST API (`/wp/v2/tags`) fallback.
-- Stores tags in `Woo Tag` doctype and creates standard Frappe `Tag` records.
-- Preserves tags both ways: incoming tags attach to ERPNext Items, and outgoing ERPNext tags push to WooCommerce products.
+### Sync Window কী?
+`Woo Settings`-এ `enable_auto_sync_schedule` চালু থাকলে নির্দিষ্ট সময়ের মধ্যে (যেমন রাত ১০টা থেকে সকাল ৬টা) sync বন্ধ রাখা যায়।
+- Schedule বন্ধ থাকলে → সবসময় True (কোনো বাধা নেই)
+- সময় সেট না থাকলে → সবসময় True
 
 ---
 
-## 5. Shipping Methods & Rules Synchronization
+## ৩. Order Sync (অর্ডার সিঙ্ক)
 
-### 5.1 Fetching Shipping Data
-- Fetches all configured **Shipping Zones**, **Zone Methods** (Flat Rate, Free Shipping, Local Pickup), and custom rates from WooCommerce in the background.
-- Populates the **`Shipping Zone / Method Mappings`** table in `Woo Settings`.
+### স্বয়ংক্রিয় প্রবাহ:
+```
+প্রতি ৫ মিনিটে →
+  scheduled_order_sync()
+        ↓ (background queue)
+  auto_sync_orders()
+        ↓
+  WooCommerce API → orders fetch (after= শেষ sync সময়)
+        ↓
+  প্রতিটি নতুন order → sync_order() → ERPNext Sales Order তৈরি
+```
 
-### 5.2 Flexible Shipping Charge Sync Modes
-- **Line Item Mode**:
-  - Adds shipping charges as a distinct line item in the Sales Order `items` table using the configured **Shipping Charges Item**.
-  - Ideal for delivery tracking and stock valuation reports.
-- **Taxes and Charges Table Mode**:
-  - Adds shipping fees directly to the **Sales Taxes and Charges** table mapped to a designated **Shipping Charge Account**.
-- **Shipping Rule Mapping**:
-  - Maps WooCommerce methods (e.g., "Inside Dhaka", "Outside Dhaka") directly to ERPNext `Shipping Rule` records.
-  - Includes **Default Shipping Rule** fallback for unmatched methods.
+### মূল নিয়ম:
+- শুধু নতুন order আনে — যে order আগে নেই (`woo_order_id` দিয়ে চেক)
+- `order_sync_interval` (মিনিট) সময় না পেরোলে skip করে
+- যে statuses sync করবে: `processing`, `completed` (Woo Settings থেকে পরিবর্তনযোগ্য)
+- **Daily Reconciliation:** প্রতিদিন একবার `reconcile_orders()` চলে — শেষ ২ দিনের missed order ধরে
 
----
-
-## 6. Automated Order Processing & Webhooks
-
-### 6.1 Real-Time Webhook Listener
-- Endpoint: `/api/method/woo_prime.api.webhook.handle_order`
-- **HMAC-SHA256 Signature Verification**: Evaluates the `X-WC-Webhook-Signature` header against the configured **Webhook Secret** using a secure fail-closed security policy.
-- Webhook payloads are processed instantly in the background queue (`frappe.enqueue`) to respond with `200 OK` to WooCommerce in milliseconds.
-
-### 6.2 Intelligent Sales Order Creation
-- **Customer & Contact Management**:
-  - Normalizes Bangladeshi and international mobile numbers.
-  - Finds or creates customer by email or phone.
-  - Generates separate **Billing** and **Shipping** address records and links them to the Sales Order.
-- **Discounts, Coupons & Loyalty Points**:
-  - Records applied WooCommerce coupon codes in the Sales Order `po_no`.
-  - Maps cart discounts directly to `discount_amount` on Grand Total.
-  - Detects Loyalty Points coupons and maps them to `loyalty_amount`.
-- **Order Automation**:
-  - Configurable **Sales Type** (Inbound, Outbound, Website, Ads).
-  - Configurable **Auto Create Customer** and **Auto Submit Sales Order**.
-  - Optional Email Notifications on new orders.
-  - Sets Delivery Date automatically (+7 days default).
-
-### 6.3 Background Order Reconciliation
-- In case webhooks drop due to server downtime or network issues:
-  - Configurable background scheduler runs every 5 to 60 minutes.
-  - Configurable **Reconciliation Lookback (1–30 Days)** to scan for missing WooCommerce orders and auto-create Sales Orders idempotently.
-
----
-
-## 7. Stock & Price Synchronization
-
-### 7.1 Stock Synchronization
-- **Event-Driven Auto-Push**: Automatically triggers stock updates to WooCommerce whenever a Stock Entry, Delivery Note, or Purchase Receipt is submitted in ERPNext.
-- **Scheduled Sync**: Configurable intervals:
-  - Every 15 Minutes
-  - Every 30 Minutes
-  - Hourly (Default)
-  - Every 6 Hours
-  - Daily
-- **Warehouse Aggregation**: Calculates stock levels based on configured default warehouse or aggregated company inventory.
-- **Manual Push**: **`Sync Stock`** button on individual Woo Items.
-
-### 7.2 Price Synchronization
-- **Scheduled Sync**: Configurable intervals (Hourly, Every 6 Hours, Daily).
-- Reads rates from the configured **Default Price List** (e.g., "Standard Selling").
-- Automatic fallback for variant items from the template item's price list rate.
-- **Manual Push**: **`Sync Price`** button on individual Woo Items.
-
----
-
-## 8. Diagnostics, Logging & Self-Healing Database
-
-### 9.1 Self-Healing Database Engine (`woo_prime/utils.py`)
-- **Automatic Crash Repair**: Catches MySQL Error 144 (`tabError Log is marked as crashed`) and automatically executes `REPAIR TABLE \`tabError Log\`` without interrupting sync jobs or crashing worker threads.
-- **Safe Error Logger (`safe_log_error`)**: Ensures error logging never throws secondary exceptions even if MariaDB encounters deadlocks or table lock collisions.
-- **Table Integrity Enforcer**: Automatically verifies and regenerates DocType schema tables (`tabWoo Attribute`, `tabWoo Tag`, `tabWoo Attribute Mapping`) if database migrations were skipped.
-
-### 9.2 Woo Sync Log DocType
-- Detailed incoming and outgoing HTTP logs.
-- Captures Request URL, Method, Payload JSON, Response Code, Response Body Preview, and Traceback.
-- **1-Click Retry**: **`Retry Sync`** button directly on failed sync logs to replay the operation once the underlying issue is resolved.
-
----
-
-## 10. Configuration & Setup Reference
-
-### Summary of Key Settings in `Woo Settings`:
-
-| Setting Field | Description | Recommended Value |
+### Settings:
+| Field | Default | কাজ |
 |---|---|---|
-| **Enable WooCommerce** | Master toggle to enable integration | Checked (`1`) |
-| **WooCommerce Site URL** | HTTPS URL of your WordPress store | `https://yourdomain.com` |
-| **Consumer Key / Secret** | Generated from WooCommerce REST API keys | Read/Write Key |
-| **API Shared Secret** | Shared token for WordPress Connector plugin | Auto-generated 40-char token |
-| **Webhook Delivery URL** | URL to paste in WooCommerce Webhook settings | `https://<erp-url>/api/method/woo_prime.api.webhook.handle_order` |
-| **Webhook Secret** | Secret key for verifying HMAC-SHA256 signatures | Strong password |
-| **Default Company** | ERPNext Company for transactions | Your Company |
-| **Default Warehouse** | Warehouse used for stock calculations | Finished Goods / Stores |
-| **Default Price List** | Price list used for price sync | Standard Selling |
-| **Default Item Group** | Item group for auto-created items | Products / All Item Groups |
-| **Shipping Sync Mode** | Line Item vs Taxes & Charges Table | Line Item |
-| **Order Sync Interval** | Minutes between background order checks | 5 Minutes |
-| **Order Reconciliation Lookback**| Days to check for missed orders | 2 Days |
+| `enable_order_sync` | চালু | অর্ডার sync on/off |
+| `order_sync_interval` | ৫ মিনিট | কতক্ষণ পর পর চেক করবে |
+| `sync_order_statuses` | processing, completed | কোন status এর order আনবে |
+| `reconcile_days` | ২ দিন | Daily reconciliation-এ কতদিন পিছনে যাবে |
 
 ---
 
-*Developed by prime tech bd & Contributors. Licensed under MIT.*
+## ৪. Stock Sync (স্টক সিঙ্ক)
 
+### দুই উপায়ে স্টক sync হয়:
+
+#### ক) Real-Time (তাৎক্ষণিক)
+```
+ERPNext Bin পরিবর্তন হলে →
+  on_bin_update() [doc_events hook]
+        ↓ (শর্ত: enabled + enable_stock_sync + সঠিক warehouse)
+  frappe.enqueue → sync_stock_for_item_code(item_code)
+        ↓
+  WooCommerce-এ stock update
+```
+
+> [!TIP]
+> `default_warehouse` সেট থাকলে শুধু সেই warehouse-এর stock পরিবর্তনে sync হবে। অন্য warehouse থেকে stock নাড়ালে sync হবে না।
+
+#### খ) Scheduled (নির্ধারিত সময়ে)
+```
+প্রতি ৫ মিনিটে →
+  scheduled_stock_sync()
+        ↓ (stock_sync_interval সময় পেরোলে)
+  sync_all_stock()
+        ↓
+  সব published Woo Item (sync_stock=1) → 100টা করে batch → WooCommerce stock update
+```
+
+### Stock Sync Interval Options:
+| Interval | সময় |
+|---|---|
+| Every 15 Minutes | ১৫ মিনিট |
+| Every 30 Minutes | ৩০ মিনিট |
+| Hourly | ১ ঘণ্টা (default) |
+| Every 6 Hours | ৬ ঘণ্টা |
+| Daily | ২৪ ঘণ্টা |
+
+### যে Woo Item-এর stock sync হয়:
+- `published == 1`
+- `sync_stock == 1`
+- `woo_product_id > 0`
+- `variant_publish_mode != "Not Published"`
+
+---
+
+## ৫. Price Sync (দাম সিঙ্ক)
+
+### দুই উপায়ে দাম sync হয়:
+
+#### ক) Real-Time (তাৎক্ষণিক)
+```
+ERPNext Item Price পরিবর্তন হলে →
+  on_item_price_update() [doc_events hook]
+        ↓ (শর্ত: enabled + enable_price_sync + সঠিক price list)
+  frappe.enqueue → sync_price_for_item_code(item_code)
+        ↓
+  Template item হলে → সব variant-ও include করে
+        ↓
+  sync_price == 1 এমন Woo Item → WooCommerce-এ price update
+```
+
+#### খ) Scheduled (নির্ধারিত সময়ে)
+```
+প্রতি ৫ মিনিটে →
+  scheduled_price_sync()
+        ↓ (price_sync_interval সময় পেরোলে)
+  sync_all_prices()
+        ↓
+  সব published Woo Item (sync_price=1) → 100টা করে batch → WooCommerce price update
+```
+
+### Price Sync Interval Options:
+| Interval | সময় |
+|---|---|
+| Hourly | ১ ঘণ্টা |
+| Every 6 Hours | ৬ ঘণ্টা |
+| Daily | ২৪ ঘণ্টা (default) |
+
+---
+
+## ৬. Sale Price Sync (ছাড়ের দাম সিঙ্ক)
+
+### ৩ উপায়ে Sale Price sync হয়:
+
+#### ক) Real-Time — Pricing Rule পরিবর্তনে
+```
+ERPNext Pricing Rule save/delete/cancel →
+  on_pricing_rule_update() / on_pricing_rule_trash()
+        ↓
+  sync_pricing_rule_to_woo(rule_name) OR clear_sale_price_for_rule()
+        ↓
+  WooCommerce-এ sale_price update/clear
+```
+
+#### খ) Daily — মেয়াদ শেষ রুল পরিষ্কার
+```
+প্রতিদিন →
+  sync_all_sale_prices_daily()
+        ↓
+  সব active Pricing Rule চেক করে:
+    - মেয়াদ শেষ (valid_upto < আজ)? → sale_price মুছে দাও
+    - মেয়াদ আছে? → WooCommerce-এ sync করো
+```
+
+---
+
+## ৭. Item Sync — Real-Time Only (পণ্য তথ্য সিঙ্ক)
+
+> [!IMPORTANT]
+> Item sync এখন **শুধুমাত্র real-time**। আগে scheduled batch sync (`scheduled_item_sync`) ছিল — সেটা সম্পূর্ণ remove করা হয়েছে।
+
+### কীভাবে হয়:
+
+#### ERPNext Item Master পরিবর্তনে (তাৎক্ষণিক)
+```
+ERPNext Item save হলে →
+  on_item_update() [doc_events hook]
+        │
+        ├─ settings.enabled == False? → কিছু করে না
+        │
+        ├─ Variant item? (variant_of আছে?)
+        │     └── "With Template" mode?
+        │           → Parent template background-এ republish
+        │
+        ├─ Woo Item আছে + published?
+        │     ├── item_name পরিবর্তন → Woo Item update
+        │     ├── description পরিবর্তন → Woo Item update
+        │     ├── image পরিবর্তন/মুছে গেলে → Woo Item update
+        │     └── background-এ publish (image বদলালে sync_images=True)
+        │
+        └── Woo Item নেই + auto_publish_new_items চালু?
+              → নতুন Woo Item তৈরি + publish
+```
+
+#### Item Rename হলে
+```
+ERPNext Item rename →
+  on_item_rename()
+        ↓
+  Published নয়? → Woo Item-এর sku + item_code update
+  Published? → SKU পরিবর্তন করে না (live product break হবে) + warning log
+```
+
+---
+
+## ৮. Daily Maintenance Jobs (দৈনিক রক্ষণাবেক্ষণ)
+
+| Job | কাজ |
+|---|---|
+| `reconcile_orders()` | শেষ ২ দিনের WooCommerce order আবার চেক করে missed কোনো order আছে কিনা |
+| `prune_sync_logs()` | `log_retention_days` (default ৩০ দিন) এর পুরনো Woo Sync Log মুছে দেয় |
+| `sync_all_sale_prices_daily()` | সব Pricing Rule পুনরায় sync করে, মেয়াদ শেষ রুলের sale price মুছে দেয় |
+
+---
+
+## ৯. সম্পূর্ণ Sync Architecture (একনজরে)
+
+```
+ERPNext Events (Real-Time)
+├── Bin পরিবর্তন        → on_bin_update()                   → Stock sync
+├── Item Price পরিবর্তন  → on_item_price_update()            → Price sync
+├── Item save            → on_item_update()                   → Item re-publish
+├── Item rename          → on_item_rename()                   → SKU drift prevention
+├── Pricing Rule         → on_pricing_rule_update()           → Sale price sync
+└── Sales Order submit   → on_sales_order_status_change()     → WC order status update
+
+Frappe Scheduler (প্রতি ৫ মিনিটে)
+├── scheduled_order_sync()  → auto_sync_orders()   → WC থেকে order pull
+├── scheduled_stock_sync()  → sync_all_stock()     → সব stock push
+└── scheduled_price_sync()  → sync_all_prices()    → সব price push
+
+Frappe Scheduler (প্রতিদিন)
+├── reconcile_orders()                 → Missed order recovery
+├── prune_sync_logs()                  → পুরনো log মুছো
+└── sync_all_sale_prices_daily()       → Sale price daily check
+```
+
+---
+
+## ১০. Woo Settings-এ Toggle করা যায় এমন সব Switch
+
+| Setting Field | Default | নিয়ন্ত্রণ করে |
+|---|---|---|
+| `enabled` | ✅ | সম্পূর্ণ integration on/off |
+| `enable_order_sync` | ✅ | অর্ডার sync |
+| `enable_stock_sync` | ✅ | Stock sync |
+| `enable_price_sync` | ✅ | Price sync |
+| `enable_sale_price_sync` | ✅ | Sale/discount price sync |
+| `enable_auto_sync_schedule` | ❌ | Sync time window restriction |
+| `auto_publish_new_items` | ❌ | নতুন Item তৈরিতে auto Woo Item + publish |
+| `default_warehouse` | (খালি) | শুধু এই warehouse-এর stock sync |
+
+---
+
+*শেষ আপডেট: নভেম্বর ২০২৬ | Woo Prime v1.x (Frappe/ERPNext version-16)*
