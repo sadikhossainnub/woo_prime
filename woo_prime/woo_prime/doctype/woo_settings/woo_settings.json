@@ -24,9 +24,6 @@
   "column_break_webhook",
   "webhook_delivery_url",
   "product_webhook_delivery_url",
-  "wp_plugin_section",
-  "plugin_info_html",
-  "download_plugin_btn",
   "integration_user",
   "defaults_section",
   "default_company",
@@ -136,7 +133,7 @@
    "label": "Test Connection"
   },
   {
-   "description": "Shared token used to authenticate guest requests from WordPress plugin (X-Woo-Prime-Token)",
+   "description": "Shared token used to authenticate API requests (X-Woo-Prime-Token)",
    "fieldname": "api_shared_secret",
    "fieldtype": "Password",
    "label": "API Shared Secret"
@@ -189,33 +186,18 @@
    "fieldtype": "Column Break"
   },
   {
-   "description": "Copy and paste this URL into WooCommerce (Settings → Advanced → Webhooks for Order events)",
+   "description": "Copy and paste this URL into WooCommerce (Settings \u2192 Advanced \u2192 Webhooks for Order events)",
    "fieldname": "webhook_delivery_url",
    "fieldtype": "Data",
    "label": "Order Webhook Delivery URL",
    "read_only": 1
   },
   {
-   "description": "Copy and paste this URL into WooCommerce (Settings → Advanced → Webhooks for Product created/updated)",
+   "description": "Copy and paste this URL into WooCommerce (Settings \u2192 Advanced \u2192 Webhooks for Product created/updated)",
    "fieldname": "product_webhook_delivery_url",
    "fieldtype": "Data",
    "label": "Product Webhook Delivery URL",
    "read_only": 1
-  },
-  {
-   "fieldname": "wp_plugin_section",
-   "fieldtype": "Section Break",
-   "label": "WordPress Connector Plugin"
-  },
-  {
-   "fieldname": "plugin_info_html",
-   "fieldtype": "HTML",
-   "options": "<p>Download and install the Woo Prime Connector plugin on your WooCommerce website to enable real-time Pricing Rules and Loyalty Points redemption.</p>"
-  },
-  {
-   "fieldname": "download_plugin_btn",
-   "fieldtype": "Button",
-   "label": "Download WordPress Plugin (.zip)"
   },
   {
    "default": "Administrator",
@@ -407,7 +389,7 @@
    "description": "Explicitly map ERPNext Item Attributes to WooCommerce Global Attributes (ensures WooCommerce Swatches & Variation IDs link perfectly)",
    "fieldname": "attribute_mappings",
    "fieldtype": "Table",
-   "label": "ERPNext ↔ WooCommerce Attribute Mappings",
+   "label": "ERPNext \u2194 WooCommerce Attribute Mappings",
    "options": "Woo Attribute Mapping"
   },
   {
@@ -425,7 +407,7 @@
   {
    "fieldname": "media_upload_note",
    "fieldtype": "HTML",
-   "options": "<div class='alert alert-info'><b>How Image Sync Works:</b><br>• WooCommerce fetches images from public URLs automatically<br>• Private images are auto-copied to public folder (if enabled above)<br>• No authentication needed - simple and fast!</div>"
+   "options": "<div class='alert alert-info'><b>How Image Sync Works:</b><br>\u2022 WooCommerce fetches images from public URLs automatically<br>\u2022 Private images are auto-copied to public folder (if enabled above)<br>\u2022 No authentication needed - simple and fast!</div>"
   },
   {
    "fieldname": "column_break_media",
@@ -447,7 +429,7 @@
    "default": "1",
    "fieldname": "enable_item_sync",
    "fieldtype": "Check",
-   "label": "Enable Item / Product Auto Sync (ERPNext → WooCommerce)"
+   "label": "Enable Item / Product Auto Sync (ERPNext \u2192 WooCommerce)"
   },
   {
    "default": "0",
@@ -481,7 +463,7 @@
    "default": "1",
    "fieldname": "enable_stock_sync",
    "fieldtype": "Check",
-   "label": "Enable Stock Sync (ERPNext → WooCommerce)"
+   "label": "Enable Stock Sync (ERPNext \u2192 WooCommerce)"
   },
   {
    "default": "Hourly",
@@ -505,7 +487,7 @@
    "default": "1",
    "fieldname": "enable_price_sync",
    "fieldtype": "Check",
-   "label": "Enable Price Sync (ERPNext → WooCommerce)"
+   "label": "Enable Price Sync (ERPNext \u2192 WooCommerce)"
   },
   {
    "default": "Daily",
@@ -537,7 +519,7 @@
    "default": "1",
    "fieldname": "enable_order_sync",
    "fieldtype": "Check",
-   "label": "Enable Automatic Order Sync (WooCommerce → ERPNext)"
+   "label": "Enable Automatic Order Sync (WooCommerce \u2192 ERPNext)"
   },
   {
    "default": "5",

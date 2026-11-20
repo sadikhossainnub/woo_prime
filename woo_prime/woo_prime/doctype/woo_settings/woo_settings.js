@@ -56,16 +56,6 @@ frappe.ui.form.on("Woo Settings", {
 			}
 		);
 
-		// Add custom button for plugin download
-		frm.add_custom_button(
-			__("Download WordPress Plugin"),
-			function () {
-				window.open(
-					"/api/method/woo_prime.woo_prime.doctype.woo_settings.woo_settings.download_wordpress_plugin"
-				);
-			}
-		);
-
 		// Add custom button for category fetch
 		frm.add_custom_button(
 			__("Fetch WooCommerce Categories"),
@@ -603,12 +593,6 @@ frappe.ui.form.on("Woo Settings", {
 		});
 		
 		d.show();
-	},
-
-	download_plugin_btn(frm) {
-		window.open(
-			"/api/method/woo_prime.woo_prime.doctype.woo_settings.woo_settings.download_wordpress_plugin"
-		);
 	},
 });
 

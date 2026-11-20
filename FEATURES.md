@@ -165,17 +165,7 @@
 
 ---
 
-## 8. WordPress Connector Plugin
-
-The downloadable **Woo Prime Connector** plugin (`woo-prime-connector.zip`) extends WordPress with direct ERPNext communication:
-- **Download**: One-click download button in `Woo Settings` (**`Download WordPress Plugin`**).
-- **Cart Price Calculation**: Calls ERPNext in real-time to compute BOGO (Buy One Get One), volume tier discounts, and customer-specific Pricing Rules in WooCommerce cart.
-- **Loyalty Points Redemption**: Allows customers to view their live ERPNext Loyalty Points balance at WooCommerce checkout and redeem points as instant order coupons.
-- **Token Authentication**: Secured via `X-Woo-Prime-Token` shared secret header.
-
----
-
-## 9. Diagnostics, Logging & Self-Healing Database
+## 8. Diagnostics, Logging & Self-Healing Database
 
 ### 9.1 Self-Healing Database Engine (`woo_prime/utils.py`)
 - **Automatic Crash Repair**: Catches MySQL Error 144 (`tabError Log is marked as crashed`) and automatically executes `REPAIR TABLE \`tabError Log\`` without interrupting sync jobs or crashing worker threads.

@@ -175,23 +175,6 @@ def generate_api_shared_secret():
 	return frappe.generate_hash(length=40)
 
 
-@frappe.whitelist()
-def download_wordpress_plugin():
-	"""Download the Woo Prime Connector WordPress plugin zip file."""
-	frappe.only_for(["System Manager", "Woo Manager"])
-	plugin_path = frappe.get_app_path("woo_prime", "wordpress_plugin", "woo-prime-connector.zip")
-
-	if not os.path.exists(plugin_path):
-		frappe.throw(_("WordPress plugin package file not found."))
-
-	with open(plugin_path, "rb") as f:
-		file_content = f.read()
-
-	frappe.response["filename"] = "woo-prime-connector.zip"
-	frappe.response["filecontent"] = file_content
-	frappe.response["type"] = "download"
-
-
 def get_woo_api():
 	"""Get WooCommerce API client instance."""
 	from woo_prime.api.woo_api import WooAPI
