@@ -2356,10 +2356,6 @@ def _get_woo_category_ids(woo_item, api):
 			cat_name = getattr(row, "category", None)
 			add_category_by_name(cat_name)
 
-	# 2. Check primary `woo_category` field
-	if getattr(woo_item, "woo_category", None):
-		add_category_by_name(woo_item.woo_category)
-
 	return category_ids
 
 
