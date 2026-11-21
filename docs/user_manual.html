@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<title>Woo Prime - User Manual</title>
+<style>
+    @page {
+        size: A4;
+        margin: 20mm 15mm 20mm 15mm;
+        @bottom-right {
+            content: counter(page);
+            font-size: 9pt;
+            color: #666;
+        }
+    }
+    
+    body {
+        font-family: 'Lohit Bengali', 'FreeSans', 'DejaVu Sans', sans-serif;
+        color: #2b2b2b;
+        line-height: 1.6;
+        font-size: 11pt;
+    }
+
+    .cover-page {
+        page-break-after: always;
+        text-align: center;
+        padding-top: 100px;
+    }
+
+    .cover-title {
+        font-size: 32pt;
+        font-weight: bold;
+        color: #1a365d;
+        margin-bottom: 10px;
+    }
+
+    .cover-subtitle {
+        font-size: 16pt;
+        color: #4a5568;
+        margin-bottom: 30px;
+    }
+
+    .cover-badge {
+        display: inline-block;
+        background: #ebf8ff;
+        color: #2b6cb0;
+        border: 1px solid #bee3f8;
+        padding: 6px 16px;
+        border-radius: 20px;
+        font-size: 11pt;
+        font-weight: bold;
+        margin-bottom: 80px;
+    }
+
+    .cover-meta {
+        margin-top: 120px;
+        font-size: 11pt;
+        color: #718096;
+        line-height: 1.8;
+    }
+
+    .page-break {
+        page-break-after: always;
+    }
+
+    h1 {
+        color: #1a365d;
+        font-size: 18pt;
+        border-bottom: 2px solid #e2e8f0;
+        padding-bottom: 6px;
+        margin-top: 25px;
+        margin-bottom: 15px;
+    }
+
+    h2 {
+        color: #2b6cb0;
+        font-size: 14pt;
+        margin-top: 20px;
+        margin-bottom: 10px;
+    }
+
+    h3 {
+        color: #2d3748;
+        font-size: 12pt;
+        margin-top: 14px;
+        margin-bottom: 6px;
+    }
+
+    p {
+        margin-bottom: 10px;
+        text-align: justify;
+    }
+
+    ul, ol {
+        margin-top: 5px;
+        margin-bottom: 12px;
+        padding-left: 22px;
+    }
+
+    li {
+        margin-bottom: 4px;
+    }
+
+    .toc {
+        background: #f7fafc;
+        border: 1px solid #edf2f7;
+        border-radius: 8px;
+        padding: 20px 25px;
+        margin-bottom: 30px;
+    }
+
+    .toc h2 {
+        margin-top: 0;
+        color: #1a365d;
+        border-bottom: 1px solid #cbd5e0;
+        padding-bottom: 8px;
+    }
+
+    .toc-item {
+        display: flex;
+        justify-content: space-between;
+        padding: 4px 0;
+        border-bottom: 1px dotted #e2e8f0;
+    }
+
+    .badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 9pt;
+        font-weight: bold;
+    }
+    .badge-green { background: #def7ec; color: #03543f; border: 1px solid #bcf0da; }
+    .badge-blue { background: #e1effe; color: #1e429f; border: 1px solid #b4c6fc; }
+    .badge-yellow { background: #fef08a; color: #713f12; border: 1px solid #fde047; }
+    .badge-red { background: #fde8e8; color: #9b1c1c; border: 1px solid #f8b4b4; }
+    .badge-grey { background: #f3f4f6; color: #374151; border: 1px solid #e5e7eb; }
+
+    .callout {
+        border-left: 4px solid #3182ce;
+        background: #ebf8ff;
+        padding: 12px 16px;
+        border-radius: 0 6px 6px 0;
+        margin: 14px 0;
+    }
+    .callout-warning {
+        border-left-color: #dd6b20;
+        background: #fffaf0;
+    }
+    .callout-success {
+        border-left-color: #38a169;
+        background: #f0fff4;
+    }
+
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 14px 0;
+        font-size: 10pt;
+    }
+
+    th, td {
+        border: 1px solid #cbd5e0;
+        padding: 8px 10px;
+        text-align: left;
+    }
+
+    th {
+        background: #f7fafc;
+        color: #2d3748;
+        font-weight: bold;
+    }
+
+    code {
+        font-family: 'DejaVu Sans Mono', monospace;
+        background: #edf2f7;
+        padding: 1px 5px;
+        border-radius: 3px;
+        font-size: 9.5pt;
+        color: #c53030;
+    }
+
+    .card {
+        border: 1px solid #e2e8f0;
+        border-radius: 6px;
+        padding: 12px 16px;
+        margin-bottom: 12px;
+        background: #ffffff;
+    }
+
+    .footer-note {
+        text-align: center;
+        font-size: 9pt;
+        color: #a0aec0;
+        margin-top: 30px;
+        border-top: 1px solid #e2e8f0;
+        padding-top: 10px;
+    }
+</style>
+</head>
+<body>
+
+<!-- COVER PAGE -->
+<div class="cover-page">
+    <div style="font-size: 42px; margin-bottom: 15px;">🛍️ ⇄ ⚙️</div>
+    <div class="cover-title">Woo Prime</div>
+    <div class="cover-subtitle">WooCommerce & ERPNext সম্পূর্ণ ইন্টিগ্রেশন নির্দেশিকা</div>
+    <div class="cover-badge">অফিসিয়াল ইউজার ম্যানুয়াল — সংস্করণ ১.০ (ERPNext v16)</div>
+    
+    <div class="cover-meta">
+        <strong>অ্যাপ প্রকাশক:</strong> Prime Tech BD<br>
+        <strong>সাপোর্ট ইমেইল:</strong> sayedtkg@gmail.com<br>
+        <strong>তৈরির তারিখ:</strong> নভেম্বর ২০২৬<br>
+        <strong>লাইসেন্স:</strong> MIT License
+    </div>
+</div>
+
+<!-- TABLE OF CONTENTS -->
+<div class="toc">
+    <h2>সূচিপত্র (Table of Contents)</h2>
+    <div class="toc-item"><span>১. ভূমিকা ও মূল বৈশিষ্ট্য (Introduction & Highlights)</span> <span>পৃষ্ঠা ২</span></div>
+    <div class="toc-item"><span>২. প্রাথমিক সেটআপ ও সংযোগ (Setup & Woo Settings)</span> <span>পৃষ্ঠা ২</span></div>
+    <div class="toc-item"><span>৩. পণ্য তৈরি ও ব্যবস্থাপনা (Woo Item Management)</span> <span>পৃষ্ঠা ৩</span></div>
+    <div class="toc-item"><span>৪. ক্যাটাগরি ও ট্যাগ ব্যবস্থাপনা (Category & Tags)</span> <span>পৃষ্ঠা ৪</span></div>
+    <div class="toc-item"><span>৫. ইমেজ ও গ্যালারি হ্যান্ডলিং (Image Management)</span> <span>পৃষ্ঠা ৫</span></div>
+    <div class="toc-item"><span>৬. পার্শিয়াল পেলোড ও সিঙ্ক প্রক্রিয়া (Partial Payload & Sync)</span> <span>পৃষ্ঠা ৬</span></div>
+    <div class="toc-item"><span>৭. রিয়েল-টাইম ইভেন্ট সিঙ্ক (Real-time Event Hooks)</span> <span>পৃষ্ঠা ৭</span></div>
+    <div class="toc-item"><span>৮. অর্ডার ম্যানেজমেন্ট ও রিকনসিলিয়েশন (Order Workflow)</span> <span>পৃষ্ঠা ৮</span></div>
+    <div class="toc-item"><span>৯. লিস্ট ভিউ ও বাল্ক অপারেশন (List View & Bulk Tools)</span> <span>পৃষ্ঠা ৯</span></div>
+    <div class="toc-item"><span>১০. সাধারণ সমস্যা ও সমাধান (Troubleshooting & FAQs)</span> <span>পৃষ্ঠা ১০</span></div>
+</div>
+
+<!-- SECTION 1 -->
+<h1>১. ভূমিকা ও মূল বৈশিষ্ট্য (Introduction)</h1>
+<p>
+<strong>Woo Prime</strong> হলো একটি শক্তিশালী ও আধুনিক ফ্রাপ/ইআরপিনেক্সট (ERPNext) কাস্টম অ্যাপ্লিকেশন, যা আপনার ওয়ার্ডপ্রেস WooCommerce অনলাইন স্টোরের সাথে ERPNext-এর মধ্যে নিরবচ্ছিন্ন ডেটা আদান-প্রদান নিশ্চিত করে।
+</p>
+<p>
+এই অ্যাপটি পণ্য তৈরি, ভেরিয়েন্ট হ্যান্ডলিং, স্টক আপডেট, রিয়েল-টাইম প্রাইস আপডেট, অফার/ডিসকাউন্ট সিঙ্ক এবং অনলাইন অর্ডার ম্যানেজমেন্টকে সম্পূর্ণ স্বয়ংক্রিয় করে তোলে।
+</p>
+
+<h3>মূল সুবিধাসমূহ (Key Highlights):</h3>
+<ul>
+    <li><strong>জিরো ইমেজ ডুপ্লিকেশন ও স্টোরেজ সেভার:</strong> আংশিক পেলোড (Partial Payload) ব্যবহার করে প্রতি আপডেটে বারবার ছবি আপলোড বন্ধ করে সার্ভারের জায়গা বাঁচায়।</li>
+    <li><strong>মাল্টি-ক্যাটাগরি সাপোর্ট:</strong> একই পণ্যে একাধিক ক্যাটাগরি নির্বাচন এবং প্যারেন্ট-চাইল্ড হায়ারার্কি অক্ষুণ্ণ রাখা।</li>
+    <li><strong>ভেরিয়েবল প্রোডাক্ট সাপোর্ট:</strong> কালার, সাইজ ইত্যাদি একাধিক অ্যাট্রিবিউটসহ Variable Product প্রকাশনা।</li>
+    <li><strong>রিয়েল-টাইম স্টক আপডেট:</strong> ERPNext গুদামে স্টক ওঠা-নামা করা মাত্রই সেকেন্ডের মধ্যে WooCommerce-এ লাইভ আপডেট।</li>
+    <li><strong>প্রাইসিং রুল অটোমেশন:</strong> ERPNext Pricing Rule অনুযায়ী অফার বা সেল প্রাইস স্বয়ংক্রিয়ভাবে সিঙ্ক ও মেয়াদ শেষে অপসারণ।</li>
+</ul>
+
+<div class="page-break"></div>
+
+<!-- SECTION 2 -->
+<h1>২. প্রাথমিক সেটআপ ও সংযোগ (Setup & Settings)</h1>
+<p>
+অ্যাপটি ব্যবহারের পূর্বে আপনার WooCommerce স্টোর থেকে REST API কী তৈরি করতে হবে এবং <strong>Woo Settings</strong> ডকটাইপে তা যুক্ত করতে হবে।
+</p>
+
+<h3>ধাপ ১: WooCommerce থেকে API Keys তৈরি</h3>
+<ol>
+    <li>WordPress ড্যাশবোর্ডে লগইন করুন: <code>WooCommerce &gt; Settings &gt; Advanced &gt; REST API</code>-এ যান।</li>
+    <li><strong>Add Key</strong> বাটনে ক্লিক করুন।</li>
+    <li>Description দিন (যেমন: <code>ERPNext Integration</code>), Permissions নির্বাচন করুন <strong>Read/Write</strong>।</li>
+    <li><strong>Generate API Key</strong> চাপলে আপনি <code>Consumer Key</code> (ck_...) এবং <code>Consumer Secret</code> (cs_...) পাবেন। এগুলো কপি করে সংরক্ষণ করুন।</li>
+</ol>
+
+<h3>ধাপ ২: ERPNext-এ Woo Settings কনফিগার</h3>
+<p>ERPNext সার্চবারে লিখুন <strong>Woo Settings</strong> এবং নিচের ফিল্ডগুলো পূরণ করুন:</p>
+
+<table>
+    <tr>
+        <th style="width: 35%;">ফিল্ডের নাম</th>
+        <th>বিবরণ ও সুপারিশকৃত মান</th>
+    </tr>
+    <tr>
+        <td><strong>Enable WooCommerce Integration</strong></td>
+        <td>ইন্টিগ্রেশন চালু করতে এটি টিক দিন (Check)।</td>
+    </tr>
+    <tr>
+        <td><strong>WooCommerce Site URL</strong></td>
+        <td>আপনার ওয়েবসাইটের সম্পূর্ণ URL (যেমন: <code>https://dressup.com.bd</code>)।</td>
+    </tr>
+    <tr>
+        <td><strong>Consumer Key & Secret</strong></td>
+        <td>WordPress থেকে প্রাপ্ত API Key ও Secret পেস্ট করুন।</td>
+    </tr>
+    <tr>
+        <td><strong>Default Price List</strong></td>
+        <td>যে প্রাইস লিস্ট থেকে সাধারণ মূল্য (Regular Price) আসবে (যেমন: <code>Standard Selling</code>)।</td>
+    </tr>
+    <tr>
+        <td><strong>Default Warehouse</strong></td>
+        <td>যে গুদামের স্টক WooCommerce-এ যাবে (যেমন: <code>Stores - DUP</code>)।</td>
+    </tr>
+    <tr>
+        <td><strong>Auto Sync Switches</strong></td>
+        <td>স্টক, প্রাইস এবং অর্ডার সিঙ্ক অপশনগুলো অন রাখুন।</td>
+    </tr>
+</table>
+
+<div class="callout callout-success">
+    <strong>টিপস:</strong> সেটিংস সেভ করার পর ফর্মের উপরে <strong>Test Connection</strong> বাটনে ক্লিক করে নিশ্চিত হোন যে API সঠিকভাবে কানেক্ট হয়েছে।
+</div>
+
+<div class="page-break"></div>
+
+<!-- SECTION 3 -->
+<h1>৩. পণ্য তৈরি ও ব্যবস্থাপনা (Woo Item Management)</h1>
+<p>
+ERPNext-এর সাধারণ <strong>Item</strong> সরাসরি ওয়েবসাইটে প্রকাশ না করে <strong>Woo Item</strong> ডকটাইপের মাধ্যমে নিয়ন্ত্রণ করা হয়। এতে ওয়েবসাইটের জন্য বিশেষ বিবরণ, ছবি ও ক্যাটাগরি কাস্টমাইজ করা যায়।
+</p>
+
+<h3>Woo Item তৈরির পদ্ধতি:</h3>
+<ol>
+    <li>ERPNext সার্চবার থেকে <strong>Woo Item List</strong>-এ যান এবং <strong>Add Woo Item</strong> চাপুন।</li>
+    <li><strong>Item Code:</strong> ERPNext-এর যে আইটেমটি যুক্ত করতে চান তা নির্বাচন করুন।</li>
+    <li>নির্বাচন করার সাথে সাথে SKU, Title, Price ইত্যাদি তথ্য স্বয়ংক্রিয়ভাবে চলে আসবে।</li>
+    <li>ওয়েবসাইটের উপযোগী <strong>Description</strong> ও <strong>Short Description</strong> লিখুন।</li>
+    <li><strong>Save</strong> বাটনে ক্লিক করুন।</li>
+</ol>
+
+<h3>পণ্যের ধরন (Product Types):</h3>
+<div class="card">
+    <h4>১. Simple Item (একক পণ্য)</h4>
+    <p>যে পণ্যের কোনো সাইজ বা রঙের ভেরিয়েশন নেই। এটি সরাসরি Regular Price এবং Stock অনুযায়ী WooCommerce-এ Simple Product হিসেবে প্রকাশিত হয়।</p>
+</div>
+
+<div class="card">
+    <h4>২. Template & Variable Product (ভেরিয়েন্ট পণ্য)</h4>
+    <p>যে পণ্যের অধীনে বিভিন্ন সাইজ, ওজন বা কালার ভেরিয়েন্ট থাকে।</p>
+    <ul>
+        <li>প্যারেন্ট টেমপ্লেটটিতে <code>Has Variants = 1</code> থাকবে।</li>
+        <li>টেমপ্লেট ফর্মে নিচের ভেরিয়েন্ট টেবিলে প্রতি ভেরিয়েন্টের জন্য পাবলিশ মোড নির্ধারণ করা যায়:</li>
+        <li><strong>With Template:</strong> প্যারেন্টের অধীনে ভেরিয়েশন হিসেবে যুক্ত হবে।</li>
+        <li><strong>Not Published:</strong> এই নির্দিষ্ট ভেরিয়েন্টটি ওয়েবসাইটে যাবে না (বাদ থাকবে)।</li>
+    </ul>
+</div>
+
+<div class="card">
+    <h4>৩. Standalone Simple Item (ভেরিয়েন্টকে আলাদা পণ্য করা)</h4>
+    <p>টেমপ্লেটের কোনো ভেরিয়েন্টকে যদি মূল পণ্যের অধীনে না রেখে সম্পূর্ণ স্বতন্ত্র একক পণ্য হিসেবে ওয়েবসাইটে দেখাতে চান, তবে তার <code>Product Type</code> সেট করুন <strong>Simple Item</strong>।</p>
+</div>
+
+<div class="page-break"></div>
+
+<!-- SECTION 4 -->
+<h1>৪. ক্যাটাগরি ও ট্যাগ ব্যবস্থাপনা (Categories & Tags)</h1>
+
+<h3>১. একাধিক ক্যাটাগরি নির্বাচন (Multi-Select Categories):</h3>
+<p>
+Woo Item ফর্মে <strong>Categories (Multi-select)</strong> টেবিল রয়েছে। এখানে আপনি একই পণ্যের জন্য এক বা একাধিক ক্যাটাগরি যোগ করতে পারেন।
+</p>
+<ul>
+    <li>যদি আপনি <code>Women &gt; Clothing &gt; Saree</code> যুক্ত করেন, তবে WooCommerce-এ অটোমেটিক প্যারেন্ট ও চাইল্ড উভয় ক্যাটাগরি লিংক হবে।</li>
+    <li>WooCommerce-এ ক্যাটাগরিটি আগে থেকে না থাকলে সিস্টেম ব্যাকগ্রাউন্ডে স্বয়ংক্রিয়ভাবে সেটি তৈরি করে আইডি লিংক করে নেবে।</li>
+</ul>
+
+<div class="callout callout-warning">
+    <strong>আনক্যাটাগরাইজড পণ্য (Uncategorized):</strong><br>
+    যদি Woo Item-এর Categories টেবিল সম্পূর্ণ ফাঁকা (Empty) রেখে পণ্য পাবলিশ বা আপডেট করেন, তবে WooCommerce-এ পণ্যটি স্বয়ংক্রিয়ভাবে ডিফল্ট <strong>Uncategorized</strong> হিসেবে সেট হবে এবং পূর্বের ক্যাটাগরিগুলো রিমুভ হয়ে যাবে।
+</div>
+
+<h3>২. ট্যাগ ব্যবস্থাপনা (Product Tags):</h3>
+<p>
+<strong>Product Tags</strong> টেবিলে প্রাসঙ্গিক কি-ওয়ার্ড বা ট্যাগ যুক্ত করতে পারেন (যেমন: <code>Summer Collection</code>, <code>Cotton</code>)। এগুলো ক্রেতাদের ওয়েবসাইটে ফিল্টার করতে সাহায্য করে।
+</p>
+
+<!-- SECTION 5 -->
+<h1>৫. ইমেজ ও গ্যালারি হ্যান্ডলিং (Image Management)</h1>
+<p>
+পণ্যের ছবি অনলাইন বিক্রির প্রধান আকর্ষণ। Woo Prime-এ প্রধান ছবি এবং গ্যালারি ছবির জন্য আলাদা আধুনিক ব্যবস্থা রয়েছে।
+</p>
+
+<h3>১. মেইন ইমেজ (Main Image) ম্যানুয়ালি যোগ/বদলানো:</h3>
+<ul>
+    <li><strong>অটো-ফেচ:</strong> নতুন Woo Item খোলার সময় ERPNext Item-এর প্রধান ছবি থাকলে তা স্বয়ংক্রিয়ভাবে চলে আসবে।</li>
+    <li><strong>ম্যানুয়াল আপলোড:</strong> ছবি না থাকলে প্রিভিউ কার্ডে <strong>[ Upload Main Image ]</strong> বাটন ক্লিক করে যেকোনো ফাইল আপলোড করা যায়।</li>
+    <li><strong>ছবি পরিবর্তন:</strong> অলরেডি ছবি থাকলে প্রিভিউ কার্ডের উপরে <strong>[ 📷 Change Main Image ]</strong> বাটনে ক্লিক করে নতুন ছবি সিলেক্ট করলেই তা আপডেট হয়ে যাবে। এটি কখনো ERPNext-এর ছবি দিয়ে অনাকাঙ্ক্ষিতভাবে ওভাররাইট হবে না।</li>
+</ul>
+
+<h3>২. প্রোডাক্ট গ্যালারি (Gallery Images):</h3>
+<p>
+<strong>Product Gallery Images</strong> টেবিলে পণ্যের অতিরিক্ত কোণ বা মডেল পরিহিত ৪-৫টি অতিরিক্ত ছবি ও ক্যাপশন যুক্ত করা যায়।
+</p>
+
+<h3>৩. ইমেজ প্রিভিউ ও লাইটবক্স জুম:</h3>
+<p>
+Woo Item ফর্মে একটি ইন্টারেক্টিভ প্রিভিউ বক্স থাকে। নিচে থাম্বনেইল ক্লিক করে সব ছবি দেখা যায় এবং <strong>[ 🔍 Zoom ]</strong> বাটনে ক্লিক করলে ফুল-স্ক্রিন লাইটবক্সে হাই-রেজোলিউশন ছবি দেখার সুবিধা রয়েছে।
+</p>
+
+<div class="page-break"></div>
+
+<!-- SECTION 6 -->
+<h1>৬. পার্শিয়াল পেলোড ও সিঙ্ক প্রক্রিয়া (Partial Payload)</h1>
+<p>
+Woo Prime-এর অন্যতম সেরা প্রযুক্তি হলো <strong>স্মার্ট পার্শিয়াল পেলোড (Partial Payload Engine)</strong>।
+</p>
+
+<h3>পূর্বের সমস্যা বনাম বর্তমান সমাধান:</h3>
+<table>
+    <tr>
+        <th>বিষয়</th>
+        <th>পূর্বের পূর্ণাঙ্গ পেলোড (Full Payload)</th>
+        <th>বর্তমান আংশিক পেলোড (Partial Payload)</th>
+    </tr>
+    <tr>
+        <td><strong>ছবি হ্যান্ডলিং</strong></td>
+        <td>প্রতিটি সেভে বারবার ছবি পাঠানো হতো।</td>
+        <td>ছবিতে হাত না দিলে ছবিতে হাত দেওয়া হয় না।</td>
+    </tr>
+    <tr>
+        <td><strong>সার্ভার স্টোরেজ</strong></td>
+        <td>ওয়ার্ডপ্রেস মিডিয়া ডুপ্লিকেট হয়ে স্টোরেজ ফুল হতো।</td>
+        <td><strong>জিরো ডুপ্লিকেশন</strong> — ১ মেগাবাইটও অতিরিক্ত জায়গা অপচয় হয় না।</td>
+    </tr>
+    <tr>
+        <td><strong>সিঙ্ক গতি</strong></td>
+        <td>ভারী পেলোডের কারণে সেভ হতে ৫-১০ সেকেন্ড লাগত।</td>
+        <td>মিলিসেকেন্ডে বিদ্যুৎগতিতে লাইভ আপডেট।</td>
+    </tr>
+</table>
+
+<h3>কীভাবে কাজ করে?</h3>
+<ol>
+    <li>আপনি যখন Woo Item-এ কোনো পরিবর্তন করে <strong>Save</strong> দেন, ফ্রাপের <code>get_doc_before_save()</code> দিয়ে আগের ও বর্তমান মানের পার্থক্য মাপা হয়।</li>
+    <li>যদি শুধু <strong>Regular Price</strong> বদলান, তবে WooCommerce-এ শুধুই যায়:
+    <br><code>{"regular_price": "650.0"}</code></li>
+    <li>যদি শুধু <strong>Categories</strong> বদলান, তবে যায়:
+    <br><code>{"categories": [{"id": 12}, {"id": 15}]}</code></li>
+    <li>যদি কোনো ফিল্ডই পরিবর্তন না করেন, কোনো রিকোয়েস্টই যায় না (ব্যান্ডউইথ সেইভ)।</li>
+</ol>
+
+<!-- SECTION 7 -->
+<h1>৭. রিয়েল-টাইম ইভেন্ট সিঙ্ক (Real-Time Hooks)</h1>
+<p>
+ERPNext ব্যাকএন্ডে সাধারণ কার্যক্রম চলাকালে WooCommerce-এ স্বয়ংক্রিয় সিঙ্ক চালু থাকে:
+</p>
+<ul>
+    <li><strong>স্টক আপডেট (Bin Update):</strong> ইনভয়েস, ডেলিভারি নোট বা স্টক এন্ট্রির মাধ্যমে গুদামে পণ্যের পরিমাণ পরিবর্তন হলে তাৎক্ষণিকভাবে WooCommerce-এর স্টক আপডেট হয়ে যায়।</li>
+    <li><strong>মূল্য আপডেট (Item Price Update):</strong> প্রাইস লিস্টে পণ্যের স্ট্যান্ডার্ড বিক্রয়মূল্য পরিবর্তন হলে স্বয়ংক্রিয়ভাবে ওয়েবসাইটে নতুন দাম কার্যকর হয়।</li>
+    <li><strong>ছাড়/অফার আপডেট (Pricing Rule):</strong> ERPNext Pricing Rule সেভ হলে সেল প্রাইস (`sale_price`) শুরু হয় এবং অফারের মেয়াদ শেষ হলে স্বয়ংক্রিয়ভাবে অফার প্রাইস মুছে পূর্বের রেগুলার প্রাইসে ফিরে যায়।</li>
+    <li><strong>নাম/বিবরণ আপডেট:</strong> ERPNext Item-এ টাইটেল বা ডেসক্রিপশন বদলালে Woo Item-এ আপডেট হয়ে ব্যাকগ্রাউন্ডে পাবলিশ হয়।</li>
+</ul>
+
+<div class="page-break"></div>
+
+<!-- SECTION 8 -->
+<h1>৮. অর্ডার সিঙ্ক ও ইনভয়েসিং (Order Workflow)</h1>
+
+<h3>স্বয়ংক্রিয় অর্ডার আসার প্রক্রিয়া:</h3>
+<p>
+ক্রেতা যখন ওয়েবসাইটে অর্ডার করেন, তখন Frappe Scheduler প্রতি ৫ মিনিটে নতুন অর্ডারগুলো এনে ERPNext-এ <strong>Sales Order</strong> তৈরি করে:
+</p>
+<ol>
+    <li>অর্ডারের বিলিং ও শিপিং ঠিকানা দেখে গ্রাহক (Customer) শনাক্ত বা তৈরি করা হয়।</li>
+    <li>অর্ডারের আইটেমগুলো ERPNext-এর পণ্যের সাথে লিংক করে Sales Order ড্রাফট/সাবমিট করা হয়।</li>
+    <li>অর্ডারে ব্যবহৃত কুপন কোড ও ডেলিভারি চার্জ যথাযথভাবে অ্যাকাউন্টিং হেড ও চার্জ টেবিলে বসে যায়।</li>
+    <li>অর্ডারে <code>woo_order_id</code> রেফারেন্স থাকে যাতে একই অর্ডার দুইবার না আসে।</li>
+</ol>
+
+<h3>অর্ডার রিকনসিলিয়েশন (Order Reconciliation):</h3>
+<p>
+প্রতিদিন রাতে স্বয়ংক্রিয়ভাবে <code>reconcile_orders()</code> ব্যাকগ্রাউন্ডে চলে। যদি কোনো কারণে নেটওয়ার্ক বা সার্ভার বিভ্রাটের জন্য দিনের কোনো অর্ডার মিস হয়ে থাকে, এটি বিগত ২ দিনের রেকর্ড ঘেঁটে সেই মিস হওয়া অর্ডারগুলো উদ্ধার করে সিস্টেমে এন্ট্রি করে নেয়।
+</p>
+
+<!-- SECTION 9 -->
+<h1>৯. লিস্ট ভিউ ও বাল্ক অপারেশন (List View & Bulk Tools)</h1>
+<p>
+Woo Item লিস্ট ভিউ অত্যন্ত ব্যবহারকারী-বান্ধব এবং এতে দ্রুত কাজ করার জন্য বিভিন্ন টুলস যুক্ত রয়েছে।
+</p>
+
+<h3>১. স্ট্যাটাস ইনডিকেটর (Status Column):</h3>
+<p>লিস্ট ভিউতে প্রতিটি রো-এর বামে একটি পরিষ্কার কালার কোডেড স্ট্যাটাস থাকে:</p>
+<ul>
+    <li><span class="badge badge-green">✔ Synced</span> — পণ্যটি সফলভাবে WooCommerce-এ আপ-টু-ডেট আছে।</li>
+    <li><span class="badge badge-yellow">⚠ Partial</span> — মূল পণ্য সিঙ্ক হয়েছে কিন্তু কোনো একটি ভেরিয়েন্ট আটকে আছে।</li>
+    <li><span class="badge badge-red">✖ Error</span> — সিঙ্ক ব্যর্থ হয়েছে (এরর লগ দেখুন)।</li>
+    <li><span class="badge badge-grey">– Not Synced</span> — এখনো ওয়েবসাইটে পাবলিশ করা হয়নি।</li>
+</ul>
+
+<h3>২. প্রয়োজনীয় বাটন ও অ্যাকশন মেন্যু:</h3>
+<table>
+    <tr>
+        <th>টুলের নাম</th>
+        <th>কাজ ও ব্যবহারের ক্ষেত্র</th>
+    </tr>
+    <tr>
+        <td><strong>Fetch All from WooCommerce</strong></td>
+        <td>WooCommerce-এর সব পণ্য এনে ERPNext-এর সাথে SKU মিলিয়ে অটো-লিংক করে।</td>
+    </tr>
+    <tr>
+        <td><strong>Fetch by SKU</strong></td>
+        <td>নির্দিষ্ট কোনো একক পণ্য SKU দিয়ে WooCommerce থেকে টেনে আনে।</td>
+    </tr>
+    <tr>
+        <td><strong>Auto Link by SKU</strong></td>
+        <td>যেসব Woo Item এখনো ERP Item-এর সাথে যুক্ত হয়নি, সেগুলোকে SKU অনুযায়ী লিংক করায়।</td>
+    </tr>
+    <tr>
+        <td><strong>Bulk Sync / Publish</strong></td>
+        <td>লিস্ট থেকে একাধিক পণ্য টিক দিয়ে একসাথে ব্যাকগ্রাউন্ডে পাবলিশ করার ব্যবস্থা।</td>
+    </tr>
+    <tr>
+        <td><strong>Update Prices from ERPNext</strong></td>
+        <td>ERPNext প্রাইস লিস্ট থেকে এক ক্লিকে সব পণ্যের রেগুলার প্রাইস আপডেট করা।</td>
+    </tr>
+</table>
+
+<div class="page-break"></div>
+
+<!-- SECTION 10 -->
+<h1>১০. সাধারণ সমস্যা ও সমাধান (Troubleshooting & FAQs)</h1>
+
+<div class="card">
+    <h4>প্রশ্ন ১: পণ্য পাবলিশ করার সময় "Cannot Publish Template" এরর দিচ্ছে কেন?</h4>
+    <p><strong>সমাধান:</strong> টেমপ্লেট আইটেম পাবলিশ করতে হলে তার অধীনে অন্তত একটি ভেরিয়েন্টের মোড <code>With Template</code> থাকতে হবে। সব ভেরিয়েন্ট <code>Not Published</code> থাকলে টেমপ্লেট একা পাবলিশ হতে পারে না।</p>
+</div>
+
+<div class="card">
+    <h4>প্রশ্ন ২: "Error: Woo Item has been modified after you have opened it" দেখাচ্ছে কেন?</h4>
+    <p><strong>সমাধান:</strong> এটি ফ্রাপের সাধারণ ডায়নামিক কনকারেন্সি সেফগার্ড। ব্রাউজারের পেজটি একবার রিফ্রেশ (Ctrl+R) করে পুনরায় পাবলিশ চাপুন। ব্যাকগ্রাউন্ড প্রক্রিয়ায় এখন অটোমেটিক ৩ বার রিট্রাই লজিক থাকায় এই এরর সাধারণত আর আটকাবে না।</p>
+</div>
+
+<div class="card">
+    <h4>প্রশ্ন ৩: WooCommerce-এ ছবি দেখা যাচ্ছে না বা ভাঙা লিংক দেখাচ্ছে?</h4>
+    <p><strong>সমাধান:</strong> আপনার ERPNext সার্ভারের ডোমেইন পাবলিকলি রিচেবল হতে হবে। লোকালহোস্ট (localhost বা 127.0.0.1) থাকলে WooCommerce ইন্টারনেট থেকে ছবি ডাউনলোড করতে পারে না। <code>site_config.json</code>-এ সঠিক <code>host_name</code> সেট আছে কিনা নিশ্চিত করুন।</p>
+</div>
+
+<div class="card">
+    <h4>প্রশ্ন ৪: সিঙ্ক ফেইল করলে এরর কীভাবে দেখব?</h4>
+    <p><strong>সমাধান:</strong> ERPNext সার্চবারে লিখুন <strong>Woo Sync Log</strong> অথবা <strong>Error Log</strong>। সেখানে প্রতিটি ফেইলড রিকোয়েস্টের পূর্ণাঙ্গ কারণ ও ট্রেসব্যাক সংরক্ষিত থাকে।</p>
+</div>
+
+<div class="footer-note">
+    Woo Prime — প্রস্তুতকারক: Prime Tech BD | সর্বস্বত্ব সংরক্ষিত © ২০২৬
+</div>
+
+</body>
+</html>
