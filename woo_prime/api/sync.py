@@ -3877,17 +3877,22 @@ def on_item_update(doc, method):
 						if not old_erp_desc or woo_item.woo_description.strip() == old_erp_desc.strip():
 							woo_item.woo_description = doc.description
 
-				# Sync image: propagate ERP item image to Woo Item and check if it changed
+				# Sync image: propagate ERP item image to Woo Item ONLY if not manually customized on Woo Item
 				new_image = getattr(doc, "image", None)
 				old_image = woo_item.image
 				image_changed = False
-				if new_image and new_image != old_image:
+				old_erp_image = frappe.db.get_value("Item", doc.name, "image")
+
+				if not old_image and new_image:
 					woo_item.image = new_image
 					image_changed = True
-				elif old_image and not new_image:
-					# Image removed from ERP — clear it on Woo Item too
-					woo_item.image = None
-					image_changed = True
+				elif old_image and (not old_erp_image or old_image == old_erp_image):
+					if new_image and new_image != old_image:
+						woo_item.image = new_image
+						image_changed = True
+					elif not new_image:
+						woo_item.image = None
+						image_changed = True
 
 				woo_item.save(ignore_permissions=True)
 				frappe.db.commit()

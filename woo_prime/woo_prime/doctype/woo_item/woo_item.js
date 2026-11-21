@@ -1090,11 +1090,27 @@ function render_image_preview(frm) {
 				<div style="font-weight: 500; font-size: 12px; color: var(--text-color, #1f272e);">
 					${__("No Product Image Attached")}
 				</div>
-				<div style="font-size: 11px; color: var(--text-muted, #8d99a6); margin-top: 2px;">
-					${__("Upload a Main Image above or select an Item Code to preview.")}
+				<div style="font-size: 11px; color: var(--text-muted, #8d99a6); margin-top: 2px; margin-bottom: 10px;">
+					${__("Upload a Main Image manually or select an Item Code.")}
 				</div>
+				<button type="button" class="btn btn-xs btn-primary btn-upload-main-image" style="font-size: 11px; padding: 4px 12px;">
+					<i class="fa fa-upload"></i> ${__("Upload Main Image")}
+				</button>
 			</div>
 		`);
+
+		$wrapper.find(".btn-upload-main-image").on("click", function (e) {
+			e.stopPropagation();
+			new frappe.ui.FileUploader({
+				doctype: frm.doctype,
+				docname: frm.docname,
+				folder: "Home/Attachments",
+				on_success: (file_doc) => {
+					frm.set_value("image", file_doc.file_url);
+				}
+			});
+		});
+
 		return;
 	}
 
@@ -1179,6 +1195,9 @@ function render_image_preview(frm) {
 					</span>
 				</div>
 				<div style="display: flex; gap: 5px;">
+					<button type="button" class="btn btn-xs btn-default btn-upload-main-image" style="font-size: 11px; padding: 2px 7px;" title="${__("Upload / Change Main Image")}">
+						📷 ${__("Change Main Image")}
+					</button>
 					<button type="button" class="btn btn-xs btn-default btn-preview-zoom" style="font-size: 11px; padding: 2px 7px;" title="${__("View Full Resolution in Lightbox")}">
 						🔍 ${__("Zoom")}
 					</button>
@@ -1227,6 +1246,19 @@ function render_image_preview(frm) {
 		let idx = parseInt($(this).data("idx"));
 		frm._active_preview_idx = idx;
 		render_image_preview(frm);
+	});
+
+	// Upload / Change Main Image handler
+	$wrapper.find(".btn-upload-main-image").on("click", function (e) {
+		e.stopPropagation();
+		new frappe.ui.FileUploader({
+			doctype: frm.doctype,
+			docname: frm.docname,
+			folder: "Home/Attachments",
+			on_success: (file_doc) => {
+				frm.set_value("image", file_doc.file_url);
+			}
+		});
 	});
 
 	// Zoom click handler -> Lightbox dialog

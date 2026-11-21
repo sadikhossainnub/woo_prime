@@ -92,8 +92,7 @@
    "label": "Sale Price"
   },
   {
-   "description": "Auto-fetched from Item. You can also upload a main image manually.",
-   "fetch_from": "item_code.image",
+   "description": "Upload a main image manually, or leave empty to auto-use Item image.",
    "fieldname": "image",
    "fieldtype": "Attach Image",
    "label": "Main Image"
@@ -367,7 +366,7 @@
    "read_only": 1
   },
   {
-   "description": "Choose how to publish this item on WooCommerce:\n\u2022 Simple Item: Publish as simple product\n\u2022 Blank: Auto-detect based on item type.",
+   "description": "Choose how to publish this item on WooCommerce:\n• Simple Item: Publish as simple product\n• Blank: Auto-detect based on item type.",
    "fieldname": "woo_product_type",
    "fieldtype": "Select",
    "label": "WooCommerce Product Type",
