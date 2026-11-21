@@ -1301,17 +1301,54 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 			if not attr_name:
 				continue
 			opts = [o.strip() for o in (row.options or "").replace("\n", ",").split(",") if o.strip()]
-			if not opts and row.attribute in attributes_dict:
-				opts = sorted(list(attributes_dict[row.attribute]))
+
+			# Find options from actual ERPNext variants in attributes_dict
+			dict_opts = set()
+			if row.attribute in attributes_dict:
+				dict_opts.update(attributes_dict[row.attribute])
+			if attr_name in attributes_dict:
+				dict_opts.update(attributes_dict[attr_name])
+
+			# Check mapped ERPNext attribute from Woo Attribute
+			linked_erp_attr = None
+			if row.attribute and frappe.db.exists("DocType", "Woo Attribute"):
+				linked_erp_attr = frappe.db.get_value("Woo Attribute", row.attribute, "erpnext_item_attribute")
+			if not linked_erp_attr and attr_name and frappe.db.exists("DocType", "Woo Attribute"):
+				linked_erp_attr = frappe.db.get_value("Woo Attribute", {"attribute_name": attr_name}, "erpnext_item_attribute")
+
+			if linked_erp_attr and linked_erp_attr in attributes_dict:
+				dict_opts.update(attributes_dict[linked_erp_attr])
+
+			# Check Woo Settings attribute_mappings
+			try:
+				if settings and getattr(settings, "attribute_mappings", None):
+					for am in settings.attribute_mappings:
+						if (am.woo_attribute == row.attribute or (am.woo_attribute_slug and am.woo_attribute_slug == row.attribute)) and am.erpnext_attribute in attributes_dict:
+							dict_opts.update(attributes_dict[am.erpnext_attribute])
+			except Exception:
+				pass
+
+			# Merge options: union of user options and actual variant options
+			if dict_opts:
+				opts = sorted(list(set(opts).union(dict_opts)))
+			elif not opts:
+				# Case-insensitive match against attributes_dict
+				for dict_k, dict_vals in attributes_dict.items():
+					if dict_k.lower() in (attr_name.lower(), (row.attribute or "").lower()):
+						opts = sorted(list(dict_vals))
+						break
 
 			# Skip variation attributes with no options — WooCommerce rejects empty options for variations
 			if not opts and getattr(row, "is_variation", 1):
 				continue
 
-			woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr_name, api)
+			woo_attr_id, target_name = _get_or_create_woo_attribute_id(row.attribute or attr_name, api)
+			if not woo_attr_id and attr_name != row.attribute:
+				woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr_name, api)
+
 			is_var = bool(getattr(row, "is_variation", 1))
 			attr_payload = {
-				"name": target_name or attr_name,
+				"name": target_name or row.attribute or attr_name,
 				"position": pos,  # Maintain order from child table (sorted by Frappe idx)
 				"visible": bool(getattr(row, "is_visible", 1)),
 				"variation": is_var,
@@ -1322,11 +1359,13 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 			woo_attributes.append(attr_payload)
 
 			if is_var:
-				variation_attr_keys.add(clean_text(attr_name).lower())
-				if row.attribute:
-					variation_attr_keys.add(clean_text(row.attribute).lower())
-				if target_name:
-					variation_attr_keys.add(clean_text(target_name).lower())
+				for k in [attr_name, row.attribute, target_name, linked_erp_attr]:
+					if k:
+						clean_k = clean_text(k).lower()
+						variation_attr_keys.add(clean_k)
+						slug_k = frappe.scrub(k).replace("_", "-").lower()
+						variation_attr_keys.add(slug_k)
+						variation_attr_keys.add("pa_" + slug_k)
 	else:
 		# Fallback: auto-detected attributes (maintain alphabetical order as position)
 		idx = 0
@@ -1342,9 +1381,13 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 			if woo_attr_id:
 				attr_payload["id"] = int(woo_attr_id)
 			woo_attributes.append(attr_payload)
-			variation_attr_keys.add(clean_text(attr_name).lower())
-			if target_name:
-				variation_attr_keys.add(clean_text(target_name).lower())
+			for k in [attr_name, target_name]:
+				if k:
+					clean_k = clean_text(k).lower()
+					variation_attr_keys.add(clean_k)
+					slug_k = frappe.scrub(k).replace("_", "-").lower()
+					variation_attr_keys.add(slug_k)
+					variation_attr_keys.add("pa_" + slug_k)
 			idx += 1
 
 	product_name = woo_item.item_name or item.item_name or ""
@@ -1965,10 +2008,12 @@ def _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_
 		# Bug #7 fix: also try slug/scrubbed forms to avoid missing valid variation attrs
 		slug_key = frappe.scrub(attr.attribute).replace("_", "-").lower()
 		pa_slug_key = "pa_" + slug_key
+		target_slug = frappe.scrub(target_name).replace("_", "-").lower() if target_name else ""
+		pa_target_slug = "pa_" + target_slug if target_slug else ""
 
 		# Filter out attributes not marked as variation
 		if variation_attr_keys is not None and len(variation_attr_keys) > 0:
-			candidate_keys = {attr_key, target_key, slug_key, pa_slug_key}
+			candidate_keys = {attr_key, target_key, slug_key, pa_slug_key, target_slug, pa_target_slug} - {""}
 			if not candidate_keys.intersection(variation_attr_keys):
 				continue
 
@@ -2585,6 +2630,8 @@ def _get_or_create_woo_attribute_id(attr_name, api=None):
 	# 2. Check local Woo Attribute DocType
 	if frappe.db.exists("DocType", "Woo Attribute"):
 		matched = frappe.db.get_value("Woo Attribute", {"erpnext_item_attribute": attr_name}, ["woo_attribute_id", "attribute_name"], as_dict=True)
+		if not matched and frappe.db.exists("Woo Attribute", attr_name):
+			matched = frappe.db.get_value("Woo Attribute", attr_name, ["woo_attribute_id", "attribute_name"], as_dict=True)
 		if not matched:
 			matched = frappe.db.get_value("Woo Attribute", {"attribute_name": attr_name}, ["woo_attribute_id", "attribute_name"], as_dict=True)
 		if not matched:

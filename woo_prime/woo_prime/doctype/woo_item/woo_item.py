@@ -193,16 +193,21 @@ class WooItem(Document):
 						)
 					continue
 				val_str = ", ".join(sorted(list(vals)))
+				display_name = frappe.db.get_value("Woo Attribute", woo_attr, "attribute_name") if woo_attr else attr_name
+				if not display_name:
+					display_name = attr_name
 				if woo_attr in existing_attrs or attr_name in existing_attrs:
 					row = existing_attrs.get(woo_attr) or existing_attrs.get(attr_name)
 					if row:
 						row.attribute = woo_attr
+						if not row.attribute_name:
+							row.attribute_name = display_name
 						if not row.options and val_str:
 							row.options = val_str
 				else:
 					self.append("item_attributes", {
 						"attribute": woo_attr,
-						"attribute_name": attr_name,
+						"attribute_name": display_name,
 						"options": val_str,
 						"is_variation": 1,
 						"is_visible": 1,
@@ -221,16 +226,21 @@ class WooItem(Document):
 						)
 					continue
 				val = clean_text(a.attribute_value) if a.attribute_value else ""
+				display_name = frappe.db.get_value("Woo Attribute", woo_attr, "attribute_name") if woo_attr else a.attribute
+				if not display_name:
+					display_name = a.attribute
 				if woo_attr in existing_attrs or a.attribute in existing_attrs:
 					row = existing_attrs.get(woo_attr) or existing_attrs.get(a.attribute)
 					if row:
 						row.attribute = woo_attr
+						if not row.attribute_name:
+							row.attribute_name = display_name
 						if not row.options and val:
 							row.options = val
 				else:
 					self.append("item_attributes", {
 						"attribute": woo_attr,
-						"attribute_name": a.attribute,
+						"attribute_name": display_name,
 						"options": val,
 						"is_variation": 0,
 						"is_visible": 1,
@@ -274,17 +284,30 @@ class WooItem(Document):
 				image_changed = bool(changed_fields and ("image" in changed_fields or "images" in changed_fields))
 				_sfx = "img" if image_changed else "partial"
 
-				frappe.enqueue(
-					"woo_prime.woo_prime.doctype.woo_item.woo_item._publish_partial_woo_item_worker",
-					woo_item_name=self.name,
-					changed_fields=changed_fields,
-					user=frappe.session.user,
-					queue="long",
-					timeout=1800,
-					enqueue_after_commit=True,
-					job_id=f"woo_pub_{self.name}_{_sfx}",
-					deduplicate=True,
-				)
+				if "item_attributes" in changed_fields or getattr(self, "has_variants", 0):
+					frappe.enqueue(
+						"woo_prime.woo_prime.doctype.woo_item.woo_item._publish_single_woo_item_worker",
+						woo_item_name=self.name,
+						user=frappe.session.user,
+						queue="long",
+						timeout=1800,
+						enqueue_after_commit=True,
+						job_id=f"woo_pub_{self.name}_attrs",
+						deduplicate=True,
+						sync_images=image_changed,
+					)
+				else:
+					frappe.enqueue(
+						"woo_prime.woo_prime.doctype.woo_item.woo_item._publish_partial_woo_item_worker",
+						woo_item_name=self.name,
+						changed_fields=changed_fields,
+						user=frappe.session.user,
+						queue="long",
+						timeout=1800,
+						enqueue_after_commit=True,
+						job_id=f"woo_pub_{self.name}_{_sfx}",
+						deduplicate=True,
+					)
 		except Exception as e:
 			frappe.logger("woo_prime").error(f"Error enqueuing partial sync for {self.name}: {e}")
 
@@ -1081,6 +1104,18 @@ def _detect_changed_woo_fields(doc, doc_before):
 	if curr_imgs != prev_imgs:
 		changed.append("images")
 
+	# Compare child table `item_attributes`
+	curr_attrs = [
+		(r.attribute or "", r.attribute_name or "", (r.options or "").strip(), cint(getattr(r, "is_variation", 1)), cint(getattr(r, "is_visible", 1)))
+		for r in (getattr(doc, "item_attributes", []) or [])
+	]
+	prev_attrs = [
+		(r.attribute or "", r.attribute_name or "", (r.options or "").strip(), cint(getattr(r, "is_variation", 1)), cint(getattr(r, "is_visible", 1)))
+		for r in (getattr(doc_before, "item_attributes", []) or [])
+	]
+	if curr_attrs != prev_attrs:
+		changed.append("item_attributes")
+
 	return changed
 
 
@@ -1096,8 +1131,8 @@ def _publish_partial_woo_item_worker(woo_item_name, changed_fields=None, user=No
 			frappe.db.commit()
 			return
 
-		if not changed_fields:
-			# No specific changed fields detected: full sync without re-uploading images
+		if not changed_fields or "item_attributes" in changed_fields or getattr(woo_item, "has_variants", 0):
+			# If item_attributes changed or template has_variants: full publish sync without re-uploading images
 			woo_item._execute_publish_sync(user=user, sync_images=False)
 			frappe.db.commit()
 			return

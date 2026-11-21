@@ -280,17 +280,18 @@ class TestVariableSyncFixes(unittest.TestCase):
 			self.assertEqual(res.get("sku"), "TEST-SKU-001")
 			self.assertEqual(res.get("woo_product_id"), 99999)
 
-	def test_sync_parse_bool(self):
-		from woo_prime.api.sync import _parse_bool
-		self.assertTrue(_parse_bool(True))
-		self.assertTrue(_parse_bool("true"))
-		self.assertTrue(_parse_bool("1"))
-		self.assertTrue(_parse_bool(1))
-		self.assertFalse(_parse_bool(False))
-		self.assertFalse(_parse_bool("false"))
-		self.assertFalse(_parse_bool("0"))
-		self.assertFalse(_parse_bool(0))
-		self.assertFalse(_parse_bool(None))
+	def test_detect_changed_item_attributes(self):
+		from woo_prime.woo_prime.doctype.woo_item.woo_item import _detect_changed_woo_fields
+		doc_before = types.SimpleNamespace(
+			item_attributes=[types.SimpleNamespace(attribute="Size", attribute_name="Size", options="M, L", is_variation=1, is_visible=1)],
+			categories=[], woo_tags=[], images=[]
+		)
+		doc_curr = types.SimpleNamespace(
+			item_attributes=[types.SimpleNamespace(attribute="Size", attribute_name="Size", options="M, L, XL", is_variation=1, is_visible=1)],
+			categories=[], woo_tags=[], images=[]
+		)
+		changed = _detect_changed_woo_fields(doc_curr, doc_before)
+		self.assertIn("item_attributes", changed)
 
 
 
