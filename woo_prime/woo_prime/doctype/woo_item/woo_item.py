@@ -266,18 +266,27 @@ class WooItem(Document):
 
 			# If item is published and has a WooCommerce product ID, auto-sync changes in background
 			if self.published and self.woo_product_id:
+				doc_before = self.get_doc_before_save()
+				changed_fields = _detect_changed_woo_fields(self, doc_before)
+				if changed_fields is not None and len(changed_fields) == 0:
+					return
+
+				image_changed = bool(changed_fields and ("image" in changed_fields or "images" in changed_fields))
+				_sfx = "img" if image_changed else "partial"
+
 				frappe.enqueue(
-					"woo_prime.woo_prime.doctype.woo_item.woo_item._publish_single_woo_item_worker",
+					"woo_prime.woo_prime.doctype.woo_item.woo_item._publish_partial_woo_item_worker",
 					woo_item_name=self.name,
+					changed_fields=changed_fields,
 					user=frappe.session.user,
 					queue="long",
 					timeout=1800,
 					enqueue_after_commit=True,
-					job_id=f"woo_publish_{self.name}",
+					job_id=f"woo_pub_{self.name}_{_sfx}",
 					deduplicate=True,
 				)
-		except Exception:
-			pass
+		except Exception as e:
+			frappe.logger("woo_prime").error(f"Error enqueuing partial sync for {self.name}: {e}")
 
 	@frappe.whitelist()
 	def publish_to_woocommerce(self, background=True, sync_images=True):
@@ -1001,6 +1010,107 @@ def _publish_single_woo_item_worker(woo_item_name, user=None, sync_images=True):
 		frappe.db.rollback()
 		frappe.logger("woo_prime").error(f"Background publish failed for {woo_item_name}: {e}")
 		# After rollback, persist Error status in a fresh transaction so user sees it on form
+		try:
+			frappe.db.set_value("Woo Item", woo_item_name, {
+				"sync_status": "Error",
+				"last_synced": now_datetime(),
+			})
+			frappe.db.commit()
+		except Exception:
+			pass
+
+
+def _detect_changed_woo_fields(doc, doc_before):
+	"""Compare doc and doc_before to find which WooCommerce-relevant fields changed.
+	Returns list of changed field names, or None if doc_before is not available.
+	"""
+	if not doc_before:
+		return None
+
+	relevant_scalars = [
+		"item_name",
+		"regular_price",
+		"sale_price",
+		"woo_description",
+		"woo_short_description",
+		"manage_stock",
+		"image",
+		"woo_featured",
+		"catalog_visibility",
+		"allow_backorders",
+		"purchase_note",
+		"menu_order",
+		"woo_weight",
+		"woo_length",
+		"woo_width",
+		"woo_height",
+		"woo_virtual",
+		"woo_downloadable",
+		"reviews_allowed",
+	]
+
+	changed = []
+	for f in relevant_scalars:
+		val_curr = getattr(doc, f, None)
+		val_prev = getattr(doc_before, f, None)
+		if f in ("regular_price", "sale_price", "woo_weight", "woo_length", "woo_width", "woo_height"):
+			if flt(val_curr) != flt(val_prev):
+				changed.append(f)
+		elif f in ("manage_stock", "woo_featured", "woo_virtual", "woo_downloadable", "reviews_allowed", "menu_order"):
+			if cint(val_curr) != cint(val_prev):
+				changed.append(f)
+		else:
+			if (val_curr or "") != (val_prev or ""):
+				changed.append(f)
+
+	# Compare child table `categories`
+	curr_cats = sorted([r.category for r in (getattr(doc, "categories", []) or []) if getattr(r, "category", None)])
+	prev_cats = sorted([r.category for r in (getattr(doc_before, "categories", []) or []) if getattr(r, "category", None)])
+	if curr_cats != prev_cats:
+		changed.append("categories")
+
+	# Compare child table `woo_tags`
+	curr_tags = sorted([r.tag for r in (getattr(doc, "woo_tags", []) or []) if getattr(r, "tag", None)])
+	prev_tags = sorted([r.tag for r in (getattr(doc_before, "woo_tags", []) or []) if getattr(r, "tag", None)])
+	if curr_tags != prev_tags:
+		changed.append("woo_tags")
+
+	# Compare child table `images`
+	curr_imgs = [getattr(r, "image", None) for r in (getattr(doc, "images", []) or [])]
+	prev_imgs = [getattr(r, "image", None) for r in (getattr(doc_before, "images", []) or [])]
+	if curr_imgs != prev_imgs:
+		changed.append("images")
+
+	return changed
+
+
+def _publish_partial_woo_item_worker(woo_item_name, changed_fields=None, user=None):
+	"""Background worker: partially publish only changed fields to WooCommerce."""
+	try:
+		if not frappe.db.exists("Woo Item", woo_item_name):
+			return
+		woo_item = frappe.get_doc("Woo Item", woo_item_name)
+		if not woo_item.published or not woo_item.woo_product_id:
+			# Not published yet, do normal full publish
+			woo_item._execute_publish_sync(user=user, sync_images=True)
+			frappe.db.commit()
+			return
+
+		if not changed_fields:
+			# No specific changed fields detected: full sync without re-uploading images
+			woo_item._execute_publish_sync(user=user, sync_images=False)
+			frappe.db.commit()
+			return
+
+		from woo_prime.api.sync import sync_partial_item_to_woo
+		res = sync_partial_item_to_woo(woo_item, changed_fields)
+		if res:
+			woo_item.db_set("last_synced", now_datetime(), update_modified=False)
+			woo_item.db_set("sync_status", "Synced", update_modified=False)
+			frappe.db.commit()
+	except Exception as e:
+		frappe.db.rollback()
+		frappe.logger("woo_prime").error(f"Partial background publish failed for {woo_item_name}: {e}")
 		try:
 			frappe.db.set_value("Woo Item", woo_item_name, {
 				"sync_status": "Error",

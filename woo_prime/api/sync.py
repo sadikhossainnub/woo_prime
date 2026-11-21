@@ -944,9 +944,11 @@ def publish_item_to_woo(woo_item, sync_images=None):
 
 	woo_item.flags.ignore_version = True
 
-	# Always push images on every publish so WooCommerce images are replaced/updated.
-	# sync_images flag is kept for backward compatibility but images are always sent.
-	should_sync_images = True
+	# Only sync images for new products, or if explicitly requested via sync_images flag
+	if sync_images is None:
+		should_sync_images = False if woo_item.woo_product_id else True
+	else:
+		should_sync_images = bool(_parse_bool(sync_images))
 
 	# Guard: Cannot publish variant if marked "Not Published"
 	if getattr(woo_item, "variant_publish_mode", "") == "Not Published":
@@ -971,6 +973,109 @@ def publish_item_to_woo(woo_item, sync_images=None):
 		return _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=should_sync_images)
 	else:
 		return _publish_simple_item_to_woo(woo_item, item, api, settings, sync_images=should_sync_images)
+
+
+def sync_partial_item_to_woo(woo_item, changed_fields):
+	"""Send partial update payload to WooCommerce with ONLY the fields that changed."""
+	import html
+	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
+
+	if not woo_item.woo_product_id or not changed_fields:
+		return {"status": "skipped", "message": "No woo_product_id or no changed fields"}
+
+	api = get_woo_api()
+	settings = frappe.get_single("Woo Settings")
+	item = frappe.get_doc("Item", woo_item.item_code)
+
+	payload = {}
+
+	if "item_name" in changed_fields:
+		payload["name"] = html.unescape(woo_item.item_name or item.item_name or "")
+
+	if "regular_price" in changed_fields:
+		payload["regular_price"] = str(flt(woo_item.regular_price))
+
+	if "sale_price" in changed_fields:
+		raw_sale = flt(woo_item.sale_price) if getattr(woo_item, "sale_price", None) is not None else None
+		payload["sale_price"] = str(flt(raw_sale)) if raw_sale and flt(raw_sale) > 0 else ""
+
+	if "woo_description" in changed_fields:
+		payload["description"] = html.unescape(woo_item.woo_description or "")
+
+	if "woo_short_description" in changed_fields:
+		payload["short_description"] = html.unescape(woo_item.woo_short_description or "")
+
+	if "categories" in changed_fields:
+		payload["categories"] = _get_woo_category_ids(woo_item, api)
+
+	if "woo_tags" in changed_fields:
+		payload["tags"] = _get_woo_tag_ids(woo_item, api)
+
+	if "manage_stock" in changed_fields:
+		manage_stock = bool(getattr(woo_item, "manage_stock", 1))
+		payload["manage_stock"] = manage_stock
+		if manage_stock:
+			stock_qty = _get_stock_qty(woo_item.item_code, settings.default_warehouse)
+			payload["stock_quantity"] = int(stock_qty)
+			payload["stock_status"] = "instock" if int(stock_qty) > 0 else "outofstock"
+		else:
+			payload["stock_status"] = "instock"
+
+	if "image" in changed_fields or "images" in changed_fields:
+		images = _get_item_images(item, woo_item, api, settings)
+		if images:
+			payload["images"] = images
+
+	if "woo_featured" in changed_fields:
+		payload["featured"] = bool(woo_item.woo_featured)
+
+	if "catalog_visibility" in changed_fields:
+		payload["catalog_visibility"] = woo_item.catalog_visibility or "visible"
+
+	if "allow_backorders" in changed_fields:
+		payload["backorders"] = woo_item.allow_backorders or "no"
+
+	if "purchase_note" in changed_fields:
+		pnote = getattr(woo_item, "purchase_note", "") or ""
+		payload["purchase_note"] = html.unescape(pnote) if pnote else ""
+
+	if "menu_order" in changed_fields:
+		payload["menu_order"] = int(woo_item.menu_order or 0)
+
+	if "woo_weight" in changed_fields:
+		payload["weight"] = str(flt(woo_item.woo_weight or 0))
+
+	if any(f in changed_fields for f in ("woo_length", "woo_width", "woo_height")):
+		payload["dimensions"] = {
+			"length": str(flt(woo_item.woo_length or 0)) if woo_item.woo_length else "",
+			"width": str(flt(woo_item.woo_width or 0)) if woo_item.woo_width else "",
+			"height": str(flt(woo_item.woo_height or 0)) if woo_item.woo_height else "",
+		}
+
+	if "woo_virtual" in changed_fields:
+		payload["virtual"] = bool(woo_item.woo_virtual)
+
+	if "woo_downloadable" in changed_fields:
+		payload["downloadable"] = bool(woo_item.woo_downloadable)
+
+	if "reviews_allowed" in changed_fields:
+		payload["reviews_allowed"] = bool(woo_item.reviews_allowed)
+
+	if not payload:
+		return {"status": "skipped", "message": "No payload generated for changed fields"}
+
+	# Handle variation vs product
+	if item.variant_of and getattr(woo_item, "woo_product_type", "") != "Simple Item":
+		parent_woo_id = _resolve_parent_woo_id(item.variant_of, getattr(woo_item, "woo_product_type", None))
+		if parent_woo_id and woo_item.woo_product_id:
+			if "images" in payload:
+				payload["image"] = payload["images"][0] if payload["images"] else None
+				del payload["images"]
+			payload.pop("categories", None)
+			payload.pop("tags", None)
+			return api.update_product_variation(parent_woo_id, woo_item.woo_product_id, payload)
+	else:
+		return api.update_product(woo_item.woo_product_id, payload)
 
 
 def _build_common_product_fields(woo_item, item):
@@ -1072,10 +1177,11 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings, sync_images=True)
 	if simple_attrs:
 		product_data["attributes"] = simple_attrs
 
-	# Always push images to replace/update existing WooCommerce images on every publish
-	images = _get_item_images(item, woo_item, api, settings)
-	if images:
-		product_data["images"] = images
+	# Push images only if sync_images is True or product is new (not yet on WooCommerce)
+	if sync_images or not woo_item.woo_product_id:
+		images = _get_item_images(item, woo_item, api, settings)
+		if images:
+			product_data["images"] = images
 
 	# Tags: prefer woo_tags Table MultiSelect, fallback to ERPNext _user_tags
 	woo_tag_ids = _get_woo_tag_ids(woo_item, api)
@@ -1263,10 +1369,11 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 	category_ids = _get_woo_category_ids(woo_item, api)
 	product_data["categories"] = category_ids
 
-	# Always push images to replace/update existing WooCommerce images on every publish
-	images = _get_item_images(item, woo_item, api, settings)
-	if images:
-		product_data["images"] = images
+	# Push images only if sync_images is True or product is new (not yet on WooCommerce)
+	if sync_images or not woo_item.woo_product_id:
+		images = _get_item_images(item, woo_item, api, settings)
+		if images:
+			product_data["images"] = images
 
 	# Tags: prefer woo_tags Table MultiSelect, fallback to ERPNext _user_tags
 	woo_tag_ids = _get_woo_tag_ids(woo_item, api)
@@ -1956,13 +2063,14 @@ def _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_
 	var_data["virtual"] = woo_virtual
 	var_data["downloadable"] = woo_downloadable
 
-	# Always push variation image to replace/update existing image on every publish
-	try:
-		images = _get_item_images(v_item, child_woo_item, api, settings)
-		if images:
-			var_data["image"] = images[0]
-	except Exception as img_err:
-		frappe.logger("woo_prime").warning(f"Variation image fetch error for {v_item.name}: {img_err}")
+	# Push variation image only if sync_images is True or variation is new
+	if sync_images or not getattr(child_woo_item, "woo_product_id", None):
+		try:
+			images = _get_item_images(v_item, child_woo_item, api, settings)
+			if images:
+				var_data["image"] = images[0]
+		except Exception as img_err:
+			frappe.logger("woo_prime").warning(f"Variation image fetch error for {v_item.name}: {img_err}")
 
 	return var_data
 
