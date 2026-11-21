@@ -329,7 +329,6 @@
    "default": "Not Synced",
    "fieldname": "sync_status",
    "fieldtype": "Select",
-   "in_list_view": 1,
    "label": "Sync Status",
    "options": "Not Synced\nSynced\nError\nPartial",
    "read_only": 1

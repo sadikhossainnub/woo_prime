@@ -13,27 +13,6 @@ frappe.listview_settings["Woo Item"] = {
 		}
 		return [__("Not Synced"), "grey", "sync_status,=,Not Synced"];
 	},
-	formatters: {
-		sync_status: function (value) {
-			const map = {
-				Synced:    { color: "#28a745", bg: "#d4edda", label: "✔ Synced" },
-				Error:     { color: "#dc3545", bg: "#f8d7da", label: "✖ Error" },
-				Partial:   { color: "#856404", bg: "#fff3cd", label: "⚠ Partial" },
-				"Not Synced": { color: "#6c757d", bg: "#e2e3e5", label: "– Not Synced" },
-			};
-			const s = map[value] || map["Not Synced"];
-			return `<span style="
-				background:${s.bg};
-				color:${s.color};
-				border:1px solid ${s.color}40;
-				border-radius:4px;
-				padding:2px 8px;
-				font-size:11px;
-				font-weight:600;
-				white-space:nowrap;
-			">${s.label}</span>`;
-		},
-	},
 	onload: function (listview) {
 		// 1. Fetch Products from WooCommerce (Bulk)
 		listview.page.add_inner_button(__("Fetch All from WooCommerce"), function () {
