@@ -74,22 +74,10 @@ class TestVariableSyncFixes(unittest.TestCase):
 		pl = _resolve_price_list(settings)
 		self.assertEqual(pl, "Standard Selling")
 
-	def test_should_skip_variant_not_published_with_reason(self):
-		child_woo = types.SimpleNamespace(
-			item_code="TP-01",
-			sku="TP-01",
-			variant_publish_mode="Not Published"
-		)
-		item = types.SimpleNamespace(item_code="TP-01", disabled=0)
-		should_skip, reason = _should_skip_variant(child_woo, item, context="template", return_reason=True)
-		self.assertTrue(should_skip)
-		self.assertIn("Not Published", reason)
-
 	def test_should_skip_variant_disabled_item(self):
 		child_woo = types.SimpleNamespace(
 			item_code="TP-01",
-			sku="TP-01",
-			variant_publish_mode="With Template"
+			sku="TP-01"
 		)
 		item = types.SimpleNamespace(item_code="TP-01", disabled=1)
 		should_skip, reason = _should_skip_variant(child_woo, item, context="template", return_reason=True)
@@ -193,7 +181,6 @@ class TestVariableSyncFixes(unittest.TestCase):
 		frappe.get_all.side_effect = lambda doctype, **kwargs: (
 			[mock_template] if doctype == "Woo Item" else ["TP00172-36", "TP00172-38"]
 		)
-		frappe.db.get_value.return_value = "With Template"
 
 		mock_api = MagicMock()
 		# Return 0 variations from WooCommerce

@@ -40,7 +40,6 @@
   "last_synced",
   "has_variants",
   "variant_of",
-  "variant_publish_mode",
   "published_as",
   "variants_section",
   "variants_html"
@@ -347,16 +346,6 @@
    "hidden": 1,
    "label": "Variant Of",
    "read_only": 1
-  },
-  {
-   "default": "With Template",
-   "depends_on": "eval:doc.variant_of",
-   "description": "Choose where to publish this variant: With Template or Not Published",
-   "fieldname": "variant_publish_mode",
-   "fieldtype": "Select",
-   "in_list_view": 1,
-   "label": "Variant Publish Mode",
-   "options": "\nWith Template\nNot Published"
   },
   {
    "fieldname": "published_as",

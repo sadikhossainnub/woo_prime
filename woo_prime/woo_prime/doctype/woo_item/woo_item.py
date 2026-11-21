@@ -1607,7 +1607,6 @@ def _process_single_variation(var, parent_id, settings, default_item_group, auto
 	woo_item.woo_description = description
 	woo_item.published = 1
 	woo_item.published_as = "template-variation"
-	woo_item.variant_publish_mode = "With Template"
 
 	if "manage_stock" in var:
 		woo_item.manage_stock = 1 if var.get("manage_stock") else 0
@@ -2877,7 +2876,7 @@ def get_template_variants_info(item_code):
 	woo_items = frappe.get_all(
 		"Woo Item",
 		filters={"item_code": ["in", variant_codes]},
-		fields=["name", "item_code", "sku", "woo_product_id", "published", "manage_stock", "last_pushed_qty", "variant_publish_mode"],
+		fields=["name", "item_code", "sku", "woo_product_id", "published", "manage_stock", "last_pushed_qty"],
 	)
 	woo_by_item = {w.item_code: w for w in woo_items}
 
@@ -2895,65 +2894,8 @@ def get_template_variants_info(item_code):
 			"manage_stock": bool(woo_info.get("manage_stock", 1)),
 			"stock_qty": int(stock_qty),
 			"last_pushed_qty": woo_info.get("last_pushed_qty"),
-			"mode": woo_info.get("variant_publish_mode") or "With Template",
 			"attributes": attrs_by_item.get(v.item_code, {}),
 		})
 	return res
-
-
-@frappe.whitelist()
-def set_variants_publish_mode(template, item_codes, mode):
-	"""Change publish mode for selected variants. Deletes Woo variations if mode=Not Published."""
-	frappe.only_for(["System Manager", "Woo Manager", "Website Manager"])
-	codes = _parse_item_codes(item_codes)
-	if not codes:
-		frappe.throw(_("No variants selected."))
-
-	if mode not in ("With Template", "Not Published"):
-		frappe.throw(_("Invalid publish mode: {0}").format(mode))
-
-	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
-	from woo_prime.api.sync import _resolve_parent_woo_id
-
-	api = None
-	try:
-		api = get_woo_api()
-	except Exception:
-		pass
-
-	for code in codes:
-		wi_name = frappe.db.get_value("Woo Item", {"item_code": code})
-		if not wi_name:
-			continue
-		doc = frappe.get_doc("Woo Item", wi_name)
-
-		if mode == "Not Published":
-			if doc.woo_product_id and api:
-				real_parent = None
-				try:
-					real = api.get_product(doc.woo_product_id) or {}
-					real_parent = real.get("parent_id")
-				except Exception:
-					pass
-				if not real_parent:
-					real_parent = _resolve_parent_woo_id(doc.variant_of, doc.woo_product_type)
-				if real_parent:
-					try:
-						api.delete_variation(real_parent, doc.woo_product_id, force=True)
-					except Exception:
-						pass
-				doc.woo_product_id = 0
-				doc.published = 0
-				doc.sync_status = "Not Synced"
-				doc.published_as = ""
-
-			doc.variant_publish_mode = "Not Published"
-			doc.save(ignore_permissions=True)
-
-		elif mode == "With Template":
-			doc.variant_publish_mode = "With Template"
-			doc.save(ignore_permissions=True)
-
-	return {"status": "ok", "message": _("Updated publish mode for {0} variant(s).").format(len(codes))}
 
 

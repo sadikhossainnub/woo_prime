@@ -489,7 +489,7 @@ def sync_pricing_rule_to_woo(pricing_rule_name, dry_run=False):
 		filters={
 			"item_code": ["in", affected_items],
 		},
-		fields=["name", "item_code", "woo_product_id", "published", "regular_price", "sale_price", "last_pushed_price", "last_pushed_sale_price", "woo_product_type", "variant_publish_mode"],
+		fields=["name", "item_code", "woo_product_id", "published", "regular_price", "sale_price", "last_pushed_price", "last_pushed_sale_price", "woo_product_type"],
 	)
 
 	if not woo_items:
@@ -559,10 +559,6 @@ def sync_pricing_rule_to_woo(pricing_rule_name, dry_run=False):
 			)
 
 			if regular_unchanged and sale_unchanged:
-				skipped += 1
-				continue
-
-			if item.get("variant_publish_mode") == "Not Published":
 				skipped += 1
 				continue
 
@@ -675,7 +671,7 @@ def clear_sale_price_for_items(item_codes, dry_run=False, rule_name=""):
 		filters={
 			"item_code": ["in", item_codes],
 		},
-		fields=["name", "item_code", "woo_product_id", "published", "regular_price", "sale_price", "last_pushed_price", "last_pushed_sale_price", "woo_product_type", "variant_publish_mode"],
+		fields=["name", "item_code", "woo_product_id", "published", "regular_price", "sale_price", "last_pushed_price", "last_pushed_sale_price", "woo_product_type"],
 	)
 
 	from woo_prime.api.sync import _get_item_price
@@ -733,10 +729,6 @@ def clear_sale_price_for_items(item_codes, dry_run=False, rule_name=""):
 				skipped += 1
 				continue
 			if not is_clearing and last_pushed_sale is not None and abs(last_pushed_sale - target_sale) < 0.001:
-				skipped += 1
-				continue
-
-			if item.get("variant_publish_mode") == "Not Published":
 				skipped += 1
 				continue
 

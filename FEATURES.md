@@ -110,7 +110,6 @@ ERPNext Bin পরিবর্তন হলে →
 - `published == 1`
 - `sync_stock == 1`
 - `woo_product_id > 0`
-- `variant_publish_mode != "Not Published"`
 
 ---
 
@@ -190,8 +189,7 @@ ERPNext Item save হলে →
         ├─ settings.enabled == False? → কিছু করে না
         │
         ├─ Variant item? (variant_of আছে?)
-        │     └── "With Template" mode?
-        │           → Parent template background-এ republish
+        │     └── Parent template background-এ republish
         │
         ├─ Woo Item আছে + published?
         │     ├── item_name পরিবর্তন → Woo Item update

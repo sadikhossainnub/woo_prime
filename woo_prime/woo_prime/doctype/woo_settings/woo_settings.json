@@ -61,7 +61,6 @@
   "allow_private_images",
   "sync_features_section",
   "auto_publish_new_items",
-  "new_variants_not_published",
   "last_item_sync_time",
   "enable_stock_sync",
   "stock_sync_interval",
@@ -430,13 +429,6 @@
    "fieldname": "auto_publish_new_items",
    "fieldtype": "Check",
    "label": "Auto-Publish New Items to WooCommerce"
-  },
-  {
-   "default": "0",
-   "description": "When enabled, newly created variant Woo Items default to 'Not Published' mode instead of 'With Template'",
-   "fieldname": "new_variants_not_published",
-   "fieldtype": "Check",
-   "label": "New Variants Not Published by Default"
   },
   {
    "fieldname": "last_item_sync_time",

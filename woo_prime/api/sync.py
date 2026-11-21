@@ -950,15 +950,6 @@ def publish_item_to_woo(woo_item, sync_images=None):
 	else:
 		should_sync_images = bool(_parse_bool(sync_images))
 
-	# Guard: Cannot publish variant if marked "Not Published"
-	if getattr(woo_item, "variant_publish_mode", "") == "Not Published":
-		frappe.throw(
-			_("Cannot publish variant '{0}' because its publish mode is 'Not Published'. "
-			  "Change publish mode to 'With Template' first.").format(
-				woo_item.item_name or woo_item.name
-			)
-		)
-
 	# Handle variant items with custom product type
 	if item.variant_of:
 		woo_product_type = getattr(woo_item, "woo_product_type", "")
@@ -1276,8 +1267,7 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 		v_item = frappe.get_doc("Item", v_name)
 		variant_docs[v_name] = v_item
 		child_woo = get_or_create_woo_item(v_name, v_item.item_code)
-		mode = getattr(child_woo, "variant_publish_mode", "") or "With Template"
-		if mode == "With Template" and not _should_skip_variant(child_woo, v_item, context="template"):
+		if not _should_skip_variant(child_woo, v_item, context="template"):
 			included_variants.append(v_name)
 		else:
 			excluded_variants.append(v_name)
@@ -1736,29 +1726,15 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 		if child_woo_name:
 			ex_child = frappe.get_doc("Woo Item", child_woo_name)
 			if ex_child.woo_product_id:
-				ex_mode = getattr(ex_child, "variant_publish_mode", "")
 				v_disabled = frappe.db.get_value("Item", ex_name, "disabled")
-				is_intentional = (
-					v_disabled
-					or ex_mode == "Not Published"
-				)
-				if is_intentional:
+				if v_disabled:
 					try:
 						api.delete_variation(parent_woo_id, ex_child.woo_product_id, force=True)
 					except Exception as rec_del_err:
 						frappe.logger("woo_prime").debug(f"Reconciliation variation delete notice: {rec_del_err}")
-
-					if ex_mode == "Not Published":
-						ex_child.woo_product_id = 0
-						ex_child.published = 0
-						ex_child.sync_status = "Not Synced"
-						ex_child.published_as = ""
-						ex_child.flags.in_woo_sync = True
-						ex_child.flags.ignore_version = True
-						ex_child.save(ignore_permissions=True)
 				else:
-					# Tombstone or other non-intentional exclusion: DO NOT delete from Woo!
-					skip_warn = f"Variant '{ex_name}' excluded from template '{item.name}' sync, but live variation {ex_child.woo_product_id} was preserved in WooCommerce (not intentionally disabled or marked Not Published)."
+					# Tombstone or other exclusion: DO NOT delete from Woo!
+					skip_warn = f"Variant '{ex_name}' excluded from template '{item.name}' sync, but live variation {ex_child.woo_product_id} was preserved in WooCommerce (not intentionally disabled in ERPNext)."
 					frappe.logger("woo_prime").warning(skip_warn)
 					create_log(
 						sync_type="Item",
@@ -1822,13 +1798,6 @@ def _should_skip_variant(woo_item, item=None, context="template", return_reason=
 		frappe.logger("woo_prime").info(reason)
 		return (True, reason) if return_reason else True
 
-	if context == "template":
-		mode = getattr(woo_item, "variant_publish_mode", "") or "With Template"
-		if mode == "Not Published":
-			reason = f"Variant '{item_code}' publish mode is 'Not Published'."
-			frappe.logger("woo_prime").info(reason)
-			return (True, reason) if return_reason else True
-
 	return (False, None) if return_reason else False
 
 
@@ -1890,13 +1859,6 @@ def get_or_create_woo_item(item_code, sku=None):
 	woo_item.item_code = item_code
 	woo_item.sku = sku or item_code
 	settings = frappe.get_single("Woo Settings")
-
-	variant_of = frappe.db.get_value("Item", item_code, "variant_of")
-	if variant_of:
-		if getattr(settings, "new_variants_not_published", 0):
-			woo_item.variant_publish_mode = "Not Published"
-		else:
-			woo_item.variant_publish_mode = "With Template"
 
 	price_list = getattr(settings, "website_price_list", None) or getattr(settings, "default_price_list", None) or "Standard Selling"
 	price = _get_item_price(item_code, price_list)
@@ -2768,9 +2730,7 @@ def sync_stock_to_woo(woo_item):
 	"""
 	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
 
-	# Guard: Never sync stock for Not Published variants or unpublished items
-	if getattr(woo_item, "variant_publish_mode", "") == "Not Published":
-		return
+	# Guard: Never sync stock for unpublished items
 	if not woo_item.published:
 		return
 
@@ -2808,7 +2768,7 @@ def sync_stock_to_woo(woo_item):
 				api.update_stock(woo_item.woo_product_id, stock_qty, manage_stock=manage_stock)
 	except frappe.ValidationError as e:
 		err_msg = str(e)
-		if ("404" in err_msg or "not found" in err_msg.lower()) and parent_woo_id and woo_item.published and getattr(woo_item, "variant_publish_mode", "") != "Not Published":
+		if ("404" in err_msg or "not found" in err_msg.lower()) and parent_woo_id and woo_item.published:
 			try:
 				# Task 1: Resolve real parent_id from WooCommerce to avoid stale parent issues
 				real_parent = parent_woo_id  # fallback
@@ -2884,9 +2844,7 @@ def sync_price_to_woo(woo_item):
 	"""
 	from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
 
-	# Guard: Never sync price for Not Published variants or unpublished items
-	if getattr(woo_item, "variant_publish_mode", "") == "Not Published":
-		return
+	# Guard: Never sync price for unpublished items
 	if not woo_item.published:
 		return
 
@@ -2971,7 +2929,7 @@ def sync_price_to_woo(woo_item):
 				)
 	except frappe.ValidationError as e:
 		err_msg = str(e)
-		if ("404" in err_msg or "not found" in err_msg.lower()) and parent_woo_id and woo_item.published and getattr(woo_item, "variant_publish_mode", "") != "Not Published":
+		if ("404" in err_msg or "not found" in err_msg.lower()) and parent_woo_id and woo_item.published:
 			try:
 				# Task 1: Resolve real parent_id from WooCommerce to avoid stale parent issues
 				real_parent = parent_woo_id  # fallback
@@ -3268,7 +3226,6 @@ def sync_all_stock(force=False):
 			["published", "=", 1],
 			["sync_stock", "=", 1],
 			["woo_product_id", ">", 0],
-			["variant_publish_mode", "!=", "Not Published"],
 		],
 		fields=["name", "item_code", "woo_product_id", "last_pushed_qty", "woo_product_type"],
 		order_by="last_synced asc, creation asc",
@@ -3368,7 +3325,6 @@ def sync_all_prices(force=False):
 			["published", "=", 1],
 			["sync_price", "=", 1],
 			["woo_product_id", ">", 0],
-			["variant_publish_mode", "!=", "Not Published"],
 		],
 		fields=["name", "item_code", "woo_product_id", "regular_price", "sale_price", "last_pushed_price", "woo_product_type"],
 		order_by="last_synced asc, creation asc",
@@ -3666,8 +3622,7 @@ def sync_stock_for_item_code(item_code):
 				["published", "=", 1],
 				["sync_stock", "=", 1],
 				["woo_product_id", ">", 0],
-				["variant_publish_mode", "!=", "Not Published"],
-			],
+				],
 			or_filters=[{"item_code": item_code}, {"sku": item_code}],
 			fields=["name"],
 		)
@@ -3743,7 +3698,7 @@ def sync_price_for_item_code(item_code):
 				if current_price > 0:
 					woo_item.regular_price = flt(current_price)
 
-				if woo_item.published and woo_item.woo_product_id and getattr(woo_item, "variant_publish_mode", "") != "Not Published":
+				if woo_item.published and woo_item.woo_product_id:
 					sync_price_to_woo(woo_item)
 					woo_item.sync_status = "Synced"
 					woo_item.last_synced = now_datetime()
@@ -3820,32 +3775,22 @@ def on_item_update(doc, method):
 		if not settings.enabled:
 			return
 
-		# 1. If this is a variant item, determine sync target
+		# 1. If this is a variant item, republish parent template
 		if getattr(doc, "variant_of", None):
-			variant_woo_name = frappe.db.get_value("Woo Item", {"item_code": doc.name})
-			v_mode = "With Template"
-			if variant_woo_name:
-				v_mode = frappe.db.get_value("Woo Item", variant_woo_name, "variant_publish_mode") or "With Template"
-
-			if v_mode == "Not Published":
-				# Do not republish template
-				pass
-			else:
-				# With Template: republish parent template
-				parent_woo_name = frappe.db.get_value("Woo Item", {"item_code": doc.variant_of})
-				if parent_woo_name:
-					parent_woo = frappe.get_doc("Woo Item", parent_woo_name)
-					if parent_woo.published:
-						frappe.enqueue(
-							"woo_prime.woo_prime.doctype.woo_item.woo_item._publish_single_woo_item_worker",
-							woo_item_name=parent_woo.name,
-							user=frappe.session.user,
-							queue="long",
-							timeout=1800,
-							enqueue_after_commit=True,
-							job_id=f"woo_publish_{parent_woo.name}_noimg",
-							deduplicate=True,
-						)
+			parent_woo_name = frappe.db.get_value("Woo Item", {"item_code": doc.variant_of})
+			if parent_woo_name:
+				parent_woo = frappe.get_doc("Woo Item", parent_woo_name)
+				if parent_woo.published:
+					frappe.enqueue(
+						"woo_prime.woo_prime.doctype.woo_item.woo_item._publish_single_woo_item_worker",
+						woo_item_name=parent_woo.name,
+						user=frappe.session.user,
+						queue="long",
+						timeout=1800,
+						enqueue_after_commit=True,
+						job_id=f"woo_publish_{parent_woo.name}_noimg",
+						deduplicate=True,
+					)
 
 		# 2. Check if a Woo Item exists for this item
 		woo_item_name = frappe.db.get_value("Woo Item", {"item_code": doc.name})
@@ -3854,8 +3799,6 @@ def on_item_update(doc, method):
 
 		if woo_item_name:
 			woo_item = frappe.get_doc("Woo Item", woo_item_name)
-			if getattr(woo_item, "variant_publish_mode", "") == "Not Published":
-				return
 			if woo_item.published:
 				woo_item.flags.in_woo_sync = True
 
@@ -4184,11 +4127,7 @@ def find_broken_variable_products():
 				filters={"variant_of": item_code, "disabled": 0},
 				pluck="name"
 			)
-			included_count = 0
-			for v_name in erp_variants:
-				wi_mode = frappe.db.get_value("Woo Item", {"item_code": v_name}, "variant_publish_mode") or "With Template"
-				if wi_mode == "With Template":
-					included_count += 1
+			included_count = len(erp_variants)
 
 			resp = api.get(f"products/{woo_pid}/variations", params={"per_page": 100})
 			wc_variations = resp.json() if (resp.status_code == 200 and isinstance(resp.json(), list)) else []
