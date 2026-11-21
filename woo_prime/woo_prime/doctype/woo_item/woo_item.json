@@ -40,9 +40,7 @@
   "last_synced",
   "has_variants",
   "variant_of",
-  "published_as",
-  "variants_section",
-  "variants_html"
+  "published_as"
  ],
  "fields": [
   {
@@ -359,18 +357,6 @@
    "fieldtype": "Select",
    "label": "WooCommerce Product Type",
    "options": "\nSimple Item\nVariant Item"
-  },
-  {
-   "depends_on": "eval:doc.has_variants",
-   "fieldname": "variants_section",
-   "fieldtype": "Section Break",
-   "label": "Product Variations & Stock Status"
-  },
-  {
-   "depends_on": "eval:doc.has_variants",
-   "fieldname": "variants_html",
-   "fieldtype": "HTML",
-   "label": "Variations List"
   },
   {
    "description": "Select one or more WooCommerce Tags for this product. These will be pushed to WooCommerce.",
