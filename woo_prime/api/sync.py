@@ -1066,8 +1066,7 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings, sync_images=True)
 	product_data.update(_build_common_product_fields(woo_item, item))
 
 	category_ids = _get_woo_category_ids(woo_item, api)
-	if category_ids:
-		product_data["categories"] = category_ids
+	product_data["categories"] = category_ids
 
 	simple_attrs = _get_simple_item_attributes(item, woo_item, api)
 	if simple_attrs:
@@ -1262,8 +1261,7 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 	product_data["manage_stock"] = False
 
 	category_ids = _get_woo_category_ids(woo_item, api)
-	if category_ids:
-		product_data["categories"] = category_ids
+	product_data["categories"] = category_ids
 
 	# Always push images to replace/update existing WooCommerce images on every publish
 	images = _get_item_images(item, woo_item, api, settings)
