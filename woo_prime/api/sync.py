@@ -12,6 +12,15 @@ from frappe.utils import now_datetime, flt, today, add_days
 from woo_prime.utils import safe_log_error, clean_text
 
 
+def _parse_bool(value):
+	"""Parse various boolean representations to Python bool."""
+	if isinstance(value, bool):
+		return value
+	if isinstance(value, str):
+		return value.lower() in ("true", "1", "yes")
+	return bool(value)
+
+
 def sync_order(order_data):
 	"""Sync a WooCommerce order to ERPNext Sales Order.
 

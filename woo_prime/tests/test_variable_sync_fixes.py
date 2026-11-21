@@ -280,6 +280,19 @@ class TestVariableSyncFixes(unittest.TestCase):
 			self.assertEqual(res.get("sku"), "TEST-SKU-001")
 			self.assertEqual(res.get("woo_product_id"), 99999)
 
+	def test_sync_parse_bool(self):
+		from woo_prime.api.sync import _parse_bool
+		self.assertTrue(_parse_bool(True))
+		self.assertTrue(_parse_bool("true"))
+		self.assertTrue(_parse_bool("1"))
+		self.assertTrue(_parse_bool(1))
+		self.assertFalse(_parse_bool(False))
+		self.assertFalse(_parse_bool("false"))
+		self.assertFalse(_parse_bool("0"))
+		self.assertFalse(_parse_bool(0))
+		self.assertFalse(_parse_bool(None))
+
+
 
 if __name__ == "__main__":
 	unittest.main()
