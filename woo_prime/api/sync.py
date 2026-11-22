@@ -1259,6 +1259,54 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings, sync_images=True)
 	return result
 
 
+def _ensure_woo_attribute_terms(api, attr_id, options):
+	"""Ensure options exist as terms in WooCommerce for a Global Attribute.
+	If any option does not exist as a term under products/attributes/{attr_id}/terms,
+	create it automatically. This prevents 'woocommerce_rest_invalid_attribute' errors
+	when creating product variations.
+	"""
+	if not api or not attr_id or not options:
+		return
+
+	try:
+		existing_terms = set()
+		t_page = 1
+		while True:
+			t_res = api.get(f"products/attributes/{attr_id}/terms", params={"per_page": 100, "page": t_page})
+			if t_res.status_code != 200:
+				break
+			batch = t_res.json()
+			if not batch or not isinstance(batch, list):
+				break
+			for t in batch:
+				t_name = clean_text(t.get("name") or "").lower()
+				t_slug = (t.get("slug") or "").lower()
+				existing_terms.add(t_name)
+				existing_terms.add(t_slug)
+			if len(batch) < 100:
+				break
+			t_page += 1
+
+		for opt in options:
+			opt_clean = clean_text(str(opt)).strip()
+			if not opt_clean:
+				continue
+			opt_slug = frappe.scrub(opt_clean).replace("_", "-").lower()
+			if opt_clean.lower() not in existing_terms and opt_slug not in existing_terms:
+				try:
+					new_term = api.post(
+						f"products/attributes/{attr_id}/terms",
+						data={"name": opt_clean, "slug": opt_slug}
+					)
+					if new_term.status_code in (200, 201):
+						existing_terms.add(opt_clean.lower())
+						existing_terms.add(opt_slug)
+				except Exception as term_err:
+					frappe.logger("woo_prime").warning(f"Could not create term '{opt_clean}' for attribute ID {attr_id}: {term_err}")
+	except Exception as e:
+		frappe.logger("woo_prime").warning(f"Error ensuring terms for attribute {attr_id}: {e}")
+
+
 def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=True):
 	"""Publish an ERPNext Template Item and all its variants as a WooCommerce Variable Product using batch API."""
 	import html
@@ -1356,6 +1404,8 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 			}
 			if woo_attr_id:
 				attr_payload["id"] = int(woo_attr_id)
+				if opts:
+					_ensure_woo_attribute_terms(api, int(woo_attr_id), opts)
 			woo_attributes.append(attr_payload)
 
 			if is_var:
@@ -1380,6 +1430,7 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 			}
 			if woo_attr_id:
 				attr_payload["id"] = int(woo_attr_id)
+				_ensure_woo_attribute_terms(api, int(woo_attr_id), sorted(list(options)))
 			woo_attributes.append(attr_payload)
 			for k in [attr_name, target_name]:
 				if k:
@@ -1980,10 +2031,25 @@ def _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_
 	price_list = _resolve_price_list(settings)
 	price = _get_item_price(v_item.name, price_list)
 	regular_price = flt(child_woo_item.regular_price) if getattr(child_woo_item, "regular_price", None) and flt(child_woo_item.regular_price) > 0 else flt(price)
+
+	# Fallback to parent template's regular price if child has none
+	if regular_price <= 0 and parent_woo_item and getattr(parent_woo_item, "regular_price", None) and flt(parent_woo_item.regular_price) > 0:
+		regular_price = flt(parent_woo_item.regular_price)
+	if regular_price <= 0 and getattr(v_item, "variant_of", None):
+		parent_price = _get_item_price(v_item.variant_of, price_list)
+		if flt(parent_price) > 0:
+			regular_price = flt(parent_price)
+		else:
+			parent_woo_price = frappe.db.get_value("Woo Item", {"item_code": v_item.variant_of}, "regular_price")
+			if parent_woo_price and flt(parent_woo_price) > 0:
+				regular_price = flt(parent_woo_price)
+
 	if (not child_woo_item.regular_price or flt(child_woo_item.regular_price) <= 0) and regular_price > 0:
 		child_woo_item.regular_price = flt(regular_price)
 	# Bug A fix: treat 0 sale_price as "clear sale" — send "" instead of omitting the key
 	raw_sale = flt(child_woo_item.sale_price) if getattr(child_woo_item, "sale_price", None) is not None else None
+	if (raw_sale is None or raw_sale <= 0) and parent_woo_item and getattr(parent_woo_item, "sale_price", None) and flt(parent_woo_item.sale_price) > 0:
+		raw_sale = flt(parent_woo_item.sale_price)
 	sale_price_str = str(flt(raw_sale)) if raw_sale is not None and flt(raw_sale) > 0 else ""
 	stock_qty = _get_stock_qty(v_item.name, settings.default_warehouse)
 
@@ -2000,13 +2066,32 @@ def _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_
 			except Exception:
 				pass
 
+	# Build attribute mapping from parent template if available
+	parent_attr_map = {}
+	if parent_woo_item and getattr(parent_woo_item, "item_attributes", None):
+		for r in parent_woo_item.item_attributes:
+			if getattr(r, "is_variation", 1):
+				target = r.attribute_name or r.attribute
+				if r.attribute:
+					parent_attr_map[clean_text(r.attribute).lower()] = target
+					parent_attr_map[frappe.scrub(r.attribute).replace("_", "-").lower()] = target
+				if r.attribute_name:
+					parent_attr_map[clean_text(r.attribute_name).lower()] = target
+					parent_attr_map[frappe.scrub(r.attribute_name).replace("_", "-").lower()] = target
+
 	var_attributes = []
 	for attr in v_item.attributes:
 		attr_key = clean_text(attr.attribute).lower()
-		woo_attr_id, target_name = _get_or_create_woo_attribute_id(attr.attribute, api)
-		target_key = clean_text(target_name).lower() if target_name else attr_key
-		# Bug #7 fix: also try slug/scrubbed forms to avoid missing valid variation attrs
 		slug_key = frappe.scrub(attr.attribute).replace("_", "-").lower()
+
+		mapped_target = parent_attr_map.get(attr_key) or parent_attr_map.get(slug_key)
+		lookup_name = mapped_target or attr.attribute
+
+		woo_attr_id, target_name = _get_or_create_woo_attribute_id(lookup_name, api)
+		if not target_name and mapped_target:
+			target_name = mapped_target
+
+		target_key = clean_text(target_name).lower() if target_name else attr_key
 		pa_slug_key = "pa_" + slug_key
 		target_slug = frappe.scrub(target_name).replace("_", "-").lower() if target_name else ""
 		pa_target_slug = "pa_" + target_slug if target_slug else ""

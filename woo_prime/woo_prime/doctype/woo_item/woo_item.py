@@ -686,6 +686,16 @@ class WooItem(Document):
 		price_list = _resolve_price_list(settings)
 		regular_price = _get_item_price(self.item_code, price_list)
 		if not regular_price or flt(regular_price) <= 0:
+			variant_of = frappe.db.get_value("Item", self.item_code, "variant_of")
+			if variant_of:
+				parent_price = _get_item_price(variant_of, price_list)
+				if parent_price and flt(parent_price) > 0:
+					regular_price = flt(parent_price)
+				else:
+					parent_woo_price = frappe.db.get_value("Woo Item", {"item_code": variant_of}, "regular_price")
+					if parent_woo_price and flt(parent_woo_price) > 0:
+						regular_price = flt(parent_woo_price)
+		if not regular_price or flt(regular_price) <= 0:
 			regular_price = flt(self.regular_price) if self.regular_price else 0.0
 
 		sale_price = 0.0

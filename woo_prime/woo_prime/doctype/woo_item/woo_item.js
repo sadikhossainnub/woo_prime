@@ -20,6 +20,25 @@ frappe.ui.form.on("Woo Item", {
 							freeze_message: __("Publishing to WooCommerce..."),
 							callback: function (r) {
 								if (r && r.message) {
+									let res = r.message;
+									if (res.sync_status === "Error" || res.status === "error") {
+										frappe.msgprint({
+											title: __("Publish Failed"),
+											message: res.message || __("Publish failed. Check Woo Sync Log for details."),
+											indicator: "red"
+										});
+									} else if (res.sync_status === "Partial" || res.status === "partial") {
+										frappe.msgprint({
+											title: __("Partially Synced"),
+											message: res.message || __("Some variants failed to sync. Check Woo Sync Log for details."),
+											indicator: "orange"
+										});
+									} else {
+										frappe.show_alert({
+											message: __("Published to WooCommerce successfully!"),
+											indicator: "green"
+										}, 5);
+									}
 									frm.reload_doc();
 								}
 							}
