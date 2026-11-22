@@ -7,6 +7,68 @@ from frappe.model.document import Document
 from woo_prime.utils import repair_crashed_tables, safe_log_error, clean_text, generate_unique_abbr
 
 
+def _get_item_attribute_values(item_attr_name):
+	"""Return list of string values for an ERPNext Item Attribute.
+	Handles both:
+	  - Regular attributes (item_attribute_values list)
+	  - Numeric range attributes (from_range, to_range, increment) where
+	    item_attribute_values is empty but values are generated from a numeric range.
+	Returns list of strings like ['38', '40', '42'] or ['S', 'M', 'L'].
+	"""
+	if not item_attr_name or not frappe.db.exists("Item Attribute", item_attr_name):
+		return []
+
+	attr_doc = frappe.get_doc("Item Attribute", item_attr_name)
+
+	# If NOT numeric_values or has explicit item_attribute_values rows, use them
+	if not getattr(attr_doc, "numeric_values", False) or attr_doc.item_attribute_values:
+		vals = []
+		for row in (attr_doc.item_attribute_values or []):
+			v = clean_text(row.attribute_value)
+			if v:
+				vals.append(v)
+		# If numeric_values flag is set but values are defined explicitly, return those
+		if vals:
+			return vals
+
+	# Numeric range: generate values from from_range → to_range step increment
+	try:
+		from_range = float(getattr(attr_doc, "from_range", 0) or 0)
+		to_range   = float(getattr(attr_doc, "to_range",   0) or 0)
+		increment  = float(getattr(attr_doc, "increment",  1) or 1)
+		if increment <= 0:
+			increment = 1
+
+		# Also check actual values used in Item Variant Attribute table
+		# (most reliable source — only values that exist in real variants)
+		actual_vals = frappe.db.get_all(
+			"Item Variant Attribute",
+			filters={"attribute": item_attr_name},
+			pluck="attribute_value",
+			distinct=True
+		)
+		if actual_vals:
+			# Sort numerically if possible
+			try:
+				return [str(v) for v in sorted(actual_vals, key=lambda x: float(x))]
+			except Exception:
+				return sorted([str(v) for v in actual_vals])
+
+		# Fall back to generating from range
+		vals = []
+		if to_range >= from_range and (to_range - from_range) < 10000:
+			cur = from_range
+			while cur <= to_range + 1e-9:
+				# Display as int if whole number, else float
+				v = int(cur) if cur == int(cur) else cur
+				vals.append(str(v))
+				cur = round(cur + increment, 10)
+		return vals
+	except Exception as e:
+		frappe.logger("woo_prime").warning(f"Error generating numeric attribute values for '{item_attr_name}': {e}")
+		return []
+
+
 class WooAttribute(Document):
 	def validate(self):
 		if not self.slug and self.attribute_name:
@@ -22,17 +84,18 @@ class WooAttribute(Document):
 		self._sync_term_swatch_rows()
 
 	def _sync_term_swatch_rows(self):
-		"""Ensure term_swatches child table has a row for every ERPNext Item Attribute value."""
+		"""Ensure term_swatches child table has a row for every ERPNext Item Attribute value.
+		Supports both regular (dropdown) and numeric range attributes.
+		"""
 		if not self.erpnext_item_attribute:
 			return
 		if not frappe.db.exists("Item Attribute", self.erpnext_item_attribute):
 			return
 
-		item_attr = frappe.get_doc("Item Attribute", self.erpnext_item_attribute)
 		existing = {row.term_name: row for row in (self.term_swatches or [])}
+		all_vals = _get_item_attribute_values(self.erpnext_item_attribute)
 
-		for av in (item_attr.item_attribute_values or []):
-			val = clean_text(av.attribute_value)
+		for val in all_vals:
 			if not val:
 				continue
 			if val not in existing:
@@ -121,7 +184,9 @@ class WooAttribute(Document):
 		# ── Sync terms from linked ERPNext Item Attribute ───────────────────────
 		terms_pushed = 0
 		if self.erpnext_item_attribute and frappe.db.exists("Item Attribute", self.erpnext_item_attribute):
-			attr_doc = frappe.get_doc("Item Attribute", self.erpnext_item_attribute)
+
+			# Use helper that supports both regular and numeric range attributes
+			all_vals = _get_item_attribute_values(self.erpnext_item_attribute)
 
 			# Fetch existing WC terms (name → term_id mapping)
 			existing_terms = {}  # {name_lower: woo_term_id}
@@ -142,8 +207,8 @@ class WooAttribute(Document):
 			except Exception:
 				pass
 
-			for row in (attr_doc.item_attribute_values or []):
-				val_name = clean_text(row.attribute_value)
+			for val_name in all_vals:
+				val_name = clean_text(str(val_name))
 				if not val_name:
 					continue
 
@@ -518,17 +583,26 @@ def push_attribute_to_woo(attribute_name):
 
 @frappe.whitelist()
 def get_attribute_terms_info(woo_attribute_name):
-	"""Return list of terms for this attribute from ERPNext and WooCommerce."""
+	"""Return list of terms for this attribute from ERPNext and WooCommerce.
+	Supports both regular (dropdown) and numeric range Item Attributes.
+	"""
 	frappe.only_for(["System Manager", "Woo Manager"])
 	woo_attr = frappe.get_doc("Woo Attribute", woo_attribute_name)
 	terms = []
 	if woo_attr.erpnext_item_attribute and frappe.db.exists("Item Attribute", woo_attr.erpnext_item_attribute):
 		item_attr = frappe.get_doc("Item Attribute", woo_attr.erpnext_item_attribute)
-		for row in (item_attr.item_attribute_values or []):
-			terms.append({
-				"attribute_value": row.attribute_value,
-				"abbr": getattr(row, "abbr", "") or "",
-			})
+		# Check for explicit values first
+		if item_attr.item_attribute_values:
+			for row in item_attr.item_attribute_values:
+				terms.append({
+					"attribute_value": row.attribute_value,
+					"abbr": getattr(row, "abbr", "") or "",
+				})
+		else:
+			# Numeric range or values from actual variants
+			all_vals = _get_item_attribute_values(woo_attr.erpnext_item_attribute)
+			for v in all_vals:
+				terms.append({"attribute_value": v, "abbr": ""})
 	return {"terms": terms, "woo_attribute_id": woo_attr.woo_attribute_id}
 
 

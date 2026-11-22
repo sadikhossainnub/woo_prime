@@ -893,7 +893,9 @@ def _get_or_create_woo_attribute_doc(attr_name, auto_create=False):
 
 @frappe.whitelist()
 def get_attribute_terms_for_woo_item(woo_attribute, item_code=None):
-	"""Return available terms/values for a Woo Attribute to populate multi-select."""
+	"""Return available terms/values for a Woo Attribute to populate multi-select.
+	Supports both regular (dropdown) and numeric range ERPNext Item Attributes.
+	"""
 	frappe.only_for(["System Manager", "Woo Manager", "Website Manager"])
 	terms = set()
 
@@ -901,6 +903,25 @@ def get_attribute_terms_for_woo_item(woo_attribute, item_code=None):
 		return {"terms": []}
 
 	clean_attr = clean_text(woo_attribute)
+
+	def _add_values_from_erp_attr(erp_attr_name):
+		"""Add values from an ERPNext Item Attribute (regular or numeric)."""
+		if not erp_attr_name or not frappe.db.exists("Item Attribute", erp_attr_name):
+			return
+		try:
+			from woo_prime.woo_prime.doctype.woo_attribute.woo_attribute import _get_item_attribute_values
+			for v in _get_item_attribute_values(erp_attr_name):
+				if v:
+					terms.add(clean_text(str(v)))
+		except Exception:
+			# Fallback: direct doc read
+			try:
+				ia = frappe.get_doc("Item Attribute", erp_attr_name)
+				for val in (ia.item_attribute_values or []):
+					if val.attribute_value:
+						terms.add(clean_text(val.attribute_value))
+			except Exception:
+				pass
 
 	# 1. From Woo Attribute term_swatches & linked ERPNext Item Attribute
 	wa_name = (
@@ -916,26 +937,15 @@ def get_attribute_terms_for_woo_item(woo_attribute, item_code=None):
 					terms.add(clean_text(t.term_name))
 
 			erp_attr = wa.erpnext_item_attribute or wa.attribute_name
-			if erp_attr and frappe.db.exists("Item Attribute", erp_attr):
-				ia = frappe.get_doc("Item Attribute", erp_attr)
-				for val in (ia.item_attribute_values or []):
-					if val.attribute_value:
-						terms.add(clean_text(val.attribute_value))
+			_add_values_from_erp_attr(erp_attr)
 		except Exception:
 			pass
 
 	# 2. Directly from ERPNext Item Attribute if exists
 	for possible_name in [clean_attr, woo_attribute]:
-		if frappe.db.exists("Item Attribute", possible_name):
-			try:
-				ia = frappe.get_doc("Item Attribute", possible_name)
-				for val in (ia.item_attribute_values or []):
-					if val.attribute_value:
-						terms.add(clean_text(val.attribute_value))
-			except Exception:
-				pass
+		_add_values_from_erp_attr(possible_name)
 
-	# 3. If item_code provided, inspect its variants
+	# 3. If item_code provided, inspect its variants (always pulls actual used values)
 	if item_code and frappe.db.exists("Item", item_code):
 		try:
 			item = frappe.get_doc("Item", item_code)
@@ -956,7 +966,12 @@ def get_attribute_terms_for_woo_item(woo_attribute, item_code=None):
 	# Bug #8 fix: deduplicate case-insensitively (keep original casing of first seen value)
 	seen_lower = set()
 	deduped = []
-	for t in sorted(list(terms)):
+	# Sort numerically if all values look like numbers, else alphabetically
+	try:
+		sorted_terms = sorted(list(terms), key=lambda x: float(x))
+	except Exception:
+		sorted_terms = sorted(list(terms))
+	for t in sorted_terms:
 		if t.lower() not in seen_lower:
 			seen_lower.add(t.lower())
 			deduped.append(t)
