@@ -19,18 +19,27 @@ frappe.ui.form.on("Woo Attribute", {
 				frm.doc.woo_attribute_id ? __("Sync to WooCommerce") : __("Push to WooCommerce"),
 				function () {
 					let do_sync = function () {
+						// Use whitelist method with doc name so server always reloads fresh from DB
 						frappe.call({
-							method: "sync_to_woocommerce",
-							doc: frm.doc,
+							method: "woo_prime.woo_prime.doctype.woo_attribute.woo_attribute.sync_attribute_by_name",
+							args: { woo_attribute_name: frm.doc.name },
 							freeze: true,
 							freeze_message: __("Syncing Attribute & Swatches to WooCommerce..."),
 							callback: function (r) {
-								if (r && r.message && r.message.status === "success") {
-									frappe.show_alert({
-										message: r.message.message,
-										indicator: "green",
-									}, 5);
-									frm.reload_doc();
+								if (r && r.message) {
+									if (r.message.status === "success") {
+										frappe.show_alert({
+											message: r.message.message,
+											indicator: "green",
+										}, 6);
+										frm.reload_doc();
+									} else if (r.message.status === "error") {
+										frappe.msgprint({
+											title: __("Sync Failed"),
+											message: r.message.message || __("Sync failed. Check error logs."),
+											indicator: "red",
+										});
+									}
 								}
 							},
 						});

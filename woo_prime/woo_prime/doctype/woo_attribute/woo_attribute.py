@@ -119,9 +119,18 @@ class WooAttribute(Document):
 
 	@frappe.whitelist()
 	def sync_to_woocommerce(self):
-		"""Sync this attribute's settings and terms directly to WooCommerce."""
+		"""Sync this attribute's settings and terms directly to WooCommerce.
+		Always reloads from DB first so unsaved UI changes don't interfere.
+		"""
 		frappe.only_for(["System Manager", "Woo Manager"])
 		from woo_prime.woo_prime.doctype.woo_settings.woo_settings import get_woo_api
+
+		# Always reload from DB so we have the latest saved state (including term_swatches)
+		if not self.is_new():
+			try:
+				self.reload()
+			except Exception:
+				pass
 
 		api = get_woo_api()
 		clean_name = clean_text(self.attribute_name)
@@ -224,17 +233,16 @@ class WooAttribute(Document):
 
 				try:
 					if val_key in existing_terms:
-						# Update existing term's swatch meta
+						# Always update existing term — name, slug, and swatch meta
 						term_id = existing_terms[val_key]
-						if meta_data:
-							upd_res = api.put(
-								f"products/attributes/{attr_id}/terms/{term_id}",
-								data=term_payload,
-								timeout=45,
-							)
-							if upd_res.status_code in (200, 201):
-								# Save term ID back to swatch row
-								self._save_swatch_term_id(val_key, swatch_map, term_id)
+						upd_res = api.put(
+							f"products/attributes/{attr_id}/terms/{term_id}",
+							data=term_payload,
+							timeout=45,
+						)
+						if upd_res.status_code in (200, 201):
+							# Save term ID back to swatch row
+							self._save_swatch_term_id(val_key, swatch_map, term_id)
 					else:
 						# Create new term
 						term_res = api.post(
@@ -604,6 +612,25 @@ def get_attribute_terms_info(woo_attribute_name):
 			for v in all_vals:
 				terms.append({"attribute_value": v, "abbr": ""})
 	return {"terms": terms, "woo_attribute_id": woo_attr.woo_attribute_id}
+
+
+@frappe.whitelist()
+def sync_attribute_by_name(woo_attribute_name):
+	"""Whitelist function to sync a Woo Attribute to WooCommerce by name.
+	Always loads fresh from DB so the latest saved Term Swatches are used.
+	Called by the JS 'Sync to WooCommerce' button.
+	"""
+	frappe.only_for(["System Manager", "Woo Manager"])
+	if not woo_attribute_name or not frappe.db.exists("Woo Attribute", woo_attribute_name):
+		frappe.throw(_("Woo Attribute '{0}' not found.").format(woo_attribute_name))
+	# Fresh load from DB — this is the fix: button always passes only the name,
+	# so server always reads the latest DB state including updated term_swatches
+	doc = frappe.get_doc("Woo Attribute", woo_attribute_name)
+	try:
+		return doc.sync_to_woocommerce()
+	except Exception as e:
+		frappe.log_error(title="woo_prime: Attribute Sync Failed", message=frappe.get_traceback())
+		return {"status": "error", "message": str(e)}
 
 
 @frappe.whitelist()
