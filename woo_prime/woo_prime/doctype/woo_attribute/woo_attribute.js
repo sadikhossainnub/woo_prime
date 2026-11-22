@@ -88,10 +88,10 @@ frappe.ui.form.on("Woo Attribute", {
 				hint = __("🎨 Color Swatch — set a Hex color per term below.");
 			} else if (type === "image") {
 				hint = __("🖼 Image Swatch — upload a thumbnail image per term below.");
-			} else if (type === "button" || type === "radio") {
-				hint = __("🔘 Text / Button Swatch — optionally set a custom label per term below.");
+			} else if (type === "button" || type === "radio" || type === "text") {
+				hint = __("🔘 Text / Button Swatch — shows as clickable button/text swatches on WooCommerce.");
 			} else {
-				hint = __("ℹ Swatch Type is 'select' (default dropdown). Change Type above to enable swatches.");
+				hint = __("ℹ Swatch Type is 'select' (default dropdown). Change to 'button' or 'text' to enable button/text swatches on WooCommerce.");
 			}
 			// Show hint in swatch section description area
 			if (frm.fields_dict["swatch_section"] && frm.fields_dict["swatch_section"].$wrapper) {

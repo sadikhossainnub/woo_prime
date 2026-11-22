@@ -80,6 +80,19 @@ class WooAttribute(Document):
 		if not self.erpnext_item_attribute and self.attribute_name:
 			if frappe.db.exists("Item Attribute", self.attribute_name):
 				self.erpnext_item_attribute = self.attribute_name
+
+		# Auto-detect attribute type from term swatches if type is still select
+		if self.type in ("select", "", None):
+			swatch_types = {sw.swatch_type for sw in (self.term_swatches or []) if sw.swatch_type and sw.swatch_type != "none"}
+			if "color" in swatch_types:
+				self.type = "color"
+			elif "image" in swatch_types:
+				self.type = "image"
+			elif "button" in swatch_types or "text" in swatch_types:
+				self.type = "button"
+		elif self.type == "text":
+			self.type = "button"
+
 		# Auto-populate term_swatches from linked ERPNext Item Attribute (new terms only)
 		self._sync_term_swatch_rows()
 
@@ -136,10 +149,13 @@ class WooAttribute(Document):
 		clean_name = clean_text(self.attribute_name)
 		slug = self.slug or frappe.scrub(clean_name).replace("_", "-")
 
+		raw_type = (self.type or "select").lower()
+		target_type = "button" if raw_type in ("button", "text") else raw_type
+
 		payload = {
 			"name": clean_name,
 			"slug": slug,
-			"type": self.type or "select",
+			"type": target_type,
 			"order_by": self.order_by or "menu_order",
 			"has_archives": bool(self.has_archives),
 		}
@@ -148,6 +164,13 @@ class WooAttribute(Document):
 		if attr_id:
 			# Update existing attribute in WooCommerce
 			res = api.put(f"products/attributes/{attr_id}", data=payload)
+			if res.status_code == 400 and target_type != "select":
+				# Fallback if WooCommerce rejects 'button'
+				for alt in (["text", "select"] if target_type == "button" else ["select"]):
+					payload["type"] = alt
+					res = api.put(f"products/attributes/{attr_id}", data=payload)
+					if res.status_code in (200, 201):
+						break
 			if res.status_code == 404:
 				attr_id = None
 			elif res.status_code not in (200, 201):
@@ -176,6 +199,12 @@ class WooAttribute(Document):
 
 		if not attr_id:
 			create_res = api.post("products/attributes", data=payload)
+			if create_res.status_code == 400 and target_type != "select":
+				for alt in (["text", "select"] if target_type == "button" else ["select"]):
+					payload["type"] = alt
+					create_res = api.post("products/attributes", data=payload)
+					if create_res.status_code in (200, 201):
+						break
 			if create_res.status_code not in (200, 201):
 				frappe.throw(_("Failed to create attribute on WooCommerce ({0}): {1}").format(create_res.status_code, create_res.text[:300]))
 			data = create_res.json()
@@ -323,13 +352,14 @@ class WooAttribute(Document):
 				{"key": "product_attribute_image", "value": sw.swatch_image},
 				{"key": "product_attribute_type", "value": "image"},
 			]
-		elif stype == "text":
+		elif stype in ("text", "button"):
 			text_val = sw.swatch_text or sw.term_name or ""
+			meta_data = [
+				{"key": "product_attribute_type", "value": "button"},
+			]
 			if text_val:
-				meta_data = [
-					{"key": "product_attribute_text", "value": text_val},
-					{"key": "product_attribute_type", "value": "button"},
-				]
+				meta_data.append({"key": "product_attribute_text", "value": text_val})
+				meta_data.append({"key": "swatch_text", "value": text_val})
 
 		return meta_data
 

@@ -39,7 +39,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Swatch Type",
-   "options": "none\ncolor\nimage\ntext"
+   "options": "none\ncolor\nimage\nbutton\ntext"
   },
   {
    "depends_on": "eval:doc.swatch_type=='color'",

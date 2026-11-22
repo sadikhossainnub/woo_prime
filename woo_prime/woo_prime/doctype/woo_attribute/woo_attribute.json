@@ -49,12 +49,12 @@
   },
   {
    "default": "select",
+   "description": "WooCommerce attribute display type. Use button/text for Button/Text swatches, or color/image.",
    "fieldname": "type",
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Swatch Type",
-   "options": "select\ncolor\nimage\nbutton\nradio",
-   "description": "WooCommerce attribute display type. Use color/image/button for Variation Swatches plugin."
+   "options": "select\ncolor\nimage\nbutton\nradio\ntext"
   },
   {
    "fieldname": "section_break_wc_settings",
