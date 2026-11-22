@@ -347,6 +347,9 @@ class WooItem(Document):
 		if sync_images is not None:
 			self.flags.sync_images = _parse_bool(sync_images)
 
+		# Set in_woo_sync BEFORE publish so _auto_populate_attributes() runs during the sync
+		self.flags.in_woo_sync = True
+
 		try:
 			result = publish_item_to_woo(self, sync_images=getattr(self.flags, "sync_images", None))
 			woo_id = result.get("id") if isinstance(result, dict) else None

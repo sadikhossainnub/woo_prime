@@ -1310,10 +1310,25 @@ def _ensure_woo_attribute_terms(api, attr_id, options):
 def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=True):
 	"""Publish an ERPNext Template Item and all its variants as a WooCommerce Variable Product using batch API."""
 	import html
+
+	# Ensure in_woo_sync flag is set so _auto_populate_attributes() runs during save
+	woo_item.flags.in_woo_sync = True
+
+	# Auto-populate item_attributes from ERPNext if not already set
+	if not getattr(woo_item, "item_attributes", None) or len(woo_item.item_attributes) == 0:
+		try:
+			woo_item._load_attributes_from_erpnext(overwrite=False)
+		except Exception as _attr_err:
+			frappe.logger("woo_prime").warning(f"Could not auto-load attributes for {woo_item.name}: {_attr_err}")
+
 	all_variant_item_names = frappe.get_all(
 		"Item",
 		filters={"variant_of": item.name, "disabled": 0},
 		pluck="name"
+	)
+
+	frappe.logger("woo_prime").info(
+		f"[template_sync] {item.name}: found {len(all_variant_item_names)} variants in ERPNext"
 	)
 
 	included_variants = []
@@ -1564,24 +1579,23 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 					pass
 			var_payload = _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_attr_keys=variation_attr_keys, sync_images=sync_images, parent_woo_item=woo_item)
 
-			# Guard against zero/negative price
+			# Warn if price is zero/negative but do NOT skip — still sync the variation
 			var_price = flt(var_payload.get("regular_price") or 0)
 			var_sku = var_payload.get("sku") or v_item.item_code
 			if var_price <= 0:
-				price_warn = f"Variant '{v_name}' (SKU: {var_sku}) regular price is {var_payload.get('regular_price')} (<= 0). Skipped pushing variation."
+				price_warn = f"Variant '{v_name}' (SKU: {var_sku}) has no price set (regular_price={var_payload.get('regular_price')}). Syncing anyway — set price in Woo Item or Item Price."
 				frappe.logger("woo_prime").warning(price_warn)
 				create_log(
 					sync_type="Item",
 					direction="Outgoing",
-					status="Failed",
+					status="Warning",
 					reference_doctype="Woo Item",
 					reference_name=child_woo_item.name,
 					woo_reference_id=str(parent_woo_id),
 					request_data=var_payload,
 					error_message=price_warn,
 				)
-				failed_variants.append((var_sku, "Price is 0 or negative"))
-				continue
+				# Do NOT skip — variant is still eligible for sync
 
 			expected_variants.append(v_name)
 
@@ -1770,7 +1784,17 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 	expected_count = len(expected_variants)
 	if not included_variants or expected_count == 0:
 		woo_item.sync_status = "Error"
-		error_msg = f"Template '{item.name}' has variants, but no variants were eligible or priced for publishing."
+		erp_variant_count = frappe.db.count("Item", {"variant_of": item.name, "disabled": 0})
+		if erp_variant_count == 0:
+			error_msg = (
+				f"Template '{item.name}' — no variants found in ERPNext (variant_of={item.name}). "
+				f"Create child items as variants of this template in ERPNext Item Master."
+			)
+		else:
+			error_msg = (
+				f"Template '{item.name}' has {erp_variant_count} variant(s) in ERPNext but none were eligible for publishing. "
+				f"Excluded: {excluded_variants[:5]}. Check Woo Sync Log for skip reasons."
+			)
 		frappe.logger("woo_prime").error(error_msg)
 		create_log(
 			sync_type="Item",
