@@ -32,7 +32,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Sync Type",
-   "options": "Order\nItem\nStock\nPrice\nCustomer",
+   "options": "Order\nItem\nStock\nPrice\nCustomer\nCategory\nAttribute",
    "reqd": 1
   },
   {
@@ -50,7 +50,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Status",
-   "options": "Queued\nSuccess\nFailed",
+   "options": "Queued\nSuccess\nWarning\nFailed",
    "reqd": 1
   },
   {
@@ -99,10 +99,10 @@
    "options": "JSON"
   },
   {
-   "depends_on": "eval:doc.status=='Failed'",
+   "depends_on": "eval:doc.status=='Failed' || doc.status=='Warning' || doc.error_message",
    "fieldname": "error_section",
    "fieldtype": "Section Break",
-   "label": "Error"
+   "label": "Error / Warning"
   },
   {
    "fieldname": "error_message",

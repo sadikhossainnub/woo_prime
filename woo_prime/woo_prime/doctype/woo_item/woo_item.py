@@ -418,10 +418,20 @@ class WooItem(Document):
 
 			# Log outcome according to sync_status (Item 4)
 			log_status = "Success"
+			err_msg = None
 			if self.sync_status == "Partial":
 				log_status = "Warning"
+				err_msg = (result.get("error_message") if isinstance(result, dict) else None) or f"Template '{self.item_name}' partially synced: {result.get('synced_variants_count', 0)}/{result.get('expected_variants_count', 0)} variation(s) synced."
 			elif self.sync_status == "Error":
 				log_status = "Failed"
+				err_msg = (result.get("error_message") if isinstance(result, dict) else None)
+				if not err_msg:
+					if isinstance(result, dict) and result.get("expected_variants_count") == 0:
+						err_msg = f"Product '{self.item_name}' published to WooCommerce (ID: {self.woo_product_id}), but no variants were synced."
+					elif isinstance(result, dict) and result.get("failed_variants"):
+						err_msg = f"Failed variants: {result.get('failed_variants')}"
+					else:
+						err_msg = f"Publish failed for '{self.item_name}'."
 
 			create_sync_log(
 				sync_type="Item",
@@ -432,6 +442,7 @@ class WooItem(Document):
 				woo_reference_id=str(self.woo_product_id or ""),
 				request_data={"item_code": self.item_code, "sku": self.sku, "item_name": self.item_name},
 				response_data=result if isinstance(result, dict) else {"woo_product_id": self.woo_product_id, "url": self.woo_product_url},
+				error_message=err_msg,
 			)
 
 			synced_cnt = result.get("synced_variants_count") if isinstance(result, dict) else None

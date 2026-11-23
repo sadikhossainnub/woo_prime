@@ -70,6 +70,28 @@ def _get_item_attribute_values(item_attr_name):
 
 
 class WooAttribute(Document):
+	def before_delete(self):
+		self.flags.ignore_links = True
+		# Remove references in Woo Settings -> attribute_mappings child table
+		# so Frappe's check_if_doc_is_linked won't block the deletion
+		try:
+			frappe.db.delete("Woo Attribute Mapping", {"woo_attribute": self.name})
+		except Exception as e:
+			frappe.logger("woo_prime").warning(f"Error unlinking Woo Attribute Mapping for {self.name}: {e}")
+
+		# Also remove references in Woo Item -> item_attributes child table
+		try:
+			frappe.db.delete("Woo Item Attribute", {"attribute": self.name})
+		except Exception as e:
+			frappe.logger("woo_prime").warning(f"Error unlinking Woo Item Attribute for {self.name}: {e}")
+
+	def on_trash(self):
+		try:
+			frappe.db.delete("Woo Attribute Mapping", {"woo_attribute": self.name})
+			frappe.db.delete("Woo Item Attribute", {"attribute": self.name})
+		except Exception:
+			pass
+
 	def validate(self):
 		if not self.slug and self.attribute_name:
 			self.slug = frappe.scrub(self.attribute_name).replace("_", "-")

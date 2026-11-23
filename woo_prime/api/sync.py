@@ -1879,6 +1879,8 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 	result["expected_variants_count"] = expected_count
 	result["synced_variants_count"] = success_count
 	result["failed_variants"] = failed_variants
+	if woo_item.sync_status in ("Error", "Partial"):
+		result["error_message"] = locals().get("error_msg") or locals().get("warn_msg") or ""
 
 	return result
 

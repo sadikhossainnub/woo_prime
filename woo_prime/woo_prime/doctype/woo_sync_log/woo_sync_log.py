@@ -155,7 +155,8 @@ def create_log(sync_type, direction, status, reference_doctype=None, reference_n
 					log.request_data = req_str
 				if resp_str:
 					log.response_data = resp_str
-				log.error_message = error_message
+				if error_message:
+					log.error_message = error_message
 				log.save(ignore_permissions=True)
 				return log.name
 
