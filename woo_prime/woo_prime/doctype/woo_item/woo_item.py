@@ -334,8 +334,6 @@ class WooItem(Document):
 				sync_images=sync_images,
 			)
 			msg = _("Publishing '{0}' to WooCommerce in the background...").format(self.item_name or self.name)
-			if frappe.request:
-				frappe.msgprint(msg, title=_("Publish Queued"), indicator="blue")
 			return {"status": "queued", "message": msg, "woo_item_name": self.name}
 		else:
 			return self._execute_publish_sync(user=frappe.session.user, sync_images=sync_images)
@@ -449,23 +447,19 @@ class WooItem(Document):
 			exp_cnt = result.get("expected_variants_count") if isinstance(result, dict) else None
 
 			if self.sync_status == "Partial":
-				msg = _("⚠️ Template '{0}' published to WooCommerce (ID: {1}), but only {2}/{3} variants synced.<br>Check Woo Sync Log for details.").format(
-					self.item_name or self.name, self.woo_product_id, synced_cnt or 0, exp_cnt or 0
+				details = f"<br><br>{err_msg}" if err_msg else ""
+				msg = _("⚠️ Template '{0}' published to WooCommerce (ID: {1}), but only {2}/{3} variants synced.{4}").format(
+					self.item_name or self.name, self.woo_product_id, synced_cnt or 0, exp_cnt or 0, details
 				)
-				if frappe.request and not frappe.flags.in_test:
-					frappe.msgprint(msg, title=_("Partially Synced"), indicator="orange")
 			elif self.sync_status == "Error":
-				msg = _("⚠️ Product '{0}' published to WooCommerce (ID: {1}), but no variants were synced.<br>Check Woo Sync Log for details.").format(
-					self.item_name or self.name, self.woo_product_id
+				details = f"<br><br>{err_msg}" if err_msg else ""
+				msg = _("⚠️ Product '{0}' published to WooCommerce (ID: {1}), but no variants were synced.{2}").format(
+					self.item_name or self.name, self.woo_product_id, details
 				)
-				if frappe.request and not frappe.flags.in_test:
-					frappe.msgprint(msg, title=_("Sync Warning"), indicator="red")
 			else:
 				msg = _("✅ Product '{0}' published to WooCommerce successfully!<br>Product ID: <b>{1}</b>").format(
 					self.item_name or self.name, self.woo_product_id
 				)
-				if frappe.request and not frappe.flags.in_test:
-					frappe.msgprint(msg, title=_("Published"), indicator="green")
 
 			_publish_item_progress(
 				user=user,

@@ -21,19 +21,7 @@ frappe.ui.form.on("Woo Item", {
 							callback: function (r) {
 								if (r && r.message) {
 									let res = r.message;
-									if (res.sync_status === "Error" || res.status === "error") {
-										frappe.msgprint({
-											title: __("Publish Failed"),
-											message: res.message || __("Publish failed. Check Woo Sync Log for details."),
-											indicator: "red"
-										});
-									} else if (res.sync_status === "Partial" || res.status === "partial") {
-										frappe.msgprint({
-											title: __("Partially Synced"),
-											message: res.message || __("Some variants failed to sync. Check Woo Sync Log for details."),
-											indicator: "orange"
-										});
-									} else {
+									if (res.sync_status === "Synced" || res.status === "success") {
 										frappe.show_alert({
 											message: __("Published to WooCommerce successfully!"),
 											indicator: "green"
@@ -60,33 +48,12 @@ frappe.ui.form.on("Woo Item", {
 				frappe.realtime.on("woo_publish_progress", function (data) {
 					if (data.operation === "publish_item" && data.woo_item_name === frm.doc.name) {
 						if (data.status === "completed") {
-							let msg = __("✅ Product published to WooCommerce successfully!<br>Product ID: <b>{0}</b>", [data.woo_product_id]);
-							if (data.woo_product_url) {
-								msg += __('<br><a href="{0}" target="_blank">View on WooCommerce ↗</a>', [data.woo_product_url]);
-							}
-							frappe.msgprint({
-								title: __("Published"),
-								message: msg,
+							frappe.show_alert({
+								message: __("Published to WooCommerce successfully!"),
 								indicator: "green",
-							});
-							frm.reload_doc();
-						} else if (data.status === "warning" || data.status === "partial") {
-							// Bug 4 fix: surface Partial publish outcome to the user
-							let warnMsg = data.message || __("Product partially synced — some variants may not have been pushed. Check Woo Sync Log for details.");
-							frappe.msgprint({
-								title: __("Partially Synced"),
-								message: warnMsg,
-								indicator: "orange",
-							});
-							frm.reload_doc();
-						} else if (data.status === "error") {
-							frappe.msgprint({
-								title: __("Publish Failed"),
-								message: data.message || __("Failed to publish to WooCommerce."),
-								indicator: "red",
-							});
-							frm.reload_doc();
+							}, 5);
 						}
+						frm.reload_doc();
 					}
 				});
 			}
@@ -361,14 +328,38 @@ frappe.ui.form.on("Woo Item", {
 			frm.dashboard.set_headline(
 				__('<span class="indicator-pill green">Synced with WooCommerce</span>')
 			);
-		} else if (frm.doc.sync_status === "Partial") {
-			frm.dashboard.set_headline(
-				__('<span class="indicator-pill orange">Partially Synced — Check Woo Sync Log</span>')
-			);
-		} else if (frm.doc.sync_status === "Error") {
-			frm.dashboard.set_headline(
-				__('<span class="indicator-pill red">Sync Error - Check Logs</span>')
-			);
+		} else if (frm.doc.sync_status === "Partial" || frm.doc.sync_status === "Error") {
+			let isErr = frm.doc.sync_status === "Error";
+			let pill = isErr
+				? '<span class="indicator-pill red">Sync Error</span>'
+				: '<span class="indicator-pill orange">Partially Synced</span>';
+
+			// Show initial indicator
+			frm.dashboard.set_headline(pill);
+
+			// Fetch latest error/warning message from Woo Sync Log to show inline explanation
+			frappe.db.get_list("Woo Sync Log", {
+				filters: {
+					reference_doctype: "Woo Item",
+					reference_name: frm.doc.name,
+					status: ["in", ["Failed", "Error", "Warning"]]
+				},
+				fields: ["error_message", "status", "creation"],
+				order_by: "creation desc",
+				limit: 1
+			}).then(function (logs) {
+				if (logs && logs.length && logs[0].error_message) {
+					let msgText = logs[0].error_message;
+					frm.dashboard.set_headline(
+						`<div style="display: flex; flex-direction: column; gap: 8px; text-align: left;">
+							<div>${pill}</div>
+							<div style="font-size: 13px; font-weight: normal; color: #222; line-height: 1.5; background: #fff5f5; padding: 10px 14px; border-radius: 6px; border: 1px solid #ffd6d6; border-left: 4px solid ${isErr ? '#e24c4c' : '#ffa00a'};">
+								${msgText}
+							</div>
+						</div>`
+					);
+				}
+			});
 		}
 
 		// Adjust stock management labels based on template / variant / simple product

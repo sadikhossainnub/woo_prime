@@ -1333,16 +1333,19 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 
 	included_variants = []
 	excluded_variants = []
+	excluded_reasons = {}
 	variant_docs = {}
 
 	for v_name in all_variant_item_names:
 		v_item = frappe.get_doc("Item", v_name)
 		variant_docs[v_name] = v_item
 		child_woo = get_or_create_woo_item(v_name, v_item.item_code)
-		if not _should_skip_variant(child_woo, v_item, context="template"):
+		should_skip, skip_reason = _should_skip_variant(child_woo, v_item, context="template", return_reason=True)
+		if not should_skip:
 			included_variants.append(v_name)
 		else:
 			excluded_variants.append(v_name)
+			excluded_reasons[v_name] = skip_reason
 
 	attributes_dict = {}
 	for v_name in included_variants:
@@ -1782,18 +1785,27 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 
 	# --- RESOLVE PARENT SYNC STATUS ---
 	expected_count = len(expected_variants)
+	error_msg = None
+	warn_msg = None
+
 	if not included_variants or expected_count == 0:
 		woo_item.sync_status = "Error"
 		erp_variant_count = frappe.db.count("Item", {"variant_of": item.name, "disabled": 0})
 		if erp_variant_count == 0:
 			error_msg = (
-				f"Template '{item.name}' — no variants found in ERPNext (variant_of={item.name}). "
-				f"Create child items as variants of this template in ERPNext Item Master."
+				f"Template '{item.name}' — No variants found in ERPNext (variant_of={item.name}). "
+				f"Please create variant items under this template in ERPNext Item Master before publishing."
 			)
 		else:
+			reasons_list = []
+			for v in excluded_variants:
+				r = excluded_reasons.get(v, "Excluded")
+				reasons_list.append(f"• <b>{v}</b>: {r}")
+			reasons_str = "<br>".join(reasons_list)
 			error_msg = (
-				f"Template '{item.name}' has {erp_variant_count} variant(s) in ERPNext but none were eligible for publishing. "
-				f"Excluded: {excluded_variants[:5]}. Check Woo Sync Log for skip reasons."
+				f"Template '{item.name}' has {erp_variant_count} variant(s) in ERPNext, but none were eligible for publishing:<br>"
+				f"{reasons_str}<br><br>"
+				f"<i>Fix: If an item has a tombstone, search 'Woo Ignored Item' in ERPNext and delete the entry to allow syncing.</i>"
 			)
 		frappe.logger("woo_prime").error(error_msg)
 		create_log(
@@ -1805,9 +1817,22 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 			woo_reference_id=str(parent_woo_id),
 			error_message=error_msg,
 		)
+		# Also log individual warning for each skipped variant in Woo Sync Log
+		for v in excluded_variants:
+			v_ref = frappe.db.get_value("Woo Item", {"item_code": v})
+			create_log(
+				sync_type="Item",
+				direction="Outgoing",
+				status="Warning",
+				reference_doctype="Woo Item",
+				reference_name=v_ref or woo_item.name,
+				woo_reference_id=str(parent_woo_id),
+				error_message=f"Variant '{v}' skipped during template sync: {excluded_reasons.get(v, 'Excluded')}",
+			)
 	elif success_count == 0:
 		woo_item.sync_status = "Error"
-		error_msg = f"Template '{item.name}' variable product published to WooCommerce (ID: {parent_woo_id}), but ALL {expected_count} variation(s) failed. Failed SKUs: {[f[0] for f in failed_variants]}"
+		failed_skus_str = ", ".join([f"{f[0]} ({f[1]})" for f in failed_variants])
+		error_msg = f"Template '{item.name}' variable product published to WooCommerce (ID: {parent_woo_id}), but ALL {expected_count} variation(s) failed.<br>Failed: {failed_skus_str}"
 		frappe.logger("woo_prime").error(error_msg)
 		create_log(
 			sync_type="Item",
@@ -1820,7 +1845,8 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 		)
 	elif success_count < expected_count:
 		woo_item.sync_status = "Partial"
-		warn_msg = f"Template '{item.name}' partially synced: {success_count}/{expected_count} variation(s) synced. Failed: {[f[0] for f in failed_variants]}"
+		failed_skus_str = ", ".join([f"{f[0]} ({f[1]})" for f in failed_variants])
+		warn_msg = f"Template '{item.name}' partially synced: {success_count}/{expected_count} variation(s) synced.<br>Failed: {failed_skus_str}"
 		frappe.logger("woo_prime").warning(warn_msg)
 		create_log(
 			sync_type="Item",
@@ -1880,7 +1906,7 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 	result["synced_variants_count"] = success_count
 	result["failed_variants"] = failed_variants
 	if woo_item.sync_status in ("Error", "Partial"):
-		result["error_message"] = locals().get("error_msg") or locals().get("warn_msg") or ""
+		result["error_message"] = error_msg or warn_msg or ""
 
 	return result
 
@@ -1923,8 +1949,8 @@ def _should_skip_variant(woo_item, item=None, context="template", return_reason=
 
 	# Skip if tombstone exists
 	if has_tombstone(item_code=item_code, sku=sku):
-		reason = f"Variant '{item_code}' (SKU: {sku}) has tombstone (was explicitly deleted)."
-		frappe.logger("woo_prime").info(reason)
+		reason = f"Tombstone found in 'Woo Ignored Item' (previously deleted). Delete from 'Woo Ignored Item' to re-sync."
+		frappe.logger("woo_prime").info(f"Variant '{item_code}' (SKU: {sku}): {reason}")
 		return (True, reason) if return_reason else True
 
 	return (False, None) if return_reason else False
