@@ -293,6 +293,89 @@ class TestVariableSyncFixes(unittest.TestCase):
 		changed = _detect_changed_woo_fields(doc_curr, doc_before)
 		self.assertIn("item_attributes", changed)
 
+	def test_get_item_images_honors_deleted_image_on_published_item(self):
+		"""Published Woo Item with image removed returns empty list, does not fall back."""
+		import frappe
+		from woo_prime.api.sync import _get_item_images
+
+		item = types.SimpleNamespace(
+			name="ITEM-01",
+			image="/files/old_item_image.jpg",
+			has_variants=0
+		)
+		woo_item = types.SimpleNamespace(
+			name="WOO-ITEM-01",
+			woo_product_id=12345,
+			image=None,
+			images=[]
+		)
+
+		images = _get_item_images(item, woo_item)
+		self.assertEqual(images, [])
+
+	def test_sync_partial_item_to_woo_clears_images_on_simple_item(self):
+		"""When image removed, sync_partial_item_to_woo sends images: [] to WooCommerce."""
+		import frappe
+		from woo_prime.api.sync import sync_partial_item_to_woo
+
+		mock_api = MagicMock()
+		mock_api.update_product.return_value = {"id": 12345, "images": []}
+
+		item = types.SimpleNamespace(
+			name="ITEM-01",
+			item_code="ITEM-01",
+			image="/files/item.jpg",
+			has_variants=0,
+			variant_of=None
+		)
+		woo_item = types.SimpleNamespace(
+			name="WOO-ITEM-01",
+			item_code="ITEM-01",
+			woo_product_id=12345,
+			image=None,
+			images=[],
+			woo_product_type="Simple Item"
+		)
+
+		frappe.get_doc.return_value = item
+		frappe.get_single.return_value = types.SimpleNamespace()
+
+		with patch("woo_prime.woo_prime.doctype.woo_settings.woo_settings.get_woo_api", return_value=mock_api):
+			res = sync_partial_item_to_woo(woo_item, ["image"])
+			mock_api.update_product.assert_called_once_with(12345, {"images": []})
+
+	def test_sync_partial_item_to_woo_unlinks_variation_image(self):
+		"""When image removed on variation, sync_partial_item_to_woo sends image: {id: 0}."""
+		import frappe
+		from woo_prime.api.sync import sync_partial_item_to_woo
+
+		mock_api = MagicMock()
+		mock_api.update_product_variation.return_value = {"id": 67890, "image": None}
+
+		item = types.SimpleNamespace(
+			name="VAR-01",
+			item_code="VAR-01",
+			image="/files/var.jpg",
+			has_variants=0,
+			variant_of="TMPL-01"
+		)
+		woo_item = types.SimpleNamespace(
+			name="WOO-VAR-01",
+			item_code="VAR-01",
+			woo_product_id=67890,
+			image=None,
+			images=[],
+			woo_product_type="Variant Item"
+		)
+
+		frappe.get_doc.return_value = item
+		frappe.get_single.return_value = types.SimpleNamespace()
+		frappe.db.get_value.return_value = 11111  # parent_woo_id
+
+		with patch("woo_prime.woo_prime.doctype.woo_settings.woo_settings.get_woo_api", return_value=mock_api):
+			res = sync_partial_item_to_woo(woo_item, ["image"])
+			mock_api.update_product_variation.assert_called_once_with(11111, 67890, {"image": {"id": 0}})
+
 
 
 if __name__ == "__main__":

@@ -58,8 +58,8 @@ class WooItem(Document):
 			elif self.item_name:
 				self.item_name = html.unescape(self.item_name)
 
-			# Auto-sync image from Item if not set on Woo Item
-			if not getattr(self, "image", None):
+			# Auto-sync image from Item ONLY for new Woo Items
+			if self.is_new() and not getattr(self, "image", None):
 				item_img = frappe.db.get_value("Item", self.item_code, "image")
 				if item_img:
 					self.image = item_img
@@ -284,6 +284,42 @@ class WooItem(Document):
 				image_changed = bool(changed_fields and ("image" in changed_fields or "images" in changed_fields))
 				_sfx = "img" if image_changed else "partial"
 
+				# If an image was removed, cleanup unlinked File attachments and cached WP media IDs
+				if image_changed and doc_before:
+					try:
+						old_urls = set()
+						if getattr(doc_before, "image", None):
+							old_urls.add(doc_before.image)
+						for r in (getattr(doc_before, "images", []) or []):
+							if getattr(r, "image", None):
+								old_urls.add(r.image)
+
+						curr_urls = set()
+						if getattr(self, "image", None):
+							curr_urls.add(self.image)
+						for r in (getattr(self, "images", []) or []):
+							if getattr(r, "image", None):
+								curr_urls.add(r.image)
+
+						removed_urls = old_urls - curr_urls
+						for url in removed_urls:
+							try:
+								frappe.cache().delete_value(f"woo_wp_media_id:{str(url).strip()}")
+							except Exception:
+								pass
+							files = frappe.get_all(
+								"File",
+								filters={"attached_to_doctype": "Woo Item", "attached_to_name": self.name, "file_url": url},
+								pluck="name"
+							)
+							for f_name in files:
+								try:
+									frappe.delete_doc("File", f_name, ignore_permissions=True)
+								except Exception:
+									pass
+					except Exception as cleanup_err:
+						frappe.logger("woo_prime").debug(f"Image cleanup notice: {cleanup_err}")
+
 				if "item_attributes" in changed_fields or getattr(self, "has_variants", 0):
 					frappe.enqueue(
 						"woo_prime.woo_prime.doctype.woo_item.woo_item._publish_single_woo_item_worker",
@@ -292,7 +328,7 @@ class WooItem(Document):
 						queue="long",
 						timeout=1800,
 						enqueue_after_commit=True,
-						job_id=f"woo_pub_{self.name}_attrs",
+						job_id=f"woo_pub_{self.name}_{_sfx}",
 						deduplicate=True,
 						sync_images=image_changed,
 					)
@@ -1164,9 +1200,10 @@ def _publish_partial_woo_item_worker(woo_item_name, changed_fields=None, user=No
 			frappe.db.commit()
 			return
 
+		image_changed = bool(changed_fields and ("image" in changed_fields or "images" in changed_fields))
 		if not changed_fields or "item_attributes" in changed_fields or getattr(woo_item, "has_variants", 0):
-			# If item_attributes changed or template has_variants: full publish sync without re-uploading images
-			woo_item._execute_publish_sync(user=user, sync_images=False)
+			# If item_attributes changed or template has_variants: full publish sync with image sync flag
+			woo_item._execute_publish_sync(user=user, sync_images=image_changed)
 			frappe.db.commit()
 			return
 

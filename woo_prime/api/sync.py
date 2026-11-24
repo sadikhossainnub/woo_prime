@@ -1023,8 +1023,7 @@ def sync_partial_item_to_woo(woo_item, changed_fields):
 
 	if "image" in changed_fields or "images" in changed_fields:
 		images = _get_item_images(item, woo_item, api, settings)
-		if images:
-			payload["images"] = images
+		payload["images"] = images if images else []
 
 	if "woo_featured" in changed_fields:
 		payload["featured"] = bool(woo_item.woo_featured)
@@ -1069,7 +1068,7 @@ def sync_partial_item_to_woo(woo_item, changed_fields):
 		parent_woo_id = _resolve_parent_woo_id(item.variant_of, getattr(woo_item, "woo_product_type", None))
 		if parent_woo_id and woo_item.woo_product_id:
 			if "images" in payload:
-				payload["image"] = payload["images"][0] if payload["images"] else None
+				payload["image"] = payload["images"][0] if payload["images"] else {"id": 0}
 				del payload["images"]
 			payload.pop("categories", None)
 			payload.pop("tags", None)
@@ -1180,8 +1179,7 @@ def _publish_simple_item_to_woo(woo_item, item, api, settings, sync_images=True)
 	# Push images only if sync_images is True or product is new (not yet on WooCommerce)
 	if sync_images or not woo_item.woo_product_id:
 		images = _get_item_images(item, woo_item, api, settings)
-		if images:
-			product_data["images"] = images
+		product_data["images"] = images if images else []
 
 	# Tags: prefer woo_tags Table MultiSelect, fallback to ERPNext _user_tags
 	woo_tag_ids = _get_woo_tag_ids(woo_item, api)
@@ -1483,8 +1481,7 @@ def _publish_template_item_to_woo(woo_item, item, api, settings, sync_images=Tru
 	# Push images only if sync_images is True or product is new (not yet on WooCommerce)
 	if sync_images or not woo_item.woo_product_id:
 		images = _get_item_images(item, woo_item, api, settings)
-		if images:
-			product_data["images"] = images
+		product_data["images"] = images if images else []
 
 	# Tags: prefer woo_tags Table MultiSelect, fallback to ERPNext _user_tags
 	woo_tag_ids = _get_woo_tag_ids(woo_item, api)
@@ -2222,6 +2219,9 @@ def _prepare_variation_payload(child_woo_item, v_item, api, settings, variation_
 			images = _get_item_images(v_item, child_woo_item, api, settings)
 			if images:
 				var_data["image"] = images[0]
+			elif getattr(child_woo_item, "woo_product_id", None):
+				# Variation had image removed
+				var_data["image"] = {"id": 0}
 		except Exception as img_err:
 			frappe.logger("woo_prime").warning(f"Variation image fetch error for {v_item.name}: {img_err}")
 
@@ -2512,22 +2512,27 @@ def _get_item_images(item, woo_item=None, api=None, settings=None):
 			img_dict["alt"] = caption
 		images.append(img_dict)
 
-	# 1. Primary image (Woo Item image takes priority if manually uploaded, fallback to Item.image)
-	primary_image = getattr(woo_item, "image", None) or getattr(item, "image", None)
+	is_published_woo = bool(woo_item and getattr(woo_item, "woo_product_id", None))
 
-	# If template item has no main image, fallback to image of its first variant
-	if not primary_image and getattr(item, "has_variants", 0):
-		var_img = frappe.db.get_value("Item", {"variant_of": item.name, "disabled": 0, "image": ["!=", ""]}, "image")
-		if not var_img and woo_item:
-			var_img = frappe.db.get_value("Woo Item", {"variant_of": item.name, "image": ["!=", ""]}, "image")
-		if var_img:
-			primary_image = var_img
-			if woo_item and not getattr(woo_item, "image", None):
-				try:
-					woo_item.image = var_img
-					woo_item.db_set("image", var_img)
-				except Exception:
-					pass
+	# 1. Primary image:
+	# For published Woo Item: woo_item.image is the definitive primary image. Do not fallback if user cleared it.
+	if is_published_woo:
+		primary_image = getattr(woo_item, "image", None)
+	else:
+		primary_image = getattr(woo_item, "image", None) or getattr(item, "image", None)
+		# If template item has no main image on initial sync, fallback to image of its first variant
+		if not primary_image and getattr(item, "has_variants", 0):
+			var_img = frappe.db.get_value("Item", {"variant_of": item.name, "disabled": 0, "image": ["!=", ""]}, "image")
+			if not var_img and woo_item:
+				var_img = frappe.db.get_value("Woo Item", {"variant_of": item.name, "image": ["!=", ""]}, "image")
+			if var_img:
+				primary_image = var_img
+				if woo_item and not getattr(woo_item, "image", None):
+					try:
+						woo_item.image = var_img
+						woo_item.db_set("image", var_img)
+					except Exception:
+						pass
 
 	if primary_image:
 		process_image(primary_image)
@@ -2537,45 +2542,49 @@ def _get_item_images(item, woo_item=None, api=None, settings=None):
 		for row in woo_item.images:
 			img_path = getattr(row, "image", None)
 			caption = getattr(row, "caption", None)
-			process_image(img_path, caption)
+			if img_path:
+				process_image(img_path, caption)
 
 	# 3. Additional attached images (Gallery) from File doctype (Item and Woo Item)
-	attached_files = frappe.get_all(
-		"File",
-		filters={
-			"attached_to_doctype": "Item",
-			"attached_to_name": item.name,
-		},
-		fields=["file_url"],
-		order_by="creation asc"
-	)
-	if woo_item and getattr(woo_item, "name", None):
-		woo_attached = frappe.get_all(
+	# Only scan File doctype on initial publish when Woo Item has no gallery table populated
+	should_scan_files = not is_published_woo and not (woo_item and hasattr(woo_item, "images") and woo_item.images)
+	if should_scan_files:
+		attached_files = frappe.get_all(
 			"File",
 			filters={
-				"attached_to_doctype": "Woo Item",
-				"attached_to_name": woo_item.name,
+				"attached_to_doctype": "Item",
+				"attached_to_name": item.name,
 			},
 			fields=["file_url"],
 			order_by="creation asc"
 		)
-		attached_files.extend(woo_attached)
+		if woo_item and getattr(woo_item, "name", None):
+			woo_attached = frappe.get_all(
+				"File",
+				filters={
+					"attached_to_doctype": "Woo Item",
+					"attached_to_name": woo_item.name,
+				},
+				fields=["file_url"],
+				order_by="creation asc"
+			)
+			attached_files.extend(woo_attached)
 
-	for f in attached_files:
-		file_url = f.get("file_url") if isinstance(f, dict) else (getattr(f, "file_url", None) or (f if isinstance(f, str) else None))
-		if not file_url:
-			continue
-		ext = file_url.lower().rsplit(".", 1)[-1] if "." in file_url else ""
-		if ext in ("jpg", "jpeg", "png", "gif", "webp", "svg"):
-			if not primary_image:
-				primary_image = file_url
-				if woo_item and not getattr(woo_item, "image", None):
-					try:
-						woo_item.image = file_url
-						woo_item.db_set("image", file_url)
-					except Exception:
-						pass
-			process_image(file_url)
+		for f in attached_files:
+			file_url = f.get("file_url") if isinstance(f, dict) else (getattr(f, "file_url", None) or (f if isinstance(f, str) else None))
+			if not file_url:
+				continue
+			ext = file_url.lower().rsplit(".", 1)[-1] if "." in file_url else ""
+			if ext in ("jpg", "jpeg", "png", "gif", "webp", "svg"):
+				if not primary_image:
+					primary_image = file_url
+					if woo_item and not getattr(woo_item, "image", None):
+						try:
+							woo_item.image = file_url
+							woo_item.db_set("image", file_url)
+						except Exception:
+							pass
+				process_image(file_url)
 
 	return images
 
