@@ -6,3 +6,4 @@
 # Patches added in this section will be executed after doctypes are migrated
 woo_prime.patches.v1_1.add_settings_fields
 woo_prime.patches.v1_1.update_v1_1_settings
+woo_prime.patches.v1_2.populate_categories_display

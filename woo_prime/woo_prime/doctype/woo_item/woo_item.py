@@ -96,6 +96,14 @@ class WooItem(Document):
 		if self.woo_product_url:
 			self.woo_product_url = html.unescape(str(self.woo_product_url)).strip()
 
+		# Sync categories_display for List View column
+		cats = [
+			getattr(r, "category", None)
+			for r in (getattr(self, "categories", None) or [])
+			if getattr(r, "category", None)
+		]
+		self.categories_display = ", ".join(cats)
+
 		# Auto-populate product attributes from ERPNext if table is empty
 		self._auto_populate_attributes()
 

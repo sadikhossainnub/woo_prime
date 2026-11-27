@@ -2,7 +2,21 @@
 // For license information, please see license.txt
 
 frappe.listview_settings["Woo Item"] = {
-	add_fields: ["sync_status", "published", "woo_product_id", "image"],
+	add_fields: ["sync_status", "published", "woo_product_id", "image", "categories_display"],
+	formatters: {
+		categories_display(val) {
+			if (!val) return "";
+			return val
+				.split(",")
+				.map((c) => c.trim())
+				.filter(Boolean)
+				.map(
+					(c) =>
+						`<span class="ellipsis" style="display:inline-block; background: var(--bg-light-gray, #f4f5f6); border: 1px solid var(--border-color, #e2e6ea); border-radius: 4px; padding: 1px 6px; margin-right: 4px; font-size: 11px;">${frappe.utils.escape_html(c)}</span>`
+				)
+				.join("");
+		},
+	},
 	get_indicator: function (doc) {
 		if (doc.sync_status === "Synced") {
 			return [__("Synced"), "green", "sync_status,=,Synced"];

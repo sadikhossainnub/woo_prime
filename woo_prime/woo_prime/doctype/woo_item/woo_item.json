@@ -25,6 +25,7 @@
   "woo_short_description",
   "woo_description",
   "categories",
+  "categories_display",
   "woo_tags",
   "attributes_section",
   "item_attributes",
@@ -162,6 +163,15 @@
    "fieldtype": "Table MultiSelect",
    "label": "WooCommerce Categories (Multi-select)",
    "options": "Woo Item Category"
+  },
+  {
+   "fieldname": "categories_display",
+   "fieldtype": "Small Text",
+   "hidden": 1,
+   "in_filter": 1,
+   "in_list_view": 1,
+   "label": "WooCommerce Categories",
+   "read_only": 1
   },
   {
    "fieldname": "woo_featured",
